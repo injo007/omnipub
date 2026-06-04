@@ -1,0 +1,566 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Geist:wght@300;400;500;600;700&family=Manrope:wght@300;400;500;600;700&family=Playfair+Display:ital,wght@0,400;0,600;0,700;1,400&family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", "Geist", "Manrope", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-serif: "Playfair Display", Georgia, serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+  --font-space: "Space Grotesk", sans-serif;
+}
+
+/* Custom glow animations and aesthetic scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.05);
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.3);
+}
+
+.glow-btn::after {
+  content: '';
+  position: absolute;
+  inset: -2px;
+  background: linear-gradient(90deg, #f43f5e, #f59e0b, #10b981, #6366f1);
+  border-radius: inherit;
+  z-index: -1;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.glow-btn:hover::after {
+  opacity: 0.15;
+}
+
+/* ==========================================
+   ENTERPRISE LIGHT THEME: INTENSE POLISHING & CUSTOM STYLING
+   ========================================== */
+
+.app-root.light {
+  background-color: #F3F5F6 !important;
+  color: #111827 !important;
+  font-family: "Inter", "Geist", "Manrope", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif !important;
+}
+
+/* Base page backgrounds override */
+.app-root.light main {
+  background-color: #F3F5F6 !important;
+}
+
+/* Sidebar Styling - Clean Enterprise */
+.app-root.light aside {
+  background-color: #F8F9FA !important;
+  border-right: 1px solid #E3E7EA !important;
+  width: 240px !important;
+}
+
+/* Sidebar button base */
+.app-root.light aside button {
+  border-radius: 8px !important;
+  transition: all 0.2s ease-in-out !important;
+}
+
+/* Active Sidebar Navigation Items: NO grey or blue - Solid gorgeous soft teal active indicator! */
+.app-root.light aside button.bg-\[\#F0F1F2\],
+.app-root.light aside button.text-\[\#0D1219\] {
+  background-color: #E2EFEF !important; /* Soft light teal background */
+  color: #064E5A !important; /* Brand dark teal */
+  border-radius: 8px !important;
+  font-weight: 600 !important;
+}
+
+/* Hover Sidebar Navigation Items: NO grey, NO blue - extremely lightweight teal state */
+.app-root.light aside button:not(.bg-\[\#F0F1F2\]):hover {
+  background-color: #F1F8F8 !important; /* Extremely light teal tint */
+  color: #064E5A !important; /* Brand dark teal */
+}
+
+/* Cards customization - Soft rounded white cards of 14px */
+.app-root.light .bg-white,
+.app-root.light .bg-slate-900,
+.app-root.light .bg-slate-900\/60,
+.app-root.light .bg-slate-900\/40,
+.app-root.light .bg-slate-900\/70,
+.app-root.light .bg-slate-950,
+.app-root.light .bg-\[\#121620\]\/60 {
+  background-color: #FFFFFF !important;
+  border: 1px solid #E3E7EA !important;
+  border-radius: 14px !important;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.04) !important;
+  color: #111827 !important;
+}
+
+/* Smaller inner cards / elements */
+.app-root.light .bg-[#F8F9FA],
+.app-root.light .bg-[#F0F1F2],
+.app-root.light .bg-slate-50,
+.app-root.light .bg-slate-955,
+.app-root.light .bg-slate-955\/60,
+.app-root.light .bg-slate-950\/40,
+.app-root.light .bg-slate-950\/40,
+.app-root.light .bg-slate-955\/50 {
+  background-color: #FFFFFF !important;
+  border: 1px solid #E5E7EB !important;
+  border-radius: 10px !important;
+  color: #111827 !important;
+  box-shadow: none !important;
+}
+
+/* Dynamic container override for files or feeds with bg-[#070b14] */
+.app-root.light .bg-\[\#070b14\]\/50,
+.app-root.light [class*="bg-\[\#070b14\]"] {
+  background-color: #FFFFFF !important;
+  border: 1px solid #E3E7EA !important;
+  box-shadow: 0 3px 12px rgba(15, 23, 42, 0.02) !important;
+  border-radius: 12px !important;
+}
+
+/* Light Mode hover state for article cards - absolutely NO grey, NO blue - beautiful soft brand teal hover! */
+.app-root.light .bg-\[\#070b14\]\/50:hover,
+.app-root.light [class*="bg-\[\#070b14\]"]:hover,
+.app-root.light [class*="hover:bg-\[\#0c1222\]"]:hover {
+  background-color: #E2EFEF !important; /* Soft light teal background! */
+  border-color: #0E7490 !important; /* Teal accent border */
+  color: #111827 !important;
+}
+
+/* When article is hovered, adjust text hover colors inside it too */
+.app-root.light .group:hover h4,
+.app-root.light .group:hover h5,
+.app-root.light .bg-\[\#070b14\]\/50:hover h4,
+.app-root.light .bg-\[\#070b14\]\/50:hover h5 {
+  color: #064E5A !important; /* Brand dark teal */
+}
+
+/* Border overlays & Dividers */
+.app-root.light .border-slate-800,
+.app-root.light .border-slate-800\/60,
+.app-root.light .border-slate-805,
+.app-root.light .border-slate-850,
+.app-root.light .border-slate-705,
+.app-root.light .border-[#E3E5E8],
+.app-root.light .border-slate-700,
+.app-root.light .border-slate-800\/65,
+.app-root.light .border-slate-150\/60,
+.app-root.light .border-slate-250,
+.app-root.light .border-\[\#E3E5E8\],
+.app-root.light .border-\[\#E3E5E8\]\/80 {
+  border-color: #E3E7EA !important;
+}
+
+/* Primary text color & selections */
+.app-root.light .text-slate-50,
+.app-root.light .text-slate-100,
+.app-root.light .text-slate-200,
+.app-root.light .text-slate-300,
+.app-root.light .text-slate-150,
+.app-root.light .text-slate-250,
+.app-root.light .text-slate-350,
+.app-root.light h1,
+.app-root.light h2,
+.app-root.light h3,
+.app-root.light h4 {
+  color: #111827 !important;
+}
+
+/* Force standard text-white elements to remain readable white text in light mode */
+.app-root.light .text-white {
+  color: #FFFFFF !important;
+}
+
+/* Secondary & descriptions */
+.app-root.light .text-slate-400,
+.app-root.light .text-[#8B8E96],
+.app-root.light .text-slate-450,
+.app-root.light .text-slate-455,
+.app-root.light p,
+.app-root.light span.text-\[\#8B8E96\],
+.app-root.light .text-slate-500 {
+  color: #6B7280 !important;
+}
+
+.app-root.light .text-slate-500 {
+  color: #9CA3AF !important; 
+}
+
+/* Inputs and Search text overlay */
+.app-root.light input[type="text"],
+.app-root.light input[type="password"],
+.app-root.light select,
+.app-root.light textarea,
+.app-root.light .select-dropdown {
+  background-color: #FFFFFF !important;
+  border: 1px solid #E3E7EA !important;
+  border-radius: 8px !important;
+  color: #111827 !important;
+  height: 34px !important;
+  font-size: 12px !important;
+  padding: 0 12px !important;
+  box-shadow: none !important;
+}
+
+/* Textareas custom height fix */
+.app-root.light textarea {
+  background-color: #FFFFFF !important;
+  border: 1px solid #E3E7EA !important;
+  border-radius: 8px !important;
+  color: #111827 !important;
+  font-size: 12px !important;
+  padding: 8px 12px !important;
+  box-shadow: none !important;
+  height: auto !important;
+}
+
+/* Placeholder styles */
+.app-root.light input[type="text"]::placeholder,
+.app-root.light textarea::placeholder {
+  color: #9CA3AF !important;
+}
+
+/* Input focus emphasis */
+.app-root.light input[type="text"]:focus,
+.app-root.light textarea:focus,
+.app-root.light select:focus {
+  border-color: #0E7490 !important; /* Teal accent */
+  box-shadow: 0 0 0 2px rgba(14, 116, 144, 0.1) !important;
+  outline: none !important;
+}
+
+/* Custom premium tab buttons: NO grey, NO blue - beautiful warm teal layout! */
+.app-root.light div.flex-col.sm\:flex-row button {
+  background-color: transparent !important;
+  color: #6B7280 !important;
+  border: none !important;
+  box-shadow: none !important;
+}
+.app-root.light div.flex-col.sm\:flex-row button.bg-\[\#3F5353\] {
+  background-color: #000000 !important; /* Black normally per user directive */
+  color: #FFFFFF !important;
+  font-weight: 700 !important;
+  box-shadow: 0 4px 12px rgba(6, 78, 90, 0.15) !important;
+}
+.app-root.light div.flex-col.sm\:flex-row button.bg-\[\#3F5353\]:hover {
+  background-color: #064E5A !important; /* Teal on hover per user directive */
+  color: #FFFFFF !important;
+}
+.app-root.light div.flex-col.sm\:flex-row button:not(.bg-\[\#3F5353\]):hover {
+  background-color: #E2EFEF !important; /* Soft Teal - absolutely NO gray, NO blue */
+  color: #064E5A !important;
+  font-weight: 600 !important;
+}
+
+/* Wordpress inspector tab switcher configuration */
+.app-root.light .flex.bg-\[\#F0F1F2\],
+.app-root.light .bg-\[\#F0F1F2\] {
+  background-color: #F1F4F5 !important;
+  border-color: #E3E7EA !important;
+}
+.app-root.light .flex.bg-\[\#F0F1F2\] button,
+.app-root.light .bg-\[\#F0F1F2\] button {
+  background-color: transparent !important;
+  color: #6B7280 !important;
+}
+.app-root.light .flex.bg-\[\#F0F1F2\] button.bg-white,
+.app-root.light .bg-\[\#F0F1F2\] button.bg-white {
+  background-color: #FFFFFF !important;
+  color: #064E5A !important;
+  font-weight: 700 !important;
+  box-shadow: 0 2px 6px rgba(15, 23, 42, 0.04) !important;
+}
+.app-root.light .flex.bg-\[\#F0F1F2\] button:not(.bg-white):hover,
+.app-root.light .bg-\[\#F0F1F2\] button:not(.bg-white):hover {
+  background-color: #E2EFEF !important; /* Soft Teal background - NO gray or blue */
+  color: #064E5A !important;
+  font-weight: 600 !important;
+}
+
+/* Primary buttons style: background #000000, color white, hover #064E5A */
+.bg-gradient-to-r.from-violet-600.to-indigo-600,
+.bg-indigo-600,
+.bg-orange-600,
+.bg-[#3F5353],
+button[type="submit"],
+[id*="btn-rewrite-headline"],
+[id*="btn-generate"],
+[id*="btn-sync"],
+[id*="btn-push-"],
+[id*="btn-wp-retry-"],
+[id*="btn-toggle-publish-"],
+.btn-customize-hire {
+  background: #000000 !important;
+  color: #FFFFFF !important;
+  border-radius: 8px !important;
+  font-weight: 600 !important;
+  border: 1px solid #000000 !important;
+}
+
+.bg-gradient-to-r.from-violet-600.to-indigo-600:hover,
+.bg-indigo-600:hover,
+.bg-orange-600:hover,
+.bg-[#3F5353]:hover,
+button[type="submit"]:hover,
+[id*="btn-rewrite-headline"]:hover,
+[id*="btn-generate"]:hover,
+[id*="btn-sync"]:hover,
+[id*="btn-push-"]:hover,
+[id*="btn-wp-retry-"]:hover,
+[id*="btn-toggle-publish-"]:hover,
+.btn-customize-hire:hover {
+  background: #064E5A !important; /* Dark teal hover */
+  color: #FFFFFF !important;
+  border-color: #064E5A !important;
+}
+
+/* Secondary Button Style: background white, border 1px solid #DDE3E6, border-radius 8px */
+.app-root.light .bg-white.border,
+.app-root.light [id*="btn-headline-view-"],
+.app-root.light .border-\[\#E3E5E8\]\/20 {
+  background: #FFFFFF !important;
+  color: #111827 !important;
+  border: 1px solid #DDE3E6 !important;
+  border-radius: 8px !important;
+}
+
+.app-root.light [id*="btn-headline-view-"]:not(.bg-\[\#3F5353\]):hover {
+  background-color: #E2EFEF !important; /* Soft Teal - absolutely NO gray, NO blue */
+  color: #064E5A !important;
+  border-color: #0E7490 !important;
+  font-weight: 600 !important;
+}
+
+/* Small icon buttons - background white, border 1px solid #E3E7EA, size 32x32px, radius 8px */
+.app-root.light button.p-2.rounded-lg,
+.app-root.light button.p-1.5.rounded-lg {
+  border-radius: 8px !important;
+  background-color: #FFFFFF !important;
+  border: 1px solid #E3E7EA !important;
+  color: #111827 !important;
+}
+
+.app-root.light button.p-2.rounded-lg:hover,
+.app-root.light button.p-1.5.rounded-lg:hover {
+  background-color: #E2EFEF !important; /* Soft Teal - NO gray/blue */
+  color: #064E5A !important;
+  border-color: #0E7490 !important;
+}
+
+/* Custom overrides for slate boxes in wordpress preview - NO grey, NO blue - beautiful soft brand teal hover! */
+.app-root.light .bg-slate-100,
+.app-root.light .bg-slate-50,
+.app-root.light .bg-slate-50\/50 {
+  background-color: #FFFFFF !important;
+  border-color: #E3E7EA !important;
+}
+
+.app-root.light .bg-slate-100:hover,
+.app-root.light .hover\:bg-slate-50:hover,
+.app-root.light .hover\:bg-slate-150:hover,
+.app-root.light .hover\:bg-slate-200\/80:hover {
+  background-color: #E2EFEF !important; /* Soft light teal background */
+  color: #064E5A !important; /* Brand dark teal */
+  border-color: #0E7490 !important;
+}
+
+/* Prevent ANY grey or blue hover backgrounds across the entire light app */
+.app-root.light [class*="hover:bg-slate"]:hover,
+.app-root.light [class*="hover:bg-gray"]:hover,
+.app-root.light [class*="hover:bg-zinc"]:hover,
+.app-root.light [class*="hover:bg-neutral"]:hover,
+.app-root.light [class*="hover:bg-indigo"]:hover,
+.app-root.light [class*="hover:bg-blue"]:hover {
+  background-color: #E2EFEF !important; /* Soft Teal background - NO gray or blue */
+  color: #064E5A !important; /* Teal brand color - high contrast and polished */
+  border-color: #0E7490 !important;
+}
+
+/* Blue indicators replaced with proper teal brand colors */
+.app-root.light .bg-blue-500\/10,
+.app-root.light .bg-blue-600\/10,
+.app-root.light .bg-blue-550\/10,
+.app-root.light .bg-blue-500\/20,
+.app-root.light [class*="bg-blue-"] {
+  background-color: #E6F4F5 !important; /* Soft Teal surface */
+  color: #0E7490 !important; /* Teal Accent */
+  border-color: #0E7490 !important;
+}
+.app-root.light .text-blue-400,
+.app-root.light .text-blue-500,
+.app-root.light .text-blue-600 {
+  color: #0E7490 !important;
+}
+
+/* Brand / primary detail mappings */
+.app-root.light .text-indigo-400,
+.app-root.light .text-[#5F528E],
+.app-root.light .text-indigo-305,
+.app-root.light .text-indigo-300,
+.app-root.light .text-violet-500,
+.app-root.light .text-cyan-400 {
+  color: #0E7490 !important; /* Teal accent */
+}
+
+/* Status badging & pills */
+.app-root.light .bg-emerald-500\/10,
+.app-root.light .bg-emerald-500\/20,
+.app-root.light [class*="bg-emerald-"] {
+  background-color: #DCFCE7 !important; /* Soft green */
+  color: #22C55E !important; /* Success green */
+  border: 1px solid #E2E8F0 !important;
+  font-weight: 600 !important;
+}
+
+.app-root.light .bg-amber-500\/10,
+.app-root.light .bg-amber-500\/20,
+.app-root.light [class*="bg-amber-"] {
+  background-color: #FEF3C7 !important;
+  color: #F59E0B !important; /* Warning yellow */
+  font-weight: 600 !important;
+}
+
+.app-root.light .bg-rose-500\/10,
+.app-root.light .bg-rose-500\/25,
+.app-root.light [class*="bg-rose-"] {
+  background-color: #FEE2E2 !important;
+  color: #EF4444 !important; /* Error / urgent red */
+  font-weight: 600 !important;
+}
+
+/* Tab controls and pill containers */
+.app-root.light .bg-slate-100,
+.app-root.light .bg-slate-200\/60,
+.app-root.light .bg-slate-200 {
+  background-color: #F1F4F5 !important;
+  border: 1px solid #E3E7EA !important;
+}
+
+/* ==========================================================================
+   SCANNED NEWS OPPORTUNITIES & FEED LIST ITEMS INTENSE POLISHING
+   ========================================================================== */
+
+/* 1. Opportunity section card wrapper - Elegant, cohesive styles replacing blocky black borders */
+.app-root.light .suggested-source-card,
+.app-root.light div.suggested-source-card {
+  background-color: #ffffff !important;
+  border: 1px solid #E2E8F0 !important;
+  box-shadow: 0 4px 12px rgba(13, 18, 25, 0.03) !important;
+  color: #0F172A !important;
+  border-radius: 12px !important;
+}
+
+/* Hover effect on card wrapper */
+.app-root.light .suggested-source-card:hover {
+  background-color: #F8FAFC !important;
+  border-color: #CBD5E1 !important;
+}
+
+/* 2. Text elements inside cards: Title - Sophisticated dark slate */
+.app-root.light .suggested-source-title,
+.app-root.light .suggested-source-card h4,
+.app-root.light .suggested-source-card h5 {
+  color: #0F172A !important;
+  font-weight: 700 !important;
+  font-size: 13px !important;
+  letter-spacing: -0.01em !important;
+}
+
+/* 3. Text elements inside cards: Description/Paragraph */
+.app-root.light .suggested-source-desc,
+.app-root.light .suggested-source-card p {
+  color: #475569 !important;
+}
+
+/* 4. bottom footer row inside list view cards */
+.app-root.light .suggested-source-footer {
+  background-color: #F8FAFC !important;
+  border-top: 1px solid #F1F5F9 !important;
+  margin-top: 12px !important;
+  padding-top: 10px !important;
+  border-radius: 0 0 12px 12px !important;
+}
+
+/* 5. Classification Rating badges inside cards - Sleek premium color-matched tags */
+.app-root.light .suggested-source-badge,
+.app-root.light .suggested-source-card span[class*="suggested-source-badge"] {
+  color: #BE185D !important;
+  border: 1px solid #FBCFE8 !important;
+  background-color: #FDF2F8 !important;
+  font-weight: 700 !important;
+  padding: 2px 8px !important;
+  border-radius: 6px !important;
+  font-size: 9px !important;
+}
+
+
+/* ==========================================================================
+   JOURNALIST GUILD CARD SPECS - EXACT INTENSE POLISHING
+   ========================================================================== */
+
+/* 1. Journalist Guild Card wrapper background - Premium high-grain warm linen, dark slate boundaries */
+.journalist-guild-card,
+div.journalist-guild-card {
+  background-color: #FAF9F5 !important;
+  border: 1px solid #E2E8F0 !important;
+  box-shadow: 0 4px 15px rgba(63, 83, 83, 0.04) !important;
+  color: #1E293B !important;
+  border-radius: 12px !important;
+}
+
+/* Hover effect on Guild cards */
+.journalist-guild-card:hover {
+  background-color: #F5F4EE !important;
+  border-color: #CBD5E1 !important;
+}
+
+/* 2. Title inside Guild cards: color - Sleek high-end deep pine green */
+.journalist-guild-title,
+.journalist-guild-card h4,
+.journalist-guild-card h5,
+.journalist-guild-card h6 {
+  color: #3F5353 !important;
+  font-weight: 700 !important;
+}
+
+/* 3. Description/paragraph inside Guild cards */
+.journalist-guild-desc,
+.journalist-guild-card p {
+  color: #475569 !important;
+}
+
+/* 4. Guild badges inside cards: subtle elegant borders */
+.journalist-guild-badge,
+span.journalist-guild-badge,
+.journalist-guild-card span[class*="journalist-guild-badge"] {
+  color: #4A5D5D !important;
+  border: 1px solid #D1DBDB !important;
+  background-color: #EBF2F2 !important;
+  font-weight: 700 !important;
+  padding: 3px 8px !important;
+  border-radius: 6px !important;
+  font-size: 9px !important;
+}
+
+/* 5. bottom footer row inside Guild cards (Concept Directives) */
+.journalist-guild-footer {
+  background-color: #F4F6F6 !important;
+  border-top: 1px solid #E2E8F0 !important;
+  margin-top: 12px !important;
+  padding-top: 10px !important;
+  border-radius: 0 0 12px 12px !important;
+  max-h: 100px !important;
+  overflow-y: auto !important;
+  user-select: text !important;
+}
+
+/* Precise style override for toggle-publish button for art-1 */
+button#btn-toggle-publish-art-1 {
+  background-color: #000000 !important;
+  color: #ffffff !important;
+}
+

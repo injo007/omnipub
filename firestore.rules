@@ -1,0 +1,78 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 1. Global safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper functions
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-+]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // Validation helpers
+    function isValidWriter(data) {
+      return data.keys().hasAll(['id', 'name', 'voiceStyle', 'customPromptInstruction'])
+        && data.keys().size() <= 15
+        && data.id is string && data.id.size() <= 100
+        && data.name is string && data.name.size() <= 200
+        && data.voiceStyle is string && data.voiceStyle.size() <= 1000
+        && data.customPromptInstruction is string && data.customPromptInstruction.size() <= 6000;
+    }
+
+    function isValidFeed(data) {
+      return data.keys().hasAll(['id', 'name', 'url', 'niche', 'isActive'])
+        && data.keys().size() <= 10
+        && data.id is string && data.id.size() <= 100
+        && data.name is string && data.name.size() <= 200
+        && data.url is string && data.url.size() <= 1000
+        && data.niche is string && (data.niche == 'tech' || data.niche == 'sports' || data.niche == 'hollywood')
+        && data.isActive is bool;
+    }
+
+    function isValidArticle(data) {
+      return data.keys().hasAll(['id', 'niche', 'authorId', 'title', 'content', 'createdAt'])
+        && data.keys().size() <= 22
+        && data.id is string && data.id.size() <= 100
+        && data.niche is string && (data.niche == 'tech' || data.niche == 'sports' || data.niche == 'hollywood')
+        && data.authorId is string && data.authorId.size() <= 100
+        && data.title is string && data.title.size() <= 500
+        && data.content is string && data.content.size() <= 100000;
+    }
+
+    // Match patterns
+    match /writers/{writerId} {
+      allow read: if true;
+      allow create, update: if isValidId(writerId) && isValidWriter(incoming());
+      allow delete: if isValidId(writerId);
+    }
+
+    match /feeds/{feedId} {
+      allow read: if true;
+      allow create, update: if isValidId(feedId) && isValidFeed(incoming());
+      allow delete: if isValidId(feedId);
+    }
+
+    match /articles/{articleId} {
+      allow read: if true;
+      allow create: if isValidId(articleId) && isValidArticle(incoming());
+      allow update: if isValidId(articleId) && isValidArticle(incoming())
+        && (!incoming().keys().hasAny(['createdAt']) || incoming().createdAt == existing().createdAt);
+      allow delete: if isValidId(articleId);
+    }
+
+    match /settings/{docId} {
+      allow read: if true;
+      allow write: if isValidId(docId);
+    }
+  }
+}

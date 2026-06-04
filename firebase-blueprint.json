@@ -1,0 +1,90 @@
+{
+  "entities": {
+    "Writer": {
+      "title": "Digital Writer",
+      "description": "Stable dynamic human tone persona profile",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique identifier" },
+        "name": { "type": "string", "description": "Writer display name" },
+        "voiceStyle": { "type": "string", "description": "Narrative style and voice descriptor" },
+        "bio": { "type": "string", "description": "Brief biography of the expert" },
+        "customPromptInstruction": { "type": "string", "description": "Explicit prompt system rules for LLM behavior" }
+      },
+      "required": ["id", "name", "voiceStyle", "customPromptInstruction"]
+    },
+    "RssFeed": {
+      "title": "RSS Feed source",
+      "description": "Monitored automated breaking catalog reference",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique feed ID" },
+        "name": { "type": "string", "description": "Display name of the publication" },
+        "url": { "type": "string", "format": "uri", "description": "Full target XML RSS feed endpoint" },
+        "niche": { "type": "string", "enum": ["hollywood", "sports", "tech"], "description": "Platform target vertical" },
+        "isActive": { "type": "boolean", "description": "Active sync status" },
+        "lastSynced": { "type": "string", "description": "ISO timestamp of last crawl" }
+      },
+      "required": ["id", "name", "url", "niche", "isActive"]
+    },
+    "Article": {
+      "title": "SaaS Article Draft",
+      "description": "Synthesized article draft complete with anti-AI and SEO optimization",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique draft identifier" },
+        "niche": { "type": "string", "description": "Associated niche vertical" },
+        "sourceTitle": { "type": "string", "description": "Original raw news item title" },
+        "sourceLink": { "type": "string", "description": "Link back to verified news source" },
+        "authorId": { "type": "string", "description": "Matched digital human writer tone ID" },
+        "title": { "type": "string", "description": "Draft high-concept title optimized" },
+        "content": { "type": "string", "description": "Pristine markdown formatted prose" },
+        "createdAt": { "type": "string", "description": "Draft creation timestamp" },
+        "originalImageUrl": { "type": "string", "description": "Curated or AI generated visual backdrop link" },
+        "seo": {
+          "type": "object",
+          "description": "SEO indexing factors and parameters"
+        },
+        "wordpressPush": {
+          "type": "object",
+          "description": "WordPress distribution tracking properties"
+        }
+      },
+      "required": ["id", "niche", "authorId", "title", "content", "createdAt"]
+    },
+    "SaaSSettings": {
+      "title": "SaaS Platform Settings",
+      "description": "Model configuration parameters and secure API tokens proxy configurations",
+      "type": "object",
+      "properties": {
+        "modelSettings": {
+          "type": "object",
+          "description": "Model configurations inside the platform"
+        },
+        "wordpress": {
+          "type": "object",
+          "description": "WordPress destinations configured"
+        }
+      },
+      "required": ["modelSettings", "wordpress"]
+    }
+  },
+  "firestore": {
+    "writers/{writerId}": {
+      "schema": "Writer",
+      "description": "Guild of persistent human writing profiles for agent orchestration"
+    },
+    "feeds/{feedId}": {
+      "schema": "RssFeed",
+      "description": "RSS catalog source references"
+    },
+    "articles/{articleId}": {
+      "schema": "Article",
+      "description": "Durable content drafts"
+    },
+    "settings/saas": {
+      "schema": "SaaSSettings",
+      "description": "Global SaaS system parameters"
+    }
+  }
+}

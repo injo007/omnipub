@@ -1,0 +1,6 @@
+{
+  "name": "NichePublisher AI",
+  "description": "Multi-agent editorial studio that automatically crawls RSS feeds and rewrites them into 100% human-toned, unique articles for Hollywood gossip, Sports, and Tech gadgets.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
