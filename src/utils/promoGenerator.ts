@@ -19,7 +19,7 @@ export function generateSaaSMarketingSyndicate(
   const tagList = tags.length > 0 ? tags : [niche.toUpperCase()];
   const firstTag = tagList[0].replace(/\s+/g, "");
 
-  // Customize copy style depending on writer clone target
+  // Customize copy style depending on writer voice profile
   const nameLower = authorName.toLowerCase();
   
   if (nameLower.includes("gigi") || nameLower.includes("perez") || nameLower.includes("gossip")) {

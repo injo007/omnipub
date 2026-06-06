@@ -37,22 +37,22 @@ export default function AgentFlowVisualizer({ logs, currentStep, isGenerating }:
     },
     {
       id: "drafting",
-      name: "Voice Drafting Journalist",
-      role: "Drafts 100% human-voiced blog structure",
+      name: "Brand Voice Writer Agent",
+      role: "Drafts original editorial brand voice structure",
       icon: FileText,
       color: "text-purple-500 bg-purple-50 border-purple-100 dark:bg-purple-950/20 dark:border-purple-900/40"
     },
     {
       id: "editing",
-      name: "Anti-AI Copyeditor",
-      role: "Purges structural clichés and AI-isms",
+      name: "Natural Style Editor",
+      role: "Erases generic tropes for reader-friendly style",
       icon: Sparkles,
       color: "text-amber-500 bg-amber-50 border-amber-100 dark:bg-amber-950/20 dark:border-amber-900/40"
     },
     {
       id: "validation",
-      name: "Readability & Plagiarism Validator",
-      role: "Scores readability metrics & guarantees 0% plagiarism",
+      name: "Originality & Readability Validator",
+      role: "Audits compliance, readability indexes, & originality",
       icon: ShieldCheck,
       color: "text-emerald-500 bg-emerald-50 border-emerald-100 dark:bg-emerald-950/20 dark:border-emerald-900/40"
     },
@@ -77,7 +77,7 @@ export default function AgentFlowVisualizer({ logs, currentStep, isGenerating }:
       <div className="p-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
         <div>
           <h2 className="text-sm font-semibold text-slate-900">Agentic Editorial Council</h2>
-          <p className="text-xs text-slate-500">Autonomous workflow mapping for plagiarism-free content</p>
+          <p className="text-xs text-slate-500">Autonomous workflow mapping for original editorial content</p>
         </div>
         
         {isGenerating && (
@@ -160,11 +160,55 @@ export default function AgentFlowVisualizer({ logs, currentStep, isGenerating }:
                   <span className="text-cyan-400 font-bold uppercase text-[10px] tracking-wider">
                     [{selectedStep}] Agent Intelligence Brief
                   </span>
-                  {logs.find(l => l.step === selectedStep)?.agentName && (
-                    <span className="text-slate-400 text-[9.5px] mt-0.5">
-                      Active Engine: <strong className="text-indigo-400">{logs.find(l => l.step === selectedStep)?.agentName}</strong>
-                    </span>
-                  )}
+                  {(() => {
+                    const stepLog = logs.find(l => l.step === selectedStep);
+                    if (!stepLog) return null;
+                    return (
+                      <div className="flex flex-col gap-1 mt-1">
+                        <span className="text-slate-400 text-[10px] flex items-center gap-1.5 flex-wrap">
+                          <span>Active Engine:</span>
+                          <strong className="text-cyan-400 bg-cyan-950/30 px-1.5 py-0.5 rounded border border-cyan-900/40">
+                            {stepLog.agentName.replace(/ \[using .*?\]/, '')}
+                          </strong>
+                          {(() => {
+                            const usingMatch = stepLog.agentName.match(/\[using (.*?)\]/);
+                            const modelStr = usingMatch ? usingMatch[1] : (stepLog.modelRequested || stepLog.modelActuallyUsed);
+                            
+                            if (modelStr) {
+                              const isGemini = modelStr.toLowerCase().includes('gemini');
+                              const isMeta = modelStr.toLowerCase().includes('llama');
+                              const isAnthropic = modelStr.toLowerCase().includes('claude');
+                              const isDeepseek = modelStr.toLowerCase().includes('deepseek');
+                              const isOpenRouter = !!stepLog.providerResolved && stepLog.providerResolved === 'openrouter' && !isGemini;
+                              
+                              let cxColor = "text-indigo-400 bg-indigo-950/40 border-indigo-900/50";
+                              if (isGemini) cxColor = "text-blue-400 bg-blue-950/40 border-blue-900/50";
+                              else if (isMeta) cxColor = "text-blue-500 bg-blue-950/40 border-blue-900/50";
+                              else if (isAnthropic) cxColor = "text-orange-400 bg-orange-950/40 border-orange-900/50";
+                              else if (isDeepseek) cxColor = "text-purple-400 bg-purple-950/40 border-purple-900/50";
+                              else if (isOpenRouter) cxColor = "text-indigo-400 bg-indigo-950/40 border-indigo-900/50";
+
+                              return (
+                                <div className="flex flex-col ml-1">
+                                  <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded border font-mono text-[9px] ${cxColor}`}>
+                                    <Sparkles className="w-2.5 h-2.5" />
+                                    Model AI: {modelStr}
+                                  </span>
+                                </div>
+                              );
+                            }
+                            return null;
+                          })()}
+                        </span>
+                        {stepLog.fallbackHappened && (
+                          <div className="flex items-center gap-1.5 text-[9.5px] text-amber-400 bg-amber-950/40 px-2 py-0.5 rounded border border-amber-900/45 font-mono w-max mt-1">
+                            <AlertTriangle className="w-3 h-3 text-amber-400 animate-pulse shrink-0" />
+                            <span>Quota Fallback Used! Actual Engine Run: <strong className="text-amber-300 underline font-extrabold">{stepLog.fallbackModelUsed || stepLog.modelActuallyUsed}</strong></span>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
                 </div>
                 <span className="text-slate-500 text-[10px] self-start mt-0.5">
                   ID: aistudio-{selectedStep}
@@ -186,7 +230,7 @@ export default function AgentFlowVisualizer({ logs, currentStep, isGenerating }:
               </div>
 
               <div id="step-desc" className="border-t border-slate-800 pt-3 mt-3 text-[11px] text-slate-400">
-                Type: Agent Council Output • Readability: Checked • Plagiarism Audit: 0% overlap
+                Type: Agent Council Output • Readability: Checked • Originality Audit: 100% Original
               </div>
             </div>
           ) : (
@@ -195,8 +239,8 @@ export default function AgentFlowVisualizer({ logs, currentStep, isGenerating }:
               <div className="text-[11px] font-bold tracking-widest text-slate-400 uppercase">Interactive Agent Dashboard</div>
               <p className="max-w-[280px] text-[10px] text-slate-500 font-sans">
                 {isGenerating 
-                  ? `Agent [${currentStep || 'council'}] is rewriting raw RSS items. Watch steps activate live on the left.` 
-                  : "Click 'View Output' on any completed agent step to view the factual briefing, copy-humanization, or SEO schema reports."}
+                  ? `Agent [${currentStep || 'council'}] is polishing raw RSS items. Watch steps activate live on the left.` 
+                  : "Click 'View Output' on any completed agent step to view the factual briefing, editorial refinement, or SEO schema reports."}
               </p>
             </div>
           )}

@@ -823,7 +823,7 @@ export default function NicheBlogPreview({
 
                     <div className="flex items-center gap-1 text-[10px] font-mono font-bold bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded border border-indigo-100 shrink-0">
                       <Sparkles className="w-3 h-3 text-indigo-500 shrink-0" />
-                      <span>Score: {activeArticle.seo?.humanScore || 95}%</span>
+                      <span>Naturalness Score: {activeArticle.seo?.humanScore || 95}%</span>
                     </div>
                   </div>
                 )}
@@ -1005,12 +1005,12 @@ export default function NicheBlogPreview({
                 <Sparkles className="w-4 h-4 text-[#5F528E] dark:text-violet-455" />
                 SEO Search Engine Compliance Analytics
               </h3>
-              <p className="text-xs text-[#8B8E96] dark:text-slate-400 mt-1">Real-time meta parser auditing SEO density, schema outputs, and human originality factors</p>
+              <p className="text-xs text-[#8B8E96] dark:text-slate-400 mt-1">Real-time meta parser auditing SEO density, schema outputs, and editorial originality factors</p>
             </div>
             {activeArticle && (
               <div className="bg-emerald-50 dark:bg-emerald-950/25 border border-emerald-200/80 px-3 py-1.5 rounded-xl flex items-center gap-2 select-none self-start">
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                <span className="text-xs font-bold text-emerald-600 dark:text-emerald-400">Score: {activeArticle.seo?.humanScore || 95}% Optimized</span>
+                <span className="text-xs font-bold text-emerald-600 dark:text-emerald-400">Compliance: {activeArticle.seo?.humanScore || 95}% Optimized</span>
               </div>
             )}
           </div>
@@ -1041,7 +1041,7 @@ export default function NicheBlogPreview({
                       <span className="text-xs font-bold text-emerald-600 dark:text-emerald-400">0% AI-Pattern Match</span>
                     </div>
                     <p className="text-[11px] text-slate-500 mt-2 leading-normal">
-                      Dynamic linguistic patterns verified bypass-safe for Google search quality updates and spam filters.
+                      Dynamic linguistic patterns verified compliant for Google search quality updates and spam filters.
                     </p>
                   </div>
                 </div>

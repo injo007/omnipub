@@ -564,7 +564,7 @@ export function TrendRadar({
                 {/* WRITER TARGET DISPATCH CARD */}
                 <div className="bg-slate-50 dark:bg-slate-950/40 border border-[#E3E5E8] dark:border-slate-805 p-4 rounded-xl flex flex-col md:flex-row md:items-center justify-between gap-4">
                   <div className="space-y-1">
-                    <label className="block text-[8.5px] font-mono tracking-wider font-semibold text-slate-500 uppercase">Deploy draft rewrite clone:</label>
+                    <label className="block text-[8.5px] font-mono tracking-wider font-semibold text-slate-500 uppercase">Deploy draft voice profile:</label>
                     <div className="flex items-center gap-2">
                       <select
                         value={selectedWriterForDraft}
@@ -681,7 +681,7 @@ export function ContentCalendar({
   // Interactive slot state variables
   const [selectedSlot, setSelectedSlot] = useState<any | null>(null);
   const [customHeadline, setCustomHeadline] = useState("");
-  const [customWriter, setCustomWriter] = useState("AI Cloned Digital Writer");
+  const [customWriter, setCustomWriter] = useState("AI Brand Voice Writer");
   const [customRating, setCustomRating] = useState(85);
   const [rescheduleDay, setRescheduleDay] = useState("");
   const [rescheduleTime, setRescheduleTime] = useState("");
@@ -711,7 +711,7 @@ export function ContentCalendar({
           item.title = src.title;
           item.sourceUrl = src.url;
           item.rating = src.opportunityScore || 78;
-          item.writerName = "AI Cloned Digital Writer";
+          item.writerName = "AI Brand Voice Writer";
           // Generate customized Nano Banana 2 image URL
           const seed = Math.floor(Math.random() * 50000) + 10000;
           item.imageUrl = `https://image.pollinations.ai/prompt/${encodeURIComponent(src.title + " highly-detailed tech header design bg")}-sig-${seed}?width=600&height=400&nologo=true`;
@@ -719,13 +719,13 @@ export function ContentCalendar({
         } else if (di === 0 && ti === 0) {
           item.status = "locked";
           item.title = "Cinematic Specs Leak: Why Carbon Batteries Will Rule Android & iOS Handsets";
-          item.writerName = "Marques Clone";
+          item.writerName = "Marques Tech Profile";
           item.rating = 92;
           item.imageUrl = `https://image.pollinations.ai/prompt/${encodeURIComponent("neon carbon mobile batteries phone layout tech showcase")}?width=600&height=400&nologo=true`;
         } else if (di === 0 && ti === 2) {
           item.status = "published";
           item.title = "Controversial Draft picks: Dissecting WNBA locker room controversies";
-          item.writerName = "Bill Simmons Clone";
+          item.writerName = "Simmons Slate Persona";
           item.rating = 74;
           item.imageUrl = `https://image.pollinations.ai/prompt/${encodeURIComponent("professional basketball game locker room floor lights")}-nb2?width=600&height=400&nologo=true`;
         }
@@ -936,7 +936,7 @@ export function ContentCalendar({
                             setCustomRating(slot.rating);
                           } else {
                             setCustomHeadline("");
-                            setCustomWriter("AI Cloned Digital Writer");
+                            setCustomWriter("AI Brand Voice Writer");
                             setCustomRating(85);
                           }
                           setRescheduleDay("");
@@ -1093,11 +1093,11 @@ export function ContentCalendar({
                         onChange={(e) => setCustomWriter(e.target.value)}
                         className="w-full p-2 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-850 rounded-lg outline-none text-xs"
                       >
-                        <option value="AI Cloned Digital Writer">AI Cloned Digital Writer</option>
-                        <option value="Dexter Miller Clone">Dexter Miller (Tech Critique)</option>
-                        <option value="Bill Simmons Clone">Bill Simmons (Sports Analytics)</option>
-                        <option value="Marques Clone">Marques (Hardware Teardown)</option>
-                        <option value="Celebrity Insider Clone">Celebrity Insider (Gossip PR)</option>
+                        <option value="AI Brand Voice Writer">AI Brand Voice Writer</option>
+                        <option value="Dexter Miller Profile">Dexter Miller (Tech Critique)</option>
+                        <option value="Simmons Slate Persona">Bill Simmons (Sports Analytics)</option>
+                        <option value="Marques Tech Profile">Marques (Hardware Teardown)</option>
+                        <option value="Celebrity Insider Profile">Celebrity Insider (Gossip PR)</option>
                       </select>
                     </div>
 

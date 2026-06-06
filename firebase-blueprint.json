@@ -29,7 +29,7 @@
     },
     "Article": {
       "title": "SaaS Article Draft",
-      "description": "Synthesized article draft complete with anti-AI and SEO optimization",
+      "description": "Synthesized article draft complete with original editorial validation and SEO optimization",
       "type": "object",
       "properties": {
         "id": { "type": "string", "description": "Unique draft identifier" },

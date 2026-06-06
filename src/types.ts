@@ -23,7 +23,7 @@ export interface Writer {
   niche: NicheType;
   voiceStyle: string; // e.g. "Sarcastic Glamour Insider"
   customPromptInstruction: string;
-  targetInspiration: string; // Famous writer clone target (e.g., "Perez Hilton", "Bill Simmons", "Marques Brownlee")
+  targetInspiration: string; // Brand-safe voice profile inspiration (e.g., "Perez Hilton", "Bill Simmons", "Marques Brownlee")
   popularity: number; // 0-100 rating
   totalArticles: number;
 }
@@ -96,6 +96,11 @@ export interface WorkflowStepLog {
   timestamp: string;
   output: string;
   changesMade?: string; // diff or description
+  modelRequested?: string;
+  modelActuallyUsed?: string;
+  providerResolved?: string;
+  fallbackHappened?: boolean;
+  fallbackModelUsed?: string;
 }
 
 export interface WordPressConfig {
@@ -103,7 +108,7 @@ export interface WordPressConfig {
   username: string;
   appPassword: string; // WordPress Application Password
   isConfigured: boolean;
-  autoPush: boolean; // Automatically push when draft reaches target humanization score
+  autoPush: boolean; // Automatically push when draft reaches target compliance score
 }
 
 export interface ModelSettings {
@@ -115,7 +120,7 @@ export interface ModelSettings {
   humanizeModel: string;
   seoModel: string;
   imageModel: string;
-  minHumanScoreTarget: number; // Target score constraint (e.g. 95)
+  minHumanScoreTarget: number; // Target Editorial Naturalness Score constraint (e.g. 95)
 }
 
 export interface SaaSConfig {
@@ -136,6 +141,20 @@ export interface Article {
   tags: string[];
   status: 'draft' | 'reviewing' | 'published';
   createdAt: string;
+
+  // New Editorial Opportunity Fields
+  opportunityScore?: number;
+  riskScore?: number;
+  sourceReliabilityScore?: number;
+  editorialQualityScore?: number;
+  factSafetyScore?: number;
+  originalityScore?: number;
+  seoScore?: number;
+  formattingScore?: number;
+  imageSafetyScore?: number;
+  pipelineType?: 'cheap' | 'balanced' | 'premium' | 'emergency';
+  manualReviewRequired?: boolean;
+  
   stats: {
     views: number;
     shares: number;
@@ -147,8 +166,8 @@ export interface Article {
     focusKeyword?: string;
     keywords: string[];
     readabilityScore: number;
-    uniquenessScore: number; // 100% plagiarism-free
-    humanScore: number; // Humanization score, e.g. 98%
+    uniquenessScore: number; // Original editorial
+    humanScore: number; // Editorial Naturalness Score, e.g. 98%
     iterationsUsed?: number; // Amount of refinement runs triggered
   };
   wordpressPush?: {
