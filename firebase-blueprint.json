@@ -67,6 +67,126 @@
         }
       },
       "required": ["modelSettings", "wordpress"]
+    },
+    "Notification": {
+      "title": "Audit Activity Log Notification",
+      "description": "Log notification stored in real-time history",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique notification ID" },
+        "type": { "type": "string", "description": "Level or category" },
+        "title": { "type": "string", "description": "Headline" },
+        "message": { "type": "string", "description": "Activity details" },
+        "timestamp": { "type": "string", "description": "Execution timestamp" },
+        "read": { "type": "boolean", "description": "Acknowledge flag" }
+      },
+      "required": ["id", "type", "title", "message", "timestamp", "read"]
+    },
+    "SuggestedSource": {
+      "title": "Crawl Suggested News Item Source",
+      "description": "Pre-classified RSS source opportunity item",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique identifier hash" },
+        "title": { "type": "string", "description": "Headline" },
+        "url": { "type": "string", "description": "Main target seed article link" },
+        "processingStatus": { "type": "string", "description": "Review status" },
+        "opportunityScore": { "type": "number", "description": "Refined scored indexing weight" },
+        "pipeline": { "type": "string", "description": "Pipeline execution strategy tier" },
+        "manualReview": { "type": "boolean", "description": "Gate required flag" }
+      },
+      "required": ["id", "title", "url", "opportunityScore", "pipeline", "manualReview", "processingStatus"]
+    },
+    "Candidate": {
+      "title": "Digital Writer Candidate",
+      "description": "Talent pool of digital writer candidates ready to join the publishing board",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique database identifier" },
+        "name": { "type": "string", "description": "Catchy journalist name" },
+        "niche": { "type": "string", "description": "Focus niche vertical" },
+        "competitor": { "type": "string", "description": "Target competitor publication" },
+        "avatar": { "type": "string", "description": "Headshot Unsplash image URL" },
+        "skills": {
+          "type": "array",
+          "description": "Specialized core skills list"
+        },
+        "voiceStyle": { "type": "string", "description": "Meticulous voice style profile" },
+        "bio": { "type": "string", "description": "Bio description details" },
+        "customPromptInstruction": { "type": "string", "description": "Style alignment prompt constraints" }
+      },
+      "required": ["id", "name", "niche", "competitor", "avatar", "skills", "voiceStyle", "bio", "customPromptInstruction"]
+    },
+    "Skill": {
+      "title": "Platform Skill",
+      "description": "Dynamic editing or orchestration skill configured in the platform",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique identifier" },
+        "name": { "type": "string", "description": "Display name of the skill" },
+        "niche": { "type": "string", "description": "Applicable niche filter" },
+        "directive": { "type": "string", "description": "Detailed skill instruction text" }
+      },
+      "required": ["id", "name", "niche", "directive"]
+    },
+    "Niche": {
+      "title": "Platform Niche",
+      "description": "Custom user-defined niche for specialized writing and rewriting",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique slug ID" },
+        "name": { "type": "string", "description": "Display name of the niche" },
+        "tagline": { "type": "string", "description": "Slogan or purpose statement" },
+        "primaryColor": { "type": "string" },
+        "accentColor": { "type": "string" },
+        "fontFamily": { "type": "string" },
+        "themeStyle": { "type": "string" }
+      },
+      "required": ["id", "name", "tagline", "primaryColor", "accentColor", "fontFamily", "themeStyle"]
+    },
+    "FinalArticlePackage": {
+      "title": "Final Article Package",
+      "description": "Immutable publishing package for an article",
+      "type": "object",
+      "properties": {
+        "packageId": { "type": "string" },
+        "articleId": { "type": "string" },
+        "workflowRunId": { "type": "string" },
+        "packageVersion": { "type": "number" },
+        "createdAt": { "type": "string" },
+        "createdBy": { "type": "string" },
+        "packageStatus": { "type": "string" }
+      },
+      "required": ["packageId", "articleId", "createdAt", "packageStatus"]
+    },
+    "PhaseDAuditEvent": {
+      "title": "Phase D Audit Event",
+      "description": "State change audit events for editorial pipelines",
+      "type": "object",
+      "properties": {
+        "packageId": { "type": "string" },
+        "eventType": { "type": "string" },
+        "action": { "type": "string" },
+        "sanitizedEvidence": { "type": "string" },
+        "timestamp": { "type": "string" }
+      },
+      "required": ["packageId", "eventType", "action", "timestamp"]
+    },
+    "PublishingJob": {
+      "title": "Publishing Job",
+      "description": "Queue publishing job to WordPress with lease logic",
+      "type": "object",
+      "properties": {
+        "jobId": { "type": "string" },
+        "packageId": { "type": "string" },
+        "targetSiteId": { "type": "string" },
+        "status": { "type": "string" },
+        "leaseToken": { "type": "string" },
+        "runCount": { "type": "number" },
+        "maxRetries": { "type": "number" },
+        "nextRunAt": { "type": "string" }
+      },
+      "required": ["jobId", "packageId", "targetSiteId", "status", "runCount", "maxRetries", "nextRunAt"]
     }
   },
   "firestore": {
@@ -85,6 +205,38 @@
     "settings/saas": {
       "schema": "SaaSSettings",
       "description": "Global SaaS system parameters"
+    },
+    "notifications/{notifId}": {
+      "schema": "Notification",
+      "description": "Real-time activity messages and platform audits"
+    },
+    "suggestedSources/{sourceId}": {
+      "schema": "SuggestedSource",
+      "description": "Live opportunities loaded and suggested for rewriting pipeline runs"
+    },
+    "candidates/{candidateId}": {
+      "schema": "Candidate",
+      "description": "Talent pool of digital writers awaiting hire to board"
+    },
+    "skills/{skillId}": {
+      "schema": "Skill",
+      "description": "Durable digital skills mapped for rewrite loops"
+    },
+    "niches/{nicheId}": {
+      "schema": "Niche",
+      "description": "Custom digital niches created dynamically"
+    },
+    "phase_d_packages/{packageId}": {
+      "schema": "FinalArticlePackage",
+      "description": "Immutable publishing packages generated in Phase D"
+    },
+    "phase_d_audits/{auditId}": {
+      "schema": "PhaseDAuditEvent",
+      "description": "Audit trails of packaging decisions"
+    },
+    "publishing_queue/{jobId}": {
+      "schema": "PublishingJob",
+      "description": "WordPress distribution and queue execution jobs"
     }
   }
 }

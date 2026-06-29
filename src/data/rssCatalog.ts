@@ -385,7 +385,7 @@ export const RSS_CATALOG: CatalogFeed[] = [
   },
   {
     id: "cat-hollywood-per",
-    name: "Perez Hilton Glamour",
+    name: "Gossipy Hollywood Insider",
     url: "https://perezhilton.com/feed/",
     niche: "hollywood",
     description: "Juicy gossip columns, social-media feud transcriptions, and star spats.",
@@ -494,5 +494,70 @@ export const RSS_CATALOG: CatalogFeed[] = [
     niche: "hollywood",
     description: "Modern star interviews, viral albums, and reality TV updates.",
     rank: 20
+  },
+  // TRAVELING NICHE
+  {
+    id: "cat-travel-skift",
+    name: "Skift",
+    url: "https://skift.com/feed/",
+    niche: "traveling",
+    description: "Travel business, airlines, hotels, and industry-defining tourism trends.",
+    rank: 3
+  },
+  {
+    id: "cat-travel-cnt",
+    name: "Condé Nast Traveler",
+    url: "https://www.cntraveler.com/feed/rss",
+    niche: "traveling",
+    description: "Luxury travel, pristine destinations, hotels, and expert travel guides.",
+    rank: 4
+  },
+  {
+    id: "cat-travel-tl",
+    name: "Travel + Leisure",
+    url: "https://www.travelandleisure.com/feed",
+    niche: "traveling",
+    description: "Travel inspiration, exotic destinations, hotel directories, and professional packing tips.",
+    rank: 5
+  },
+  {
+    id: "cat-travel-tpg",
+    name: "The Points Guy",
+    url: "https://thepointsguy.com/feed",
+    niche: "traveling",
+    description: "Flight deals, loyalty award programs, and credit-card travel hacking.",
+    rank: 6
+  },
+  {
+    id: "cat-travel-pulse",
+    name: "TravelPulse",
+    url: "https://www.travelpulse.com/rss/traveling.xml",
+    niche: "traveling",
+    description: "Travel agent news, destinations, cruise lines, and local hotel coverage.",
+    rank: 7
+  },
+  {
+    id: "cat-travel-lp",
+    name: "Lonely Planet Articles",
+    url: "https://www.lonelyplanet.com/news/rss",
+    niche: "traveling",
+    description: "Destination guides and practical, authentic travel ideas.",
+    rank: 8
+  },
+  {
+    id: "cat-travel-frommers",
+    name: "Frommer’s",
+    url: "https://www.frommers.com/rss",
+    niche: "traveling",
+    description: "Classic travel advice, hotel reviews, budget guides, and destination tips.",
+    rank: 9
+  },
+  {
+    id: "cat-travel-rick",
+    name: "Rick Steves",
+    url: "https://www.ricksteves.com/rss/podcast",
+    niche: "traveling",
+    description: "Europe travel, culture, practical travel tips, and guidebooks.",
+    rank: 10
   }
 ];

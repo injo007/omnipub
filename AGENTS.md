@@ -39,7 +39,7 @@ The workspace is powered by a coordinated council of specialized digital agents,
 
 To maintain complete transparency and vendor independence, the platform utilizes a dual-engine API strategy:
 
-*   **Native Gemini SDK Flow**: Any standard Google Gemini models (`gemini-2.1-flash`, `gemini-2.5-flash`, `gemini-2.5-pro`, `gemini-1.5-pro`, etc.) are routed natively using `GoogleGenAI` client setups with absolute payload-size safety and direct telemetry tracking.
+*   **Native Gemini SDK Flow**: Any standard Google Gemini models (`gemini-3.5-flash`, `gemini-2.5-flash`, `gemini-2.5-pro`, `gemini-3.1-pro-preview`, etc.) are routed natively using `GoogleGenAI` client setups with absolute payload-size safety and direct telemetry tracking.
 *   **OpenRouter Routing Engine**: Any third-party models or custom-defined model slugs (such as `deepseek/deepseek-chat`, `deepseek/deepseek-reasoner`, `meta-llama/llama-3.3-70b-instruct`, `anthropic/claude-3.5-sonnet`, `mistral`, `qwen`, `minimax`, `kimi`, etc.) must be dynamically processed via OpenRouter gateway APIs using secure custom keys.
 *   **Auto-Routing Fallback Guard**: In the event that a native Gemini request terminates with a rate limit error or quota ceiling breach (`429`), the model router must automatically redirect the active step request to the pre-configured OpenRouter backup model (e.g., Llama or DeepSeek) to protect operation pipelines from interruption.
 

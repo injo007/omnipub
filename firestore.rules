@@ -8,7 +8,7 @@ service cloud.firestore {
 
     // Helper functions
     function isValidId(id) {
-      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-+]+$');
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
     }
 
     function incoming() {
@@ -21,32 +21,35 @@ service cloud.firestore {
 
     // Validation helpers
     function isValidWriter(data) {
-      return data.keys().hasAll(['id', 'name', 'voiceStyle', 'customPromptInstruction'])
-        && data.keys().size() <= 15
-        && data.id is string && data.id.size() <= 100
-        && data.name is string && data.name.size() <= 200
-        && data.voiceStyle is string && data.voiceStyle.size() <= 1000
-        && data.customPromptInstruction is string && data.customPromptInstruction.size() <= 6000;
+      return data.id is string && data.name is string;
     }
 
     function isValidFeed(data) {
-      return data.keys().hasAll(['id', 'name', 'url', 'niche', 'isActive'])
-        && data.keys().size() <= 10
-        && data.id is string && data.id.size() <= 100
-        && data.name is string && data.name.size() <= 200
-        && data.url is string && data.url.size() <= 1000
-        && data.niche is string && (data.niche == 'tech' || data.niche == 'sports' || data.niche == 'hollywood')
-        && data.isActive is bool;
+      return data.id is string && data.name is string && data.url is string;
     }
 
     function isValidArticle(data) {
-      return data.keys().hasAll(['id', 'niche', 'authorId', 'title', 'content', 'createdAt'])
-        && data.keys().size() <= 22
-        && data.id is string && data.id.size() <= 100
-        && data.niche is string && (data.niche == 'tech' || data.niche == 'sports' || data.niche == 'hollywood')
-        && data.authorId is string && data.authorId.size() <= 100
-        && data.title is string && data.title.size() <= 500
-        && data.content is string && data.content.size() <= 100000;
+      return data.id is string && data.title is string && data.content is string;
+    }
+
+    function isValidNotification(data) {
+      return data.id is string && data.title is string && data.message is string;
+    }
+
+    function isValidSuggestedSource(data) {
+      return data.id is string && data.title is string && data.url is string;
+    }
+
+    function isValidCandidate(data) {
+      return data.id is string && data.name is string && data.niche is string;
+    }
+
+    function isValidSkill(data) {
+      return data.id is string && data.name is string && data.directive is string;
+    }
+
+    function isValidNiche(data) {
+      return data.id is string && data.name is string;
     }
 
     // Match patterns
@@ -73,6 +76,51 @@ service cloud.firestore {
     match /settings/{docId} {
       allow read: if true;
       allow write: if isValidId(docId);
+    }
+
+    match /notifications/{notifId} {
+      allow read: if true;
+      allow create, update: if isValidId(notifId) && isValidNotification(incoming());
+      allow delete: if isValidId(notifId);
+    }
+
+    match /suggestedSources/{sourceId} {
+      allow read: if true;
+      allow create, update: if isValidId(sourceId) && isValidSuggestedSource(incoming());
+      allow delete: if isValidId(sourceId);
+    }
+
+    match /candidates/{candidateId} {
+      allow read: if true;
+      allow create, update: if isValidId(candidateId) && isValidCandidate(incoming());
+      allow delete: if isValidId(candidateId);
+    }
+
+    match /skills/{skillId} {
+      allow read: if true;
+      allow create, update: if isValidId(skillId) && isValidSkill(incoming());
+      allow delete: if isValidId(skillId);
+    }
+
+    match /niches/{nicheId} {
+      allow read: if true;
+      allow create, update: if isValidId(nicheId) && isValidNiche(incoming());
+      allow delete: if isValidId(nicheId);
+    }
+
+    match /phase_d_packages/{packageId} {
+      allow read: if true;
+      allow write: if isValidId(packageId);
+    }
+
+    match /phase_d_audits/{auditId} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    match /publishing_queue/{jobId} {
+      allow read: if true;
+      allow write: if false;
     }
   }
 }

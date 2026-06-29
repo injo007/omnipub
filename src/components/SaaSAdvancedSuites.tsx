@@ -25,7 +25,11 @@ import {
   ChevronRight,
   ShieldAlert,
   ThumbsUp,
-  FileText
+  FileText,
+  X,
+  Target,
+  Activity,
+  BarChart2
 } from "lucide-react";
 import { SuggestedSource, Article, Writer, NicheType } from "../types";
 import { 
@@ -40,57 +44,38 @@ import {
 
 interface TrendRadarProps {
   selectedNiche: NicheType;
-  suggestedSources: SuggestedSource[];
-  setSuggestedSources: React.Dispatch<React.SetStateAction<SuggestedSource[]>>;
   writers: Writer[];
   onDraftSource: (source: SuggestedSource, writerId: string) => void;
+  niches?: any[];
+  onUpdateConfig?: () => Promise<void>;
 }
 
 export function TrendRadar({
   selectedNiche,
-  suggestedSources,
-  setSuggestedSources,
   writers,
-  onDraftSource
+  onDraftSource,
+  niches = [],
+  onUpdateConfig
 }: TrendRadarProps) {
   const [activeSource, setActiveSource] = useState<SuggestedSource | null>(null);
   const [radialScanLoading, setRadialScanLoading] = useState(false);
-  const [breakouts, setBreakouts] = useState<any[]>([
-    {
-      keyword: "Google Bard Upgrade June 2026",
-      growth: "+450% Spike",
-      volume: "85K searches/hr",
-      angle: "Underdog Spec Breakdown: Analysis of leaked Gemini-6 integration specifications.",
-      niche: "tech",
-      difficulty: "Low (Easy Rank)",
-      intent: "Commercial / Informational"
-    },
-    {
-      keyword: "WNBA All Star Draft Snubs",
-      growth: "+1,200% Velocity",
-      volume: "120K searches/hr",
-      angle: "Riot in the Locker Room: Deconstructing the controversial roster exclusions.",
-      niche: "sports",
-      difficulty: "Medium (Authority Backlink needed)",
-      intent: "Viral News Interest"
-    },
-    {
-      keyword: "Met Gala Afterparty Plunges",
-      growth: "+320% Heat",
-      volume: "65K searches/hr",
-      angle: "The Untamed Red Carpet: Behind the closed doors of modern haute couture's after-after-parties.",
-      niche: "hollywood",
-      difficulty: "Minimal (Fast Index)",
-      intent: "Gossip Buzz"
-    }
-  ]);
+  const [breakouts, setBreakouts] = useState<any[]>([]);
   const [customKeywordInput, setCustomKeywordInput] = useState("");
+  const [radialRegion, setRadialRegion] = useState("US");
   const [activeNicheWriters, setActiveNicheWriters] = useState<Writer[]>([]);
   const [selectedWriterForDraft, setSelectedWriterForDraft] = useState("");
   const [isPivoting, setIsPivoting] = useState(false);
   const [pivotTitle, setPivotTitle] = useState("");
   const [pivotKeywords, setPivotKeywords] = useState("");
+  const [pivotNiche, setPivotNiche] = useState<string>(selectedNiche);
   const [actionSuccessMessage, setActionSuccessMessage] = useState("");
+
+  const [showAddSourceModal, setShowAddSourceModal] = useState(false);
+  const [manualTitle, setManualTitle] = useState("");
+  const [manualUrl, setManualUrl] = useState("");
+  const [manualDescription, setManualDescription] = useState("");
+  const [manualSourceName, setManualSourceName] = useState("Manual Editorial Item");
+  const [isSubmittingManualSource, setIsSubmittingManualSource] = useState(false);
 
   useEffect(() => {
     const nw = writers.filter(w => w.niche === selectedNiche);
@@ -98,24 +83,98 @@ export function TrendRadar({
     if (nw.length > 0) {
       setSelectedWriterForDraft(nw[0].id);
     }
+    setPivotNiche(selectedNiche);
   }, [selectedNiche, writers]);
 
   const handleSelectSource = (src: SuggestedSource) => {
     setActiveSource(src);
     setPivotTitle(src.title);
     setPivotKeywords(src.keywordResearch?.primaryKeyword || "");
+    setPivotNiche(src.niche);
     setIsPivoting(false);
     setActionSuccessMessage("");
   };
 
-  const handleScanRadar = async () => {
+  const handleClearQueue = async () => {
+    if (!window.confirm("Are you sure you want to clear all headlines for fresh results?")) return;
+    try {
+      const res = await fetch(`/api/suggested-sources/clear?niche=${selectedNiche}`, {
+        method: "DELETE"
+      });
+      if (res.ok) {
+        setActiveSource(null);
+        if (onUpdateConfig) await onUpdateConfig();
+        setActionSuccessMessage("Queue cleared successfully for fresh results.");
+        setTimeout(() => setActionSuccessMessage(""), 3000);
+      }
+    } catch (e: any) {
+      console.error(e);
+    }
+  };
+
+  const handleDeleteSource = async (e: React.MouseEvent, id: string) => {
+    e.stopPropagation();
+    try {
+      const res = await fetch(`/api/suggested-sources/${id}`, {
+        method: "DELETE"
+      });
+      if (res.ok) {
+        if (activeSource?.id === id) setActiveSource(null);
+        if (onUpdateConfig) await onUpdateConfig();
+      }
+    } catch (e: any) {
+      console.error(e);
+    }
+  };
+
+  const handleCreateManualSourceSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!manualTitle.trim()) return;
+    setIsSubmittingManualSource(true);
+    setActionSuccessMessage("");
+    try {
+      const res = await fetch("/api/suggested-sources", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: manualTitle,
+          url: manualUrl,
+          description: manualDescription,
+          niche: selectedNiche,
+          sourceName: manualSourceName
+        })
+      });
+      if (res.ok) {
+        setActionSuccessMessage(`✓ Custom Opportunity "${manualTitle}" successfully logged to ${selectedNiche} niche workspace!`);
+        setShowAddSourceModal(false);
+        setManualTitle("");
+        setManualUrl("");
+        setManualDescription("");
+        setManualSourceName("Manual Editorial Item");
+        if (onUpdateConfig) {
+          await onUpdateConfig();
+        }
+      } else {
+        const err = await res.json();
+        setActionSuccessMessage(`Error logging custom opportunity: ${err.error || "unknown"}`);
+      }
+    } catch (err: any) {
+      console.error(err);
+      setActionSuccessMessage("Failed to connect to endpoints.");
+    } finally {
+      setIsSubmittingManualSource(false);
+    }
+  };
+
+  const handleScanRadar = async (overrideKeyword?: string) => {
     setRadialScanLoading(true);
     setActionSuccessMessage("");
     try {
+      const keywordToUse = overrideKeyword !== undefined ? overrideKeyword : customKeywordInput;
       const res = await fetch("/api/articles/content-opportunity-radar", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ niche: selectedNiche, keyword: customKeywordInput })
+        body: JSON.stringify({ niche: selectedNiche, keyword: keywordToUse, region: radialRegion })
       });
       if (res.ok) {
         const data = await res.json();
@@ -141,7 +200,8 @@ export function TrendRadar({
       });
       if (res.ok) {
         const newSource = await res.json();
-        setSuggestedSources(prev => [newSource, ...prev]);
+        if (onUpdateConfig) onUpdateConfig();
+        // Removed setSuggestedSources, just set as active to view
         handleSelectSource(newSource);
         setActionSuccessMessage(`✓ Adhering to automation: Trend '${keyword}' adopted! Headline opportunity generated and selected.`);
       } else {
@@ -155,65 +215,49 @@ export function TrendRadar({
     }
   };
 
-  const handleApproveSource = async (id: string) => {
-    try {
-      const res = await fetch(`/api/suggested-sources/${id}/approve`, {
-        method: "POST"
-      });
-      if (res.ok) {
-        setActionSuccessMessage("Headline successfully approved for calendar queue!");
-        setSuggestedSources(prev => 
-          prev.map(s => s.id === id ? { ...s, processingStatus: "approved" } : s)
-        );
-        if (activeSource?.id === id) {
-          setActiveSource(prev => prev ? { ...prev, processingStatus: "approved" } : null);
-        }
-      }
-    } catch (err) {
-      console.error(err);
+
+
+  // Advanced Opportunity Score Algorithm based on historical parameters
+  const calculateOpportunityScore = (br: any) => {
+    // Normalize volume based on a general scale. "100K+" -> 100000 
+    const extractNumber = (volStr: string) => {
+      const v = String(volStr).toUpperCase();
+      let num = parseFloat(v.replace(/[^0-9.]/g, ''));
+      if (isNaN(num)) num = 10;
+      if (v.includes("M")) return num * 1000000;
+      if (v.includes("K")) return num * 1000;
+      return num;
+    };
+    
+    const trafficVal = extractNumber(br.volume || br.expectedTraffic || "10K");
+    // Historical performance weight: traffic over 500K gets max points
+    let trafficScore = Math.min(100, (trafficVal / 500000) * 100); 
+    
+    // SEO opportunity from backend (or fallback 80)
+    const seoBase = br.seoOpportunity || 80;
+    // Competition penalty (higher competition lowers score)
+    const compPenalty = br.competitionScore || 40;
+    
+    // Synthetic historical multiplier: if velocity is 'Breakout', add a historic multiplier
+    let historicalMultiplier = 1.0;
+    const velocity = String(br.trendVelocity || br.growth || "").toLowerCase();
+    if (velocity.includes("breakout")) {
+      historicalMultiplier = 1.15;
+    } else if (velocity.includes("%")) {
+       const pct = parseInt(velocity.replace(/[^0-9]/g, '')) || 0;
+       historicalMultiplier = 1.0 + (pct / 2000); 
     }
+
+    // Weighted Algorithm: 40% SEO ease + 30% Traffic Cap + 30% Competition inverted
+    let rawScore = (seoBase * 0.4) + (trafficScore * 0.3) + ((100 - compPenalty) * 0.3);
+    
+    return Math.min(99, Math.max(10, Math.floor(rawScore * historicalMultiplier)));
   };
 
-  const handleRejectSource = async (id: string) => {
-    try {
-      const res = await fetch(`/api/suggested-sources/${id}/reject`, {
-        method: "POST"
-      });
-      if (res.ok) {
-        setActionSuccessMessage("Headline skipped/removed from queue.");
-        setSuggestedSources(prev => prev.filter(s => s.id !== id));
-        setActiveSource(null);
-      }
-    } catch (err) {
-      console.error(err);
-    }
-  };
-
-  const handleDeepAnalyzeSource = async (id: string) => {
-    setActionSuccessMessage("Initiating automated deep AI trend research...");
-    // Local simulation of deep scan or live call
-    try {
-      const res = await fetch(`/api/suggested-sources/${id}/analyze`, {
-        method: "POST"
-      });
-      if (res.ok) {
-        const enriched = await res.json();
-        setSuggestedSources(prev => 
-          prev.map(s => s.id === id ? enriched : s)
-        );
-        setActiveSource(enriched);
-        setActionSuccessMessage("Automated research analysis complete!");
-      }
-    } catch (err) {
-      console.error(err);
-    }
-  };
-
-  // Convert opportunity rating out of 100
-  const getOpportunityColor = (score = 75) => {
-    if (score >= 85) return "text-emerald-500 border-emerald-500 bg-emerald-500/10";
-    if (score >= 65) return "text-indigo-500 border-indigo-500 bg-indigo-500/10";
-    return "text-amber-500 border-amber-500 bg-amber-500/10";
+  const getScoreColor = (score: number) => {
+    if (score >= 88) return "text-emerald-500 border-emerald-500/50 bg-emerald-500/10";
+    if (score >= 75) return "text-indigo-500 border-indigo-500/50 bg-indigo-500/10";
+    return "text-amber-500 border-amber-500/50 bg-amber-500/10";
   };
 
   // Generate simulated chart data based on activeSource title to look real
@@ -257,409 +301,221 @@ export function TrendRadar({
         )}
       </div>
 
-      {/* BENCHWORK HUB GRID */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch">
+      {/* SEARCH VELOCITY SCAN ENGINE - ALWAYS VISIBLE */}
+      <div className="bg-white dark:bg-[#121620]/60 backdrop-blur-xl rounded-2xl border border-[#E3E5E8] dark:border-slate-805 p-6 shadow-sm mt-8 space-y-6 flex flex-col">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 bg-indigo-50 dark:bg-indigo-950/30 rounded-xl flex items-center justify-center border border-indigo-100 dark:border-indigo-900/50 shrink-0">
+             <Target className="w-5 h-5 text-indigo-500" />
+          </div>
+          <div>
+            <h5 className="text-[12px] font-black text-slate-800 dark:text-slate-100 uppercase tracking-widest font-mono">Breakout Keyword Scout Scanner</h5>
+            <p className="text-[11px] text-slate-500">Scan real-time trending queries to deploy dynamic viral trends</p>
+          </div>
+        </div>
         
-        {/* LEFT COLUMN: ACTIVE HEADLINES TO ANALYZE (Col span 5) */}
-        <div className="lg:col-span-5 flex flex-col space-y-4">
-          <div className="bg-white dark:bg-[#121620]/60 backdrop-blur-xl rounded-2xl border border-[#E3E5E8] dark:border-slate-805 p-5 shadow-sm space-y-4 flex-1">
-            <h4 className="text-xs font-black text-[#0D1219] dark:text-slate-100 uppercase tracking-widest font-mono flex items-center justify-between">
-              <span>Headline Feed Queue ({suggestedSources.length})</span>
-              <span className="text-[10px] text-slate-500 lowercase">select to investigate</span>
-            </h4>
-
-            {suggestedSources.length === 0 ? (
-              <div className="p-8 border border-dashed border-[#E3E5E8] dark:border-slate-800 rounded-xl text-center">
-                <Search className="w-8 h-8 text-slate-400 mx-auto opacity-40 mb-2" />
-                <p className="text-xs text-[#8B8E96] font-medium leading-relaxed">
-                  No headlines currently waiting in queue. Connect RSS feeds or scan breakouts below!
-                </p>
-              </div>
-            ) : (
-              <div className="space-y-2 max-h-[580px] overflow-y-auto pr-1">
-                {suggestedSources.map((src) => {
-                  const rating = src.opportunityScore || src.rating || 75;
-                  const scoreColor = getOpportunityColor(rating);
-                  const isFocused = activeSource?.id === src.id;
-                  
-                  return (
-                    <button
-                      key={src.id}
-                      onClick={() => handleSelectSource(src)}
-                      className={`w-full text-left p-3.5 border rounded-xl transition-all duration-300 relative flex flex-col justify-between overflow-hidden cursor-pointer ${
-                        isFocused 
-                          ? "bg-slate-50 dark:bg-slate-900/60 border-rose-500/60 dark:border-rose-500/40 shadow-sm" 
-                          : "bg-white dark:bg-slate-950/40 border-slate-200 dark:border-slate-850 hover:bg-slate-50 hover:border-slate-300 dark:hover:bg-slate-900/30"
-                      }`}
-                    >
-                      {/* Active glowing node */}
-                      {isFocused && (
-                        <div className="absolute top-0 bottom-0 left-0 w-1 bg-gradient-to-b from-rose-500 to-indigo-500" />
-                      )}
-                      
-                      <div className="flex items-start justify-between gap-3 text-xs">
-                        <span className="text-[9.5px] font-bold font-mono text-[#8B8E96] truncate uppercase tracking-tight">
-                          {src.sourceName || "RSS Feed Syndicated"}
-                        </span>
-                        <span className={`text-[9.5px] font-black font-mono border px-1.5 py-0.5 rounded ${scoreColor}`}>
-                          {rating} Q-Score
-                        </span>
-                      </div>
-
-                      <h5 className="font-semibold text-slate-700 dark:text-slate-200 text-xs mt-1.5 leading-snug line-clamp-2">
-                        {src.title}
-                      </h5>
-
-                      <div className="flex items-center justify-between text-[10px] text-slate-400 font-mono mt-3 pt-2.5 border-t border-slate-100 dark:border-slate-900/50">
-                        <span>{src.pubDate ? new Date(src.pubDate).toLocaleDateString() : 'Just now'}</span>
-                        {src.processingStatus === 'approved' ? (
-                          <span className="text-emerald-500 font-bold">&#9679; Approved</span>
-                        ) : src.processingStatus === 'rejected' ? (
-                          <span className="text-rose-500 font-bold">&#9679; Dropped</span>
-                        ) : (
-                          <span className="text-amber-500">&#9679; Pending Analyze</span>
-                        )}
-                      </div>
-                    </button>
-                  );
-                })}
-              </div>
-            )}
+        <div className="flex flex-col md:flex-row gap-3 items-end">
+          <div className="relative flex-1 w-full">
+            <label className="text-[9px] font-bold text-slate-400 uppercase tracking-wider font-mono mb-1.5 block">Search Trending Focus:</label>
+            <Search className="absolute left-3 bottom-3 w-4 h-4 text-slate-400" />
+            <input 
+              type="text" 
+              placeholder="e.g. ChatGPT-5 specs, LeBron coaching snub, WNBA scores..."
+              value={customKeywordInput}
+              onChange={(e) => setCustomKeywordInput(e.target.value)}
+              className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-205 dark:border-slate-805 text-slate-800 dark:text-white rounded-xl py-2.5 pl-10 pr-4 text-xs outline-none focus:ring-1 focus:ring-rose-550 transition font-sans"
+            />
+          </div>
+          <div className="w-full md:w-32">
+            <label className="text-[9px] font-bold text-slate-400 uppercase tracking-wider font-mono mb-1.5 block">Region:</label>
+            <select
+              value={radialRegion}
+              onChange={(e) => setRadialRegion(e.target.value)}
+              className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-205 dark:border-slate-805 text-slate-800 dark:text-white rounded-xl py-2.5 px-3 text-xs outline-none focus:ring-1 focus:ring-rose-550 transition font-mono font-bold"
+            >
+              <option value="US">🇺🇸 US</option>
+              <option value="GB">🇬🇧 UK</option>
+              <option value="CA">🇨🇦 CA</option>
+              <option value="AU">🇦🇺 AU</option>
+              <option value="IN">🇮🇳 IN</option>
+              <option value="FR">🇫🇷 FR</option>
+              <option value="DE">🇩🇪 DE</option>
+            </select>
+          </div>
+          <div className="flex flex-col md:flex-row gap-2 w-full md:w-auto">
+            <button
+              onClick={() => {
+                setCustomKeywordInput("");
+                handleScanRadar("");
+              }}
+              disabled={radialScanLoading}
+              className="px-6 py-2.5 bg-rose-600 hover:bg-rose-500 disabled:opacity-50 text-white font-bold rounded-xl text-xs flex items-center justify-center gap-2 duration-300 transition-all cursor-pointer font-mono shadow-md whitespace-nowrap"
+            >
+              <RefreshCw className={`w-4 h-4 ${radialScanLoading && customKeywordInput === "" ? 'animate-spin' : ''}`} />
+              <span>Global Trends Scanner</span>
+            </button>
+            <button
+              onClick={() => {
+                if (!customKeywordInput.trim()) {
+                  alert("Please enter a specific keyword to scan.");
+                  return;
+                }
+                handleScanRadar(customKeywordInput);
+              }}
+              disabled={radialScanLoading}
+              className="px-6 py-2.5 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-bold rounded-xl text-xs flex items-center justify-center gap-2 duration-300 transition-all cursor-pointer font-mono shadow-md whitespace-nowrap"
+            >
+              <Search className={`w-4 h-4 ${radialScanLoading && customKeywordInput !== "" ? 'animate-spin' : ''}`} />
+              <span>Keyword Scan Engine</span>
+            </button>
           </div>
         </div>
 
-        {/* RIGHT COLUMN: ANALYTICAL WORKBENCH & GAUGES / SCANNER (Col span 7) */}
-        <div className="lg:col-span-7 flex flex-col space-y-6">
-          {activeSource ? (
-            /* DETAILED AI GRADE WORKBENCH */
-            <div className="bg-white dark:bg-[#121620]/60 backdrop-blur-xl rounded-2xl border border-[#E3E5E8] dark:border-slate-805 p-6 shadow-sm space-y-6">
-              
-              {/* HEADER VIEW */}
-              <div className="flex items-start justify-between border-b border-slate-100 dark:border-slate-800/80 pb-4">
-                <div className="space-y-1.5 pr-6">
-                  <span className={`text-[9.5px] font-mono font-black uppercase tracking-wider px-2 py-1 rounded bg-[#E3E5E8]/40 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-[#E3E5E8] dark:border-slate-700`}>
-                    {activeSource.niche.toUpperCase()} NICHE INDEX
-                  </span>
-                  <h4 className="text-sm font-bold text-slate-800 dark:text-white leading-snug select-text">
-                    {activeSource.title}
-                  </h4>
-                  <p className="text-[10px] text-slate-500">Source Link: <a href={activeSource.url} target="_blank" rel="noreferrer" className="text-blue-500 font-semibold underline hover:text-blue-400 select-all">{activeSource.url}</a></p>
+        {breakouts.length > 0 && (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5 pt-6 select-none text-xs border-t border-slate-100 dark:border-slate-800">
+            {breakouts.map((br, idx) => {
+              const oppScore = calculateOpportunityScore(br);
+              return (
+              <div key={idx} className="p-5 bg-slate-50/50 dark:bg-slate-950/60 border border-[#E3E5E8] dark:border-slate-805 hover:border-indigo-400 dark:hover:border-indigo-500/50 rounded-2xl relative group overflow-hidden transition-all duration-300 shadow-sm hover:shadow-md cursor-default">
+                <div className="absolute top-0 right-0 w-24 h-24 bg-gradient-to-bl from-indigo-500/10 via-rose-500/5 to-transparent rounded-bl-[100px] pointer-events-none opacity-50 group-hover:opacity-100 transition-opacity" />
+                
+                <div className="flex justify-between items-start gap-4">
+                  <div className="flex flex-col">
+                     <span className="text-[10px] font-mono font-black text-rose-500 uppercase tracking-widest bg-rose-50 dark:bg-rose-955/20 px-1.5 py-0.5 rounded w-max mb-1.5">{br.wordpressCategory || "Discovery"}</span>
+                     <h6 className="font-bold text-slate-800 dark:text-slate-100 mt-1 text-sm leading-tight select-all group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors line-clamp-2" title={br.keyword}>{br.keyword}</h6>
+                  </div>
+                  <div className={`shrink-0 flex flex-col items-center justify-center p-2 rounded-xl border ${getScoreColor(oppScore)} min-w-[50px] shadow-sm`}>
+                     <span className="text-[8px] uppercase font-black opacity-80 mb-0.5 tracking-wider">Score</span>
+                     <span className="text-base font-black font-mono leading-none">{oppScore}</span>
+                  </div>
                 </div>
                 
-                <div className="shrink-0 text-center">
-                  <div className="text-[9px] font-bold text-slate-400 uppercase font-mono tracking-tight">AI Verdict</div>
-                  <span className={`inline-block mt-1 font-mono text-[11px] font-black border px-3 py-1 rounded-full ${getOpportunityColor(activeSource.opportunityScore || 75)}`}>
-                    {activeSource.scoreLabel || "RECOMMEND: DRAFT"}
-                  </span>
-                </div>
-              </div>
-
-              {/* COGNITIVE REASONING SUMMARY */}
-              <div className="bg-slate-50 dark:bg-slate-950/60 border border-[#E3E5E8] dark:border-slate-805 rounded-xl p-4 font-sans select-all text-xs leading-relaxed text-slate-600 dark:text-slate-350">
-                <div className="text-[10px] font-black text-slate-400 dark:text-slate-500 uppercase tracking-widest font-mono mb-1">Semantic Sizing & Strategy Reasoning:</div>
-                <p>{activeSource.scoreReasoning || "This article presents spiked trend interest. The topic density is low on Google, making index entry relatively straightforward. Recommending immediate multivariant rewrite with high emotional weight in localized language."}</p>
-              </div>
-
-              {/* 7-DIMENSIONAL OPPORTUNITY GAUGES */}
-              <div>
-                <h5 className="text-[10px] font-black text-slate-400 dark:text-slate-500 uppercase tracking-widest font-mono mb-3.5">7-Dimensional Scoring Index:</h5>
+                <p className="text-[11px] text-slate-600 dark:text-slate-400 mt-3 leading-relaxed line-clamp-2" title={br.angle}>{br.angle}</p>
                 
-                {(() => {
-                  const s = activeSource.scores || {
-                    trendScore: 82,
-                    seoScore: 78,
-                    contentQuality: 68,
-                    audienceFit: 74,
-                    mediaScore: 50,
-                    monetization: 85,
-                    riskScore: 92
-                  };
-                  
-                  const meters = [
-                    { label: "Trend Spike Velocity", val: s.trendScore, color: "bg-rose-500" },
-                    { label: "SEO Authority Ease", val: s.seoScore, color: "bg-amber-500" },
-                    { label: "Source Content Depth", val: s.contentQuality, color: "bg-emerald-500" },
-                    { label: "Audience Magnet / Hook Factor", val: s.audienceFit, color: "bg-blue-500" },
-                    { label: "Illustrative Media Density", val: s.mediaScore, color: "bg-purple-500" },
-                    { label: "AdSense Monetization Value", val: s.monetization, color: "bg-indigo-500" },
-                    { label: "Fact-Verified/Originality Score", val: s.riskScore, color: "bg-cyan-500" }
-                  ];
-
-                  return (
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      {meters.map((met, i) => (
-                        <div key={i} className="bg-slate-50 dark:bg-slate-950/40 p-3 rounded-xl border border-slate-100 dark:border-slate-850">
-                          <div className="flex items-center justify-between text-[11px] font-semibold mb-1">
-                            <span className="text-slate-700 dark:text-slate-350">{met.label}</span>
-                            <span className="font-mono font-bold text-slate-500">{met.val}%</span>
-                          </div>
-                          <div className="w-full bg-[#E3E5E8] dark:bg-slate-800 h-1.5 rounded-full overflow-hidden">
-                            <div className={`h-full ${met.color} rounded-full transition-all duration-1000`} style={{ width: `${met.val}%` }} />
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  );
-                })()}
-              </div>
-
-              {/* SEARCH VELOCITY PLOT (using recharts) */}
-              <div>
-                <h5 className="text-[10px] font-black text-slate-400 dark:text-slate-500 uppercase tracking-widest font-mono mb-3.5 flex items-center justify-between">
-                  <span>Relative Search Interest Velocity (30d Trend)</span>
-                  <span className="text-[9px] text-emerald-500 font-bold font-sans flex items-center gap-1">🟢 REAL-TIME SYNCED PLOT</span>
-                </h5>
-                <div className="h-44 bg-slate-50 dark:bg-slate-950/40 border border-slate-100 dark:border-slate-850 rounded-xl p-3 select-none flex items-center justify-center">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <AreaChart data={generateTrendChartData(activeSource.title)}>
-                      <defs>
-                        <linearGradient id="colorSearch" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="5%" stopColor="#ef4444" stopOpacity={0.25}/>
-                          <stop offset="95%" stopColor="#ef4444" stopOpacity={0}/>
-                        </linearGradient>
-                      </defs>
-                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#334155" opacity={0.15} />
-                      <XAxis dataKey="name" stroke="#64748b" fontSize={9} tickLine={false} />
-                      <YAxis stroke="#64748b" fontSize={9} tickLine={false} />
-                      <Tooltip />
-                      <Area type="monotone" dataKey="searchVolume" stroke="#ef4444" strokeWidth={2} fillOpacity={1} fill="url(#colorSearch)" />
-                    </AreaChart>
-                  </ResponsiveContainer>
+                <div className="mt-4 grid grid-cols-3 gap-2">
+                  <div className="bg-white dark:bg-slate-900 border border-[#E3E5E8] dark:border-slate-800 rounded-lg p-2 text-center">
+                    <span className="block text-[8px] font-black text-slate-400 uppercase tracking-wider mb-1">Vol</span>
+                    <span className="block text-xs font-bold text-slate-700 dark:text-slate-300 font-mono">{br.volume || "10K+"}</span>
+                  </div>
+                  <div className="bg-white dark:bg-slate-900 border border-[#E3E5E8] dark:border-slate-800 rounded-lg p-2 text-center">
+                    <span className="block text-[8px] font-black text-slate-400 uppercase tracking-wider mb-1">Cmp</span>
+                    <span className="block text-xs font-bold text-slate-700 dark:text-slate-300 font-mono">{br.competitionScore || "Avg"}</span>
+                  </div>
+                  <div className="bg-white dark:bg-slate-900 border border-[#E3E5E8] dark:border-slate-800 rounded-lg p-2 text-center">
+                    <span className="block text-[8px] font-black text-slate-400 uppercase tracking-wider mb-1">SEO</span>
+                    <span className="block text-xs font-bold text-slate-700 dark:text-slate-300 font-mono">{br.seoOpportunity || "Good"}</span>
+                  </div>
                 </div>
-              </div>
 
-              {/* KEYWORD RESEARCH BRIEF */}
-              {activeSource.keywordResearch && (
-                <div className="border-t border-slate-100 dark:border-slate-900/50 pt-5 space-y-4">
-                  <h5 className="text-[10px] font-black text-slate-400 dark:text-slate-500 uppercase tracking-widest font-mono select-none">AI SEO Strategy Brief:</h5>
-                  
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs font-mono">
-                    <div className="space-y-1 bg-rose-50/20 dark:bg-rose-955/10 p-3 rounded-xl border border-rose-550/25">
-                      <div className="text-[9px] text-slate-400 uppercase font-black">Target Primary Keyword:</div>
-                      <div className="font-bold text-slate-850 dark:text-rose-400 text-sm select-all">{activeSource.keywordResearch.primaryKeyword}</div>
-                    </div>
-                    <div className="space-y-1 bg-indigo-50/20 dark:bg-indigo-950/20 p-3 rounded-xl border border-[#5F528E]/25">
-                      <div className="text-[9px] text-slate-400 uppercase font-black">Recommended Title Meta Angle:</div>
-                      <div className="font-bold text-indigo-700 dark:text-indigo-400 leading-snug select-text">{activeSource.keywordResearch.suggestedTitle}</div>
-                    </div>
+                <div className="mt-4 pt-4 border-t border-[#E3E5E8] dark:border-slate-800 flex items-center justify-between">
+                  <div className="flex items-center gap-1.5 text-[9px] font-bold text-indigo-500 bg-indigo-50 dark:bg-indigo-955/20 px-2.5 py-1.5 rounded uppercase tracking-wider">
+                     <Activity className="w-3 h-3" />
+                     {br.trendVelocity || br.growth || "Rising"}
                   </div>
-
-                  <div className="p-3 bg-slate-50 dark:bg-slate-950/60 rounded-xl space-y-1 text-xs">
-                    <div className="text-[9px] text-slate-400 uppercase font-mono font-black">Recommended LSI & Long-Tail keywords:</div>
-                    <div className="flex flex-wrap gap-1.5 pt-1">
-                      {activeSource.keywordResearch.secondaryKeywords?.map((kw: string, i: number) => (
-                        <span key={i} className="text-[10px] font-mono font-semibold px-2 py-1 bg-white dark:bg-slate-800 rounded border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-350 select-all">+{kw}</span>
-                      ))}
-                      {activeSource.keywordResearch.longTailKeywords?.map((kw: string, i: number) => (
-                        <span key={i} className="text-[10px] font-mono font-semibold px-2 py-1 bg-white dark:bg-slate-800 rounded border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-350 select-all">+{kw}</span>
-                      ))}
-                    </div>
-                  </div>
-
-                  {activeSource.trendComparison && (
-                    <div className="p-3 bg-slate-50 dark:bg-slate-950/60 rounded-xl space-y-1 text-xs">
-                      <div className="text-[9px] text-slate-400 uppercase font-mono font-black">Country/Region Interest Spike:</div>
-                      <div className="font-semibold text-slate-700 dark:text-slate-300">
-                        Top Country Match: <span className="font-bold text-indigo-500 font-mono">{activeSource.trendComparison.regionInterest || "Global US/UK"}</span> | Rising Queries: <span className="font-mono text-indigo-400">{activeSource.trendComparison.risingKeywords?.join(', ') || "N/A"}</span>
-                      </div>
-                    </div>
-                  )}
-
-                  {activeSource.factClaims && activeSource.factClaims.length > 0 && (
-                    <div className="p-4 bg-emerald-50/20 dark:bg-emerald-955/10 border border-emerald-500/20 rounded-xl space-y-2 text-xs">
-                      <div className="text-[9px] text-emerald-600 dark:text-emerald-450 uppercase font-mono font-black flex items-center gap-1">
-                        <CheckCircle className="w-3.5 h-3.5 text-emerald-500" />
-                        Fact Verified Truth Index claims check:
-                      </div>
-                      <ul className="list-disc list-inside space-y-1 text-[#8B8E96] dark:text-slate-350 select-text">
-                        {activeSource.factClaims.map((claim: string, idx: number) => (
-                          <li key={idx} className="leading-relaxed">{claim}</li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {/* ACTION BUTTON FOOTER BAR */}
-              <div className="border-t border-slate-100 dark:border-slate-800/80 pt-5 space-y-4">
-                
-                {isPivoting ? (
-                  /* PIVOT EDITING MODE */
-                  <div className="bg-slate-50 dark:bg-slate-950 p-4 rounded-xl border border-rose-500/10 space-y-3.5 animate-fadeIn">
-                    <h5 className="text-[10px] uppercase font-black tracking-wider text-rose-500 font-mono">Custom Editorial Pivot Mode</h5>
-                    <div className="space-y-2 text-xs">
-                      <label className="block text-slate-450 uppercase text-[9px] font-black">Custom Focus Headline Pitch:</label>
-                      <input 
-                        type="text" 
-                        value={pivotTitle}
-                        onChange={(e) => setPivotTitle(e.target.value)}
-                        className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-800 text-slate-800 dark:text-white rounded-lg p-2.5 outline-none focus:ring-1 focus:ring-rose-500 transition font-sans"
-                      />
-                    </div>
-                    <div className="space-y-2 text-xs">
-                      <label className="block text-slate-450 uppercase text-[9px] font-black">Primary Targeting Keyword Override:</label>
-                      <input 
-                        type="text" 
-                        value={pivotKeywords}
-                        onChange={(e) => setPivotKeywords(e.target.value)}
-                        className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-800 text-slate-800 dark:text-white rounded-lg p-2.5 outline-none focus:ring-1 focus:ring-rose-500 transition font-mono"
-                      />
-                    </div>
-                    <div className="flex gap-2">
-                      <button
-                        onClick={() => {
-                          setSuggestedSources(prev => 
-                            prev.map(s => s.id === activeSource.id ? { 
-                              ...s, 
-                              title: pivotTitle,
-                              keywordResearch: s.keywordResearch ? { ...s.keywordResearch, primaryKeyword: pivotKeywords } : { primaryKeyword: pivotKeywords } as any
-                            } : s)
-                          );
-                          setActiveSource(prev => prev ? { 
-                            ...prev, 
-                            title: pivotTitle,
-                            keywordResearch: prev.keywordResearch ? { ...prev.keywordResearch, primaryKeyword: pivotKeywords } : { primaryKeyword: pivotKeywords } as any
-                          } : null);
-                          setIsPivoting(false);
-                          setActionSuccessMessage("Angle successfully overridden statically. Ready to write!");
-                        }}
-                        className="flex-1 bg-rose-600 hover:bg-rose-500 text-white font-bold p-2 text-xs rounded-lg transition-all"
-                      >
-                        ✓ Lock Angle Pivot
-                      </button>
-                      <button
-                        onClick={() => setIsPivoting(false)}
-                        className="p-2 border border-slate-350 dark:border-slate-800 text-slate-500 text-xs rounded-lg"
-                      >
-                        Cancel
-                      </button>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="flex flex-col sm:flex-row gap-3">
-                    <button
-                      onClick={() => handleDeepAnalyzeSource(activeSource.id)}
-                      className="flex-1 px-3 py-2.5 bg-slate-100 hover:bg-slate-200 dark:bg-slate-950 dark:hover:bg-slate-900 font-bold border border-[#E3E5E8] dark:border-slate-800 text-[#0D1219] dark:text-slate-350 rounded-xl text-xs flex items-center justify-center gap-2 duration-300 transition-all cursor-pointer select-none"
-                    >
-                      <Layers className="w-3.5 h-3.5 text-indigo-400" />
-                      Run AI Deep Analysis
-                    </button>
-                    <button
-                      onClick={() => setIsPivoting(true)}
-                      className="flex-1 px-3 py-2.5 bg-slate-105 hover:bg-slate-150 dark:bg-slate-950 dark:hover:bg-slate-900 font-bold border border-[#E3E5E8] dark:border-slate-800 text-rose-500 rounded-xl text-xs flex items-center justify-center gap-2 duration-300 transition-all cursor-pointer select-none"
-                    >
-                      <SlidersHorizontal className="w-3.5 h-3.5 text-rose-500" />
-                      Pivot Post Angle
-                    </button>
-                    <button
-                      onClick={() => handleRejectSource(activeSource.id)}
-                      className="px-3.5 py-2.5 border border-red-200 dark:border-red-950/40 text-red-500 font-bold rounded-xl text-xs flex items-center justify-center hover:bg-red-50 dark:hover:bg-red-950/20 duration-300 transition-all cursor-pointer select-none"
-                    >
-                      Skip Idea
-                    </button>
-                  </div>
-                )}
-
-                {/* WRITER TARGET DISPATCH CARD */}
-                <div className="bg-slate-50 dark:bg-slate-950/40 border border-[#E3E5E8] dark:border-slate-805 p-4 rounded-xl flex flex-col md:flex-row md:items-center justify-between gap-4">
-                  <div className="space-y-1">
-                    <label className="block text-[8.5px] font-mono tracking-wider font-semibold text-slate-500 uppercase">Deploy draft voice profile:</label>
-                    <div className="flex items-center gap-2">
-                      <select
-                        value={selectedWriterForDraft}
-                        onChange={(e) => setSelectedWriterForDraft(e.target.value)}
-                        className="bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-800 text-[#0D1219] dark:text-slate-100 rounded-lg p-2 outline-none text-xs font-semibold"
-                      >
-                        {activeNicheWriters.map(w => (
-                          <option key={w.id} value={w.id}>{w.name} ({w.targetInspiration})</option>
-                        ))}
-                      </select>
-                    </div>
-                  </div>
-                  
                   <button
-                    onClick={() => {
-                      if (!selectedWriterForDraft) return;
-                      onDraftSource(activeSource, selectedWriterForDraft);
-                    }}
-                    className="bg-indigo-600 hover:bg-indigo-500 text-white font-bold px-5 py-3 rounded-xl text-xs flex items-center gap-2 hover:scale-[1.02] active:scale-[0.98] transition-all duration-300 shadow-md font-mono shrink-0 cursor-pointer"
+                    onClick={() => handleAdoptKeywordToHeadline(br.keyword)}
+                    className="flex items-center gap-1 text-[#0D1219] dark:text-white bg-[#E3E5E8] hover:bg-[#D1D5DB] dark:bg-slate-800 dark:hover:bg-slate-700 px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer uppercase text-[9px] font-mono group/btn"
                   >
-                    <Sparkles className="w-4 h-4 animate-pulse" />
-                    Deploy Agent Pipeline Draft Rewrite
+                    Adopt 
+                    <ChevronRight className="w-3.5 h-3.5 group-hover/btn:translate-x-0.5 transition-transform" />
                   </button>
                 </div>
               </div>
-
-            </div>
-          ) : (
-            /* EMPTY RADAR SCANNER WORKBENCH */
-            <div className="bg-white dark:bg-[#121620]/60 backdrop-blur-xl rounded-2xl border border-[#E3E5E8] dark:border-slate-805 p-6 shadow-sm space-y-6">
-              
-              <div className="text-center py-8">
-                <div className="w-16 h-16 bg-gradient-to-tr from-rose-500/10 to-indigo-500/10 rounded-full flex items-center justify-center mx-auto mb-4 border border-rose-500/20">
-                  <TrendingUp className="w-8 h-8 text-rose-500 animate-pulse" />
-                </div>
-                <h4 className="text-sm font-bold text-slate-800 dark:text-slate-100">Live Trend Radar Waiting Room</h4>
-                <p className="text-xs text-[#8B8E96] max-w-sm mx-auto mt-2 leading-relaxed">
-                  Select any headline in the syndicate list to run 7-Dimensional Scoring, or search custom keywords below to pull trending spike queries.
-                </p>
-              </div>
-
-              {/* SEARCH VELOCITY SCAN ENGINE */}
-              <div className="border-t border-slate-100 dark:border-slate-800/80 pt-6 space-y-4">
-                <h5 className="text-[10px] font-black text-slate-400 dark:text-slate-500 uppercase tracking-widest font-mono">Breakout Keyword Scout Scanner:</h5>
-                
-                <div className="flex gap-2.5">
-                  <div className="relative flex-1">
-                    <Search className="absolute left-3 top-3.5 w-3.5 h-3.5 text-slate-400" />
-                    <input 
-                      type="text" 
-                      placeholder="e.g. ChatGPT-5 specs, LeBron coaching snub, WNBA scores..."
-                      value={customKeywordInput}
-                      onChange={(e) => setCustomKeywordInput(e.target.value)}
-                      className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-205 dark:border-slate-805 text-slate-800 dark:text-white rounded-xl py-3 pl-9 pr-4 text-xs outline-none focus:ring-1 focus:ring-rose-550 transition font-sans"
-                    />
-                  </div>
-                  <button
-                    onClick={handleScanRadar}
-                    disabled={radialScanLoading}
-                    className="px-4 bg-rose-600 hover:bg-rose-500 disabled:opacity-50 text-white font-bold rounded-xl text-xs flex items-center gap-1.5 duration-300 transition-all cursor-pointer font-mono shadow"
-                  >
-                    <RefreshCw className={`w-3.5 h-3.5 ${radialScanLoading ? 'animate-spin' : ''}`} />
-                    <span>Scan Scout Engine</span>
-                  </button>
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-2 select-none text-xs">
-                  {breakouts.map((br, idx) => (
-                    <div key={idx} className="p-4 bg-slate-50 dark:bg-slate-950/40 border border-[#E3E5E8] dark:border-slate-850 rounded-xl relative group overflow-hidden">
-                      <div className="absolute top-0 right-0 w-16 h-16 bg-rose-500/5 rounded-bl-full pointer-events-none" />
-                      <div className="flex justify-between items-start gap-2">
-                        <span className="text-[9px] font-mono font-black text-rose-500 bg-rose-50 dark:bg-rose-955/15 px-1.5 py-0.5 rounded uppercase">{br.growth}</span>
-                        <span className="text-[9.5px] font-mono font-bold text-slate-400 truncate max-w-[80px]">{br.volume}</span>
-                      </div>
-                      <h6 className="font-bold text-slate-700 dark:text-slate-200 mt-2 text-[11px] leading-tight select-all">{br.keyword}</h6>
-                      <p className="text-[10px] text-slate-500 dark:text-slate-450 mt-1.5 leading-snug line-clamp-3">{br.angle}</p>
-                      <div className="mt-3.5 pt-2 border-t border-slate-150 dark:border-slate-900/60 flex items-center justify-between text-[8px] font-mono font-semibold tracking-wider text-slate-450 uppercase">
-                        <span>Ease Rank: {br.difficulty}</span>
-                        <button
-                          onClick={() => handleAdoptKeywordToHeadline(br.keyword)}
-                          className="text-indigo-400 hover:text-indigo-200 font-bold transition-all cursor-pointer uppercase text-[8px] font-mono"
-                        >
-                          Adopt & Deploy Trend →
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-            </div>
-          )}
-        </div>
-
+              );
+            })}
+          </div>
+        )}
       </div>
+
+      {showAddSourceModal && (
+        <div className="fixed inset-0 bg-[#0E1218]/80 backdrop-blur-md flex items-center justify-center z-[9999] p-4 animate-fade-in font-sans">
+          <div className="bg-white dark:bg-[#121620] border border-[#E3E5E8] dark:border-slate-805 rounded-3xl shadow-2xl w-full max-w-xl overflow-hidden relative duration-300">
+            <div className="p-6 border-b border-[#E3E5E8] dark:border-slate-800 flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 bg-indigo-100 dark:bg-indigo-950/50 text-indigo-600 dark:text-indigo-400 rounded-xl">
+                  <Sparkles className="w-5 h-5 animate-pulse" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-black text-[#0D1219] dark:text-white uppercase tracking-wider">
+                    Add Manual Article Opportunity
+                  </h3>
+                  <p className="text-[10px] text-slate-400 font-medium">Log a target headline opportunity or source directly into this niche</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowAddSourceModal(false)}
+                className="text-slate-400 hover:text-rose-500 hover:bg-slate-50 dark:hover:bg-slate-900 p-1.5 rounded-full transition cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleCreateManualSourceSubmit} className="p-6 space-y-4">
+              <div className="space-y-1 text-left">
+                <label className="block text-[9px] font-black uppercase text-slate-400 tracking-wider">Headline / Title</label>
+                <input
+                  type="text"
+                  required
+                  value={manualTitle}
+                  onChange={(e) => setManualTitle(e.target.value)}
+                  placeholder="e.g., Unpacking the Secret Mechanics of Carbon-Oxygen Super Batteries"
+                  className="w-full text-xs font-semibold text-[#0D1219] dark:text-white bg-slate-50 dark:bg-slate-950 border border-[#E3E5E8] dark:border-slate-805 rounded-xl p-3 focus:outline-none focus:ring-1 focus:ring-indigo-500 transition"
+                />
+              </div>
+
+              <div className="space-y-1 text-left">
+                <label className="block text-[9px] font-black uppercase text-slate-400 tracking-wider">Source URL (Optional)</label>
+                <input
+                  type="url"
+                  value={manualUrl}
+                  onChange={(e) => setManualUrl(e.target.value)}
+                  placeholder="e.g., https://academicjournals.com/battery-science-report"
+                  className="w-full text-xs font-semibold text-[#0D1219] dark:text-white bg-slate-50 dark:bg-slate-950 border border-[#E3E5E8] dark:border-slate-805 rounded-xl p-3 focus:outline-none focus:ring-1 focus:ring-indigo-500 transition"
+                />
+              </div>
+
+              <div className="space-y-1 text-left">
+                <label className="block text-[9px] font-black uppercase text-slate-400 tracking-wider">Source Wire Name (Optional)</label>
+                <input
+                  type="text"
+                  value={manualSourceName}
+                  onChange={(e) => setManualSourceName(e.target.value)}
+                  placeholder="e.g., Journal of Advanced Electrochemistry"
+                  className="w-full text-xs font-semibold text-[#0D1219] dark:text-white bg-slate-50 dark:bg-slate-950 border border-[#E3E5E8] dark:border-slate-805 rounded-xl p-3 focus:outline-none focus:ring-1 focus:ring-indigo-500 transition"
+                />
+              </div>
+
+              <div className="space-y-1 text-left">
+                <label className="block text-[9px] font-black uppercase text-slate-400 tracking-wider">Brief Context / Details (Optional)</label>
+                <textarea
+                  value={manualDescription}
+                  onChange={(e) => setManualDescription(e.target.value)}
+                  placeholder="2-3 sentences outlining the unique facts, claims, statistics, or angles behind this lead opportunity."
+                  rows={3}
+                  className="w-full text-xs font-semibold text-[#0D1219] dark:text-white bg-slate-50 dark:bg-slate-950 border border-[#E3E5E8] dark:border-slate-805 rounded-xl p-3 focus:outline-none focus:ring-1 focus:ring-indigo-500 transition resize-none font-sans"
+                />
+              </div>
+
+              <div className="pt-2 flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowAddSourceModal(false)}
+                  className="px-4 py-2 text-xs font-semibold text-slate-550 hover:text-slate-800 hover:bg-slate-50 dark:hover:bg-slate-900 border border-slate-205 dark:border-slate-800 rounded-xl cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSubmittingManualSource || !manualTitle.trim()}
+                  className="px-5 py-2 text-xs font-black bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl transition cursor-pointer flex items-center gap-1.5 disabled:opacity-50"
+                >
+                  {isSubmittingManualSource ? "Saving..." : "Add Opportunity ✨"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
     </div>
   );
@@ -1285,7 +1141,7 @@ export function MediaStudio({
     }
     
     setIsGenerating(true);
-    setToastMessage("Contacting Nano Banana 2 gateway server proxy. Generating variants...");
+    setToastMessage("Contacting Custom Image Agent. Generating variants...");
     
     try {
       const res = await fetch("/api/image-ab-test", {
@@ -1297,7 +1153,7 @@ export function MediaStudio({
         const enriched = await res.json();
         if (enriched.variants && enriched.variants.length > 0) {
           setVariants(enriched.variants);
-          setToastMessage("✓ A/B Nano Banana 2 image variations compiled successfully!");
+          setToastMessage("✓ A/B Image Agent variations compiled successfully!");
         }
       }
     } catch (e) {
@@ -1689,11 +1545,44 @@ export function MediaStudio({
 
               <div className="flex gap-2">
                 <button
-                  onClick={() => {
-                    setToastMessage("Contacting Nano Banana 2... Creating graphic");
-                    setTimeout(() => setToastMessage("✓ Asset synthesized! Added to media tray index."), 2000);
+                  onClick={async () => {
+                    if (!selectedArticleId) {
+                      setToastMessage("Please select a target draft first.");
+                      setTimeout(() => setToastMessage(""), 4000);
+                      return;
+                    }
+                    if (!customPromptText.trim()) {
+                      setToastMessage("Please enter a visual directive prompt.");
+                      setTimeout(() => setToastMessage(""), 4000);
+                      return;
+                    }
+                    setToastMessage("Contacting AI Agent... Creating graphic");
+                    try {
+                      const res = await fetch("/api/articles/generate-image", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ articleId: selectedArticleId, prompt: customPromptText })
+                      });
+                      if (res.ok) {
+                        const data = await res.json();
+                        if (data.imageUrl) {
+                          setArticles(prev => 
+                            prev.map(art => art.id === selectedArticleId ? { ...art, originalImageUrl: data.imageUrl } : art)
+                          );
+                          setToastMessage("✓ Asset synthesized! Bound to article draft immediately.");
+                        } else {
+                           setToastMessage("⚠️ Failed to synthesize image.");
+                        }
+                      } else {
+                         setToastMessage("⚠️ Error from Custom Image Agent.");
+                      }
+                    } catch (err) {
+                      setToastMessage("⚠️ Network error during image generation.");
+                    } finally {
+                      setTimeout(() => setToastMessage(""), 4000);
+                    }
                   }}
-                  className="bg-indigo-600 hover:bg-indigo-500 text-white font-bold p-3 text-xs rounded-xl flex items-center justify-center gap-2 flex-1"
+                  className="bg-indigo-600 hover:bg-indigo-500 text-white font-bold p-3 text-xs rounded-xl flex items-center justify-center gap-2 flex-1 cursor-pointer transition active:scale-[0.98]"
                 >
                   <Sparkles className="w-3.5 h-3.5" />
                   Synthesize Direct Image Model

@@ -1,0 +1,29 @@
+{
+  "openrouter_support": "VERIFIED",
+  "minimax_support": "VERIFIED",
+  "gemini_support": "VERIFIED",
+  "fallback_model_telemetry": "VERIFIED",
+  "silent_fallback_prevention": "PARTIALLY VERIFIED",
+  "agents": {
+    "ResearchVerification": {
+      "default": "moonshotai/kimi-k2.6:free",
+      "fallback": "Offline generic JSON strings"
+    },
+    "BrandVoiceWriter": {
+      "default": "openrouter/free",
+      "fallback": "Offline traditional template / predefined strings"
+    },
+    "NaturalStyleEditor": {
+      "default": "gemini-2.5-flash",
+      "fallback": "Pass-through or minimal modification offline template"
+    },
+    "SeoOpportunity": {
+      "default": "gemini-2.5-flash",
+      "fallback": "Offline fallback keyword extraction"
+    },
+    "VisualMedia": {
+      "default": "imagen-3.0-generate-001 or modelSettings.imageModel",
+      "fallback": "nanobana or predefined static images URL array"
+    }
+  }
+}

@@ -22,7 +22,7 @@ export function generateSaaSMarketingSyndicate(
   // Customize copy style depending on writer voice profile
   const nameLower = authorName.toLowerCase();
   
-  if (nameLower.includes("gigi") || nameLower.includes("perez") || nameLower.includes("gossip")) {
+  if (nameLower.includes("gigi") || nameLower.includes("piper") || nameLower.includes("gossip")) {
     // Glamour / gossip celebrity voice style
     return {
       twitter: [
@@ -39,7 +39,7 @@ export function generateSaaSMarketingSyndicate(
     };
   }
 
-  if (nameLower.includes("simmons") || nameLower.includes("arena") || nameLower.includes("sports")) {
+  if (nameLower.includes("sloan") || nameLower.includes("ringer") || nameLower.includes("sports")) {
     // Sports commentary voice style
     return {
       twitter: [
@@ -49,7 +49,7 @@ export function generateSaaSMarketingSyndicate(
       ],
       linkedin: `🏀 CORE SPORT ECONOMICS: ${cleanTitle}\n\nIn competitive sports, tactics are currency. Raw hustle is nice; system architecture is what wins rings. \n\nWe analyzed the analytics models, trade arbitrage, and field spacing that triggered this headline. Here is what team leaders can take away regarding high-pressure group coordination:\n\nKey System Dimensions:\n1. Execution Depth over playbooks (simplicity avoids analytical paralysis).\n2. Dynamic adjustments based on live feedback loops.\n3. The Spacing Constant: Overcrowded systems degrade performance by 15.3%.\n\nRead our tactical breakdown:`,
       email: {
-        subjectA: `📋 Simmons' Chalkboard: Deconstructing ${cleanTitle.slice(0, 45)}`,
+        subjectA: `📋 Ringer's Chalkboard: Deconstructing ${cleanTitle.slice(0, 45)}`,
         subjectB: `⚡ Chalkboard Spec: The structural reality of ${cleanTitle.slice(0, 40)}`,
         body: `Hey Arena Fanatic,\n\nThe pundits on cable television are missing the core mechanics once again. Hustle isn't the problem; spacing is. \n\nIn our fresh layout, we put "${cleanTitle}" under our detailed microscopic analysis. We mapped every transaction, spacing constant, and team sheet metric to show you the actual macro picture. No fluff.\n\nSee you in the paddock,\nThe Arena Team`
       }

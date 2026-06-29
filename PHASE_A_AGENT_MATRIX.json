@@ -1,0 +1,105 @@
+[
+  {
+    "agent": "Research Agent",
+    "status": "VERIFIED",
+    "file": "/server.ts",
+    "model_requested": "moonshotai/kimi-k2.6:free",
+    "fallback_observed": true,
+    "blocking": false,
+    "json_enforced": true
+  },
+  {
+    "agent": "Drafting Agent / Brand Voice Writer",
+    "status": "VERIFIED",
+    "file": "/server.ts",
+    "model_requested": "openrouter/free",
+    "fallback_observed": true,
+    "blocking": false,
+    "json_enforced": false
+  },
+  {
+    "agent": "Natural Style Editor",
+    "status": "VERIFIED",
+    "file": "/server.ts",
+    "model_requested": "gemini-2.5-flash",
+    "fallback_observed": true,
+    "blocking": false,
+    "json_enforced": false
+  },
+  {
+    "agent": "Image Agent / Visual Media Director",
+    "status": "VERIFIED",
+    "file": "/server.ts",
+    "model_requested": "imagen-3.0-generate-001 or fallback nanobana",
+    "fallback_observed": true,
+    "blocking": false,
+    "json_enforced": false
+  },
+  {
+    "agent": "SEO Strategist Agent",
+    "status": "VERIFIED",
+    "file": "/server.ts",
+    "model_requested": "gemini-2.5-flash",
+    "fallback_observed": true,
+    "blocking": false,
+    "json_enforced": true
+  },
+  {
+    "agent": "Originality & Readability Validator",
+    "status": "PARTIALLY VERIFIED",
+    "file": "/server.ts",
+    "model_requested": "gemini-2.5-flash",
+    "fallback_observed": true,
+    "blocking": false,
+    "json_enforced": false
+  },
+  {
+    "agent": "Lead Quality & Safety Compliance Inspector",
+    "status": "PARTIALLY VERIFIED",
+    "file": "/server.ts",
+    "model_requested": "gemini-2.5-flash",
+    "fallback_observed": true,
+    "blocking": false,
+    "json_enforced": false
+  },
+  {
+    "agent": "Opportunity Scoring Agent",
+    "status": "PARTIALLY VERIFIED",
+    "file": "/server.ts",
+    "model_requested": "gemini-2.5-flash",
+    "fallback_observed": false,
+    "blocking": true,
+    "json_enforced": true
+  },
+  {
+    "agent": "Advanced Copilot Synthesis",
+    "status": "VERIFIED",
+    "file": "/server.ts",
+    "model_requested": "gemini-2.5-flash",
+    "fallback_observed": false,
+    "blocking": false,
+    "json_enforced": false
+  },
+  {
+    "agent": "Global Internet Feed Discovery",
+    "status": "NOT IMPLEMENTED",
+    "file": "none"
+  },
+  {
+    "agent": "Niche Research & Discovery",
+    "status": "PARTIALLY VERIFIED",
+    "file": "/server.ts"
+  },
+  {
+    "agent": "Quota Fallover Gateway",
+    "status": "VERIFIED",
+    "file": "/server.ts",
+    "note": "Deterministic programmatic fallover in runLLMCompletion"
+  },
+  {
+    "agent": "WordPress SEO Publisher",
+    "status": "VERIFIED",
+    "file": "/server.ts",
+    "function": "convertMarkdownToWpHtml"
+  }
+]

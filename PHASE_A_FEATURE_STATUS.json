@@ -1,0 +1,38 @@
+{
+  "automatic_writers": {
+    "status": "PARTIALLY VERIFIED",
+    "details": "Selection exists natively using LLMs but does not track telemetry logs (e.g. success factor, confidence rating)"
+  },
+  "editorial_briefs": {
+    "status": "UI ONLY",
+    "details": "Prompt objects pass context variables, but no dedicated persisted editorial brief 'schema' object exists prior to drafting."
+  },
+  "evidence_ledgers": {
+    "status": "NOT IMPLEMENTED",
+    "details": "No structured ledger of source-to-claim mappings exists."
+  },
+  "image_variants": {
+    "status": "NOT IMPLEMENTED",
+    "details": "Only single image rendering via `generateUnifiedImage`."
+  },
+  "image_prompt_only": {
+    "status": "NOT IMPLEMENTED",
+    "details": "Runs LLM to build a prompt and instantly calls the image generation endpoint."
+  },
+  "background_cron": {
+    "status": "NOT IMPLEMENTED",
+    "details": "All scheduling uses manual UI polling rather than a persistent background job cluster (no setInterval or temporal)."
+  },
+  "firestore_persistence": {
+    "status": "PARTIALLY VERIFIED",
+    "details": "Data is asynchronously synced unidirectionally to Firestore, but relies entirely on `db.json` locally. Uses `setDoc` but no `runTransaction`."
+  },
+  "passage_level_originality": {
+    "status": "NOT IMPLEMENTED",
+    "details": "Uses basic regular expressions and n-grams rather than precise passage tracking."
+  },
+  "fabricated_experience_checks": {
+    "status": "NOT IMPLEMENTED",
+    "details": "Does not enforce rules against 'I visited', 'I tested'."
+  }
+}

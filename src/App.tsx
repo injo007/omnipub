@@ -4,6 +4,7 @@
  */
 
 import React, { useState, useEffect, useRef } from "react";
+import { AgentModelSelector } from "./components/AgentModelSelector";
 import {
   Rss,
   Users,
@@ -52,7 +53,8 @@ import {
 } from "./types";
 import NicheBlogPreview from "./components/NicheBlogPreview";
 import AgentFlowVisualizer from "./components/AgentFlowVisualizer";
-import EditorialOpportunityBoard from "./components/EditorialOpportunityBoard";
+import { SystemLogViewer } from "./components/SystemLogViewer";
+import { NichePerformanceDashboard } from "./components/NichePerformanceDashboard";
 import { RSS_CATALOG } from "./data/rssCatalog";
 import { generateSaaSMarketingSyndicate } from "./utils/promoGenerator";
 import {
@@ -71,7 +73,65 @@ import {
   BarChart,
   Bar,
   Cell,
+  RadarChart,
+  PolarGrid,
+  PolarAngleAxis,
+  PolarRadiusAxis,
+  Radar,
 } from "recharts";
+import Markdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+
+const getNicheExpertWriter = (niche: string, currentWriters: Writer[]): Writer => {
+  const normNiche = (niche || "tech").toLowerCase();
+  let expertId = "mkbhd-reviews";
+  if (normNiche === "hollywood") {
+    expertId = "joan-fashion";
+  } else if (normNiche === "sports") {
+    expertId = "lowe-court";
+  } else if (normNiche === "tech") {
+    expertId = "mkbhd-reviews";
+  }
+  let expert = currentWriters.find((w) => w.id === expertId);
+  if (!expert) {
+    expert = currentWriters.find((w) => w.niche === normNiche);
+  }
+  return expert || currentWriters[0] || ({
+    id: "mkbhd-reviews",
+    name: "Marques Tech Profile",
+    voiceStyle: "Minimalist, Value-to-Spec Critic",
+    niche: "tech",
+    customPromptInstruction: "Write in a pristine, minimalist, conversational voice.",
+  } as any);
+};
+
+const matchDateFilter = (createdAtStr?: string, filter?: string) => {
+  if (!filter || filter === "all") return true;
+  if (!createdAtStr) return false;
+  const createdTime = new Date(createdAtStr).getTime();
+  if (isNaN(createdTime)) return false;
+
+  const now = new Date();
+  const nowMs = now.getTime();
+  const dayMs = 24 * 60 * 60 * 1000;
+
+  switch (filter) {
+    case "today":
+      return (nowMs - createdTime) <= dayMs;
+    case "yesterday": {
+      const diff = nowMs - createdTime;
+      return diff > dayMs && diff <= (2 * dayMs);
+    }
+    case "week":
+      return (nowMs - createdTime) <= (7 * dayMs);
+    case "month":
+      return (nowMs - createdTime) <= (30 * dayMs);
+    case "older":
+      return (nowMs - createdTime) > (30 * dayMs);
+    default:
+      return true;
+  }
+};
 
 export default function App() {
   const [theme, setTheme] = useState<"light" | "dark">(() => {
@@ -114,10 +174,387 @@ export default function App() {
       fontFamily: "JetBrains Mono",
       themeStyle: "cyberpunk",
     },
+    {
+      id: "traveling",
+      name: "Nomad Chronicles",
+      tagline: "Wanderlust itineraries, slow travel, and global guidebooks",
+      primaryColor: "bg-indigo-600 text-white",
+      accentColor: "indigo-500",
+      fontFamily: "Space Grotesk",
+      themeStyle: "editorial",
+    },
   ]);
 
   const [selectedNiche, setSelectedNiche] = useState<NicheType>("hollywood");
+  const [headlineNicheFilter, setHeadlineNicheFilter] = useState<string>("all");
+
+  // Custom states for editing & deleting niches
+  const [showEditNicheModal, setShowEditNicheModal] = useState(false);
+  const [editingNicheId, setEditingNicheId] = useState("");
+  const [editingNicheName, setEditingNicheName] = useState("");
+  const [editingNicheTagline, setEditingNicheTagline] = useState("");
+  const [editingNicheTheme, setEditingNicheTheme] = useState("editorial");
+  const [editingNichePrimaryColor, setEditingNichePrimaryColor] = useState("");
+  const [editingNicheAccentColor, setEditingNicheAccentColor] = useState("");
+  const [editingNicheFontFamily, setEditingNicheFontFamily] = useState("");
+  const [isSavingNiche, setIsSavingNiche] = useState(false);
+
+  // Custom states for editing & selecting niches on feed pathways
+  const [newFeedNiche, setNewFeedNiche] = useState("");
+  const [activeFeedNicheFilter, setActiveFeedNicheFilter] = useState<string>("all");
+  const [showEditFeedModal, setShowEditFeedModal] = useState(false);
+  const [editingFeedId, setEditingFeedId] = useState<string | null>(null);
+  const [editingFeedName, setEditingFeedName] = useState("");
+  const [editingFeedUrl, setEditingFeedUrl] = useState("");
+  const [editingFeedNiche, setEditingFeedNiche] = useState("");
+  const [isSavingFeed, setIsSavingFeed] = useState(false);
+
+  const [showNicheModal, setShowNicheModal] = useState(false);
+  const [newNicheName, setNewNicheName] = useState("");
+  const [newNicheTagline, setNewNicheTagline] = useState("");
+  const [newNicheTheme, setNewNicheTheme] = useState("editorial");
+  const [isCreatingNiche, setIsCreatingNiche] = useState(false);
+  const [nicheCreationError, setNicheCreationError] = useState("");
+
+  const [nicheSetupTab, setNicheSetupTab] = useState<"manual" | "discovery">("manual");
+  const [discoverySearchKeyword, setDiscoverySearchKeyword] = useState("");
+  const [isSearchingNiche, setIsSearchingNiche] = useState(false);
+  const [discoveredNicheResult, setDiscoveredNicheResult] = useState<any>(null);
+  const [selectedDiscoveredFeeds, setSelectedDiscoveredFeeds] = useState<string[]>([]);
+
+  const guessedNicheLayout = (result: any) => {
+    if (!result || !result.niche) return null;
+    const { name, tagline, themeStyle } = result.niche;
+    const feedList = result.feeds || [];
+
+    return (
+      <div className="space-y-4 animate-fade-in text-left">
+        <div className="p-4 rounded-2xl border border-indigo-100 bg-indigo-50/20 dark:border-indigo-900/40 dark:bg-indigo-950/20">
+          <span className="text-[8.5px] font-black uppercase text-indigo-650 dark:text-indigo-400 tracking-wider">
+            🔮 Suggested Niche Profile
+          </span>
+          <h4 className="text-sm font-black text-slate-900 dark:text-white mt-1 uppercase tracking-tight">
+            {name}
+          </h4>
+          <p className="text-xs text-slate-600 dark:text-slate-300 mt-1 italic font-medium">
+            "{tagline}"
+          </p>
+          <div className="mt-3 flex items-center gap-2">
+            <span className="text-[9px] font-bold px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-900 border text-slate-500 font-mono">
+              Layout Style: {themeStyle.toUpperCase()}
+            </span>
+          </div>
+        </div>
+
+        <div>
+          <h5 className="text-[10px] uppercase font-black tracking-widest text-slate-400 mb-2">
+            📡 Discovered Active RSS Feeds ({feedList.length})
+          </h5>
+          <div className="space-y-2 max-h-40 overflow-y-auto scrollbar-thin pr-1">
+            {feedList.map((feed: any, index: number) => {
+              const isChecked = selectedDiscoveredFeeds.includes(feed.url);
+              return (
+                <div
+                  key={feed.url + index}
+                  className="p-3 border border-slate-100 dark:border-slate-805 bg-slate-50/50 dark:bg-slate-900/50 rounded-xl flex items-start gap-2.5"
+                >
+                  <input
+                    type="checkbox"
+                    checked={isChecked}
+                    onChange={() => {
+                      if (isChecked) {
+                        setSelectedDiscoveredFeeds(prev => prev.filter(u => u !== feed.url));
+                      } else {
+                        setSelectedDiscoveredFeeds(prev => [...prev, feed.url]);
+                      }
+                    }}
+                    className="mt-0.5 rounded border-slate-350 dark:border-slate-800 text-indigo-600 cursor-pointer w-4 h-4 shrink-0"
+                  />
+                  <div className="min-w-0 flex-1">
+                    <p className="text-xs font-bold text-slate-800 dark:text-slate-200 truncate">
+                      {feed.name}
+                    </p>
+                    <p className="text-[9.5px] text-slate-500 dark:text-slate-450 font-mono truncate select-all">
+                      {feed.url}
+                    </p>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="pt-2 flex items-center justify-end gap-2 border-t border-[#E3E5E8] dark:border-slate-800">
+          <button
+            type="button"
+            onClick={() => {
+              setDiscoveredNicheResult(null);
+              setDiscoverySearchKeyword("");
+            }}
+            className="px-4 py-2 text-xs font-semibold text-slate-500 hover:text-slate-850 hover:bg-slate-50 dark:hover:bg-slate-900 border border-slate-205 dark:border-slate-800 rounded-xl cursor-pointer"
+          >
+            Reset
+          </button>
+          <button
+            type="button"
+            disabled={isCreatingNiche}
+            onClick={handleDeployDiscoveredNicheAndFeeds}
+            className="px-5 py-2 text-xs font-black bg-indigo-600 hover:bg-indigo-750 text-white rounded-xl transition cursor-pointer flex items-center gap-1.5 disabled:opacity-50"
+          >
+            {isCreatingNiche ? (
+              <>
+                <RefreshCw className="w-4 h-4 animate-spin text-white" />
+                Setting up Niche...
+              </>
+            ) : (
+              <>
+                <span>🚀 Deploy Niche & ({selectedDiscoveredFeeds.length}) Feeds</span>
+              </>
+            )}
+          </button>
+        </div>
+      </div>
+    );
+  };
+
+  const handleDiscoverNicheOnInternet = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!discoverySearchKeyword.trim()) return;
+    setIsSearchingNiche(true);
+    setNicheCreationError("");
+    setDiscoveredNicheResult(null);
+    try {
+      const res = await fetch("/api/niches/discover", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ keyword: discoverySearchKeyword }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setDiscoveredNicheResult(data);
+        if (data.feeds) {
+          setSelectedDiscoveredFeeds(data.feeds.map((f: any) => f.url));
+        }
+      } else {
+        const errData = await res.json();
+        setNicheCreationError(errData.error || "Failed to search internet for niches.");
+      }
+    } catch (err) {
+      console.error(err);
+      setNicheCreationError("Failed to discover niche on internet due to network error.");
+    } finally {
+      setIsSearchingNiche(false);
+    }
+  };
+
+  const handleDeployDiscoveredNicheAndFeeds = async () => {
+    if (!discoveredNicheResult || !discoveredNicheResult.niche) return;
+    const { name, tagline, themeStyle } = discoveredNicheResult.niche;
+    setIsCreatingNiche(true);
+    setNicheCreationError("");
+    try {
+      // 1. Create Niche
+      const res = await fetch("/api/niches", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, tagline, themeStyle }),
+      });
+      if (!res.ok) {
+        const errData = await res.json();
+        setNicheCreationError(errData.error || "Failed to create niche during deploy.");
+        setIsCreatingNiche(false);
+        return;
+      }
+      
+      const newNiche = await res.json();
+      setNiches((prev) => {
+        if (prev.some(n => n.id === newNiche.id)) return prev;
+        return [...prev, newNiche];
+      });
+
+      // 2. Deploy selected feeds
+      const feedsToDeploy = (discoveredNicheResult.feeds || [])
+        .filter((f: any) => selectedDiscoveredFeeds.includes(f.url))
+        .map((f: any) => ({
+          name: f.name,
+          url: f.url,
+          niche: newNiche.id
+        }));
+
+      if (feedsToDeploy.length > 0) {
+        await fetch("/api/feeds/bulk", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ feeds: feedsToDeploy })
+        });
+      }
+
+      setSelectedNiche(newNiche.id);
+      setShowNicheModal(false);
+      setDiscoverySearchKeyword("");
+      setDiscoveredNicheResult(null);
+      await fetchConfig();
+    } catch (err) {
+      console.error(err);
+      setNicheCreationError("Error during automated deployment.");
+    } finally {
+      setIsCreatingNiche(false);
+    }
+  };
+
+  const handleCreateCustomNiche = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newNicheName.trim()) {
+      setNicheCreationError("Niche name is required.");
+      return;
+    }
+    setIsCreatingNiche(true);
+    setNicheCreationError("");
+    try {
+      const res = await fetch("/api/niches", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: newNicheName,
+          tagline: newNicheTagline,
+          themeStyle: newNicheTheme,
+        }),
+      });
+      if (res.ok) {
+        const newNiche = await res.json();
+        await fetchConfig();
+        setNiches((prev) => {
+          if (prev.some(n => n.id === newNiche.id)) return prev;
+          return [...prev, newNiche];
+        });
+        setAutopilotNicheLimits((prev) => ({ ...prev, [newNiche.id]: 5 }));
+        setAutopilotNicheEnabled((prev) => ({ ...prev, [newNiche.id]: true }));
+        setAutopilotProcessedCounts((prev) => ({ ...prev, [newNiche.id]: 0 }));
+        setSelectedNiche(newNiche.id);
+        setShowNicheModal(false);
+        setNewNicheName("");
+        setNewNicheTagline("");
+        setNewNicheTheme("editorial");
+        if (typeof fetchNotifications === "function") {
+          fetchNotifications();
+        }
+      } else {
+        const errData = await res.json();
+        setNicheCreationError(errData.error || "Failed to create custom niche.");
+      }
+    } catch (err) {
+      console.error(err);
+      setNicheCreationError("Network error. Please try again.");
+    } finally {
+      setIsCreatingNiche(false);
+    }
+  };
+
+  const handleEditNicheSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingNicheName.trim()) {
+      alert("Niche name is required.");
+      return;
+    }
+    setIsSavingNiche(true);
+    try {
+      const res = await fetch(`/api/niches/${editingNicheId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: editingNicheName,
+          tagline: editingNicheTagline,
+          themeStyle: editingNicheTheme,
+          primaryColor: editingNichePrimaryColor,
+          accentColor: editingNicheAccentColor,
+          fontFamily: editingNicheFontFamily,
+        }),
+      });
+      if (res.ok) {
+        const updated = await res.json();
+        setNiches((prev) => prev.map(n => n.id === updated.id ? updated : n));
+        setShowEditNicheModal(false);
+        await fetchConfig();
+        alert("Niche updated successfully!");
+      } else {
+        const errData = await res.json();
+        alert(errData.error || "Failed to update niche.");
+      }
+    } catch (err) {
+      console.error(err);
+      alert("Network error updating niche.");
+    } finally {
+      setIsSavingNiche(false);
+    }
+  };
+
+  const handleEditFeedSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingFeedName || !editingFeedUrl) {
+      alert("Feed name and URL are required.");
+      return;
+    }
+
+    let finalUrl = editingFeedUrl.trim();
+    if (!finalUrl.startsWith("http://") && !finalUrl.startsWith("https://")) {
+      finalUrl = "https://" + finalUrl;
+    }
+
+    setIsSavingFeed(true);
+    try {
+      const res = await fetch(`/api/feeds/${editingFeedId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: editingFeedName,
+          url: finalUrl,
+          niche: editingFeedNiche,
+        }),
+      });
+      if (res.ok) {
+        setShowEditFeedModal(false);
+        setEditingFeedId(null);
+        await fetchConfig();
+        alert("Feed updated successfully!");
+      } else {
+        const errData = await res.json();
+        alert(errData.error || "Failed to update feed.");
+      }
+    } catch (err) {
+      console.error(err);
+      alert("Network error updating feed.");
+    } finally {
+      setIsSavingFeed(false);
+    }
+  };
+
+  const handleDeleteFeed = async (id: string, name: string) => {
+    try {
+      const res = await fetch(`/api/feeds/${id}`, {
+        method: "DELETE"
+      });
+      if (res.ok) {
+        await fetchConfig();
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
   const [writers, setWriters] = useState<Writer[]>([]);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [skills, setSkills] = useState<any[]>([]);
+  const [voiceStudioSubTab, setVoiceStudioSubTab] = useState<"profiles" | "create" | "skills">("profiles");
+  const [focusWriterId, setFocusWriterId] = useState<string | null>(null);
+  const [activeWriterNicheFilter, setActiveWriterNicheFilter] = useState<string>("all");
+
+  // Skill Manager State Hooks
+  const [editingSkillId, setEditingSkillId] = useState<string | null>(null);
+  const [newSkillName, setNewSkillName] = useState("");
+  const [newSkillNiche, setNewSkillNiche] = useState<string>("all");
+  const [newSkillDirective, setNewSkillDirective] = useState("");
+  const [isSavingSkill, setIsSavingSkill] = useState(false);
+
   const [feeds, setFeeds] = useState<RssFeed[]>([]);
   const [articles, setArticles] = useState<Article[]>([]);
   const [suggestedSources, setSuggestedSources] = useState<SuggestedSource[]>(
@@ -129,7 +566,7 @@ export default function App() {
 
   // Scraper & state loaders
   const [isSyncingFeeds, setIsSyncingFeeds] = useState(false);
-  const [selectedWriterId, setSelectedWriterId] = useState<string>("");
+  const [selectedWriterId, setSelectedWriterId] = useState<string>("auto");
   const [editingWriterId, setEditingWriterId] = useState<string | null>(null);
   const [selectedSource, setSelectedSource] = useState<SuggestedSource | null>(
     null,
@@ -146,6 +583,7 @@ export default function App() {
     | "feeds"
     | "wordpress"
     | "settings"
+    | "logs"
   >("contentFactory");
   const [activeWorkspaceTab, setActiveWorkspaceTab] = useState<
     "inbox" | "preview"
@@ -158,15 +596,37 @@ export default function App() {
   const [activeFeedSubTab, setActiveFeedSubTab] = useState<
     "active" | "presets"
   >("active");
+  const [selectedFeedIds, setSelectedFeedIds] = useState<string[]>([]);
   const [expandedSocialHubId, setExpandedSocialHubId] = useState<string | null>(
     null,
   );
+  const [expandedLogId, setExpandedLogId] = useState<string | null>(null);
   const [autopilotSchedulerActive, setAutopilotSchedulerActive] =
     useState<boolean>(false);
   const [activeMarketingTab, setActiveMarketingTab] = useState<
     "twitter" | "linkedin" | "email" | "seo"
   >("twitter");
   const [copiedSnippetId, setCopiedSnippetId] = useState<string | null>(null);
+  const [wpLeftTab, setWpLeftTab] = useState<"directory" | "register" | "queue" | "fallback" | "patch">("directory");
+  const [queueJobs, setQueueJobs] = useState<any[]>([]);
+  const [isLoadingQueue, setIsLoadingQueue] = useState<boolean>(false);
+  const [isExecutingQueue, setIsExecutingQueue] = useState<boolean>(false);
+  const [expandedJobId, setExpandedJobId] = useState<string | null>(null);
+  const [manualResolveJobId, setManualResolveJobId] = useState<string | null>(null);
+  const [manualWpPostId, setManualWpPostId] = useState<string>("");
+  const [manualDestUrl, setManualDestUrl] = useState<string>("");
+  const [abortJobId, setAbortJobId] = useState<string | null>(null);
+  const [abortReason, setAbortReason] = useState<string>("");
+  const [isFirestoreQuotaExceeded, setIsFirestoreQuotaExceeded] = useState<boolean>(false);
+  const [firebaseProjectId, setFirebaseProjectId] = useState<string>("gen-lang-client-0888306694");
+  const [firestoreDatabaseId, setFirestoreDatabaseId] = useState<string>("ai-studio-767d7b73-69cd-4989-abdf-e59b01aaad79");
+  const [editingWpSite, setEditingWpSite] = useState<any>(null);
+  const [editName, setEditName] = useState("");
+  const [editUrl, setEditUrl] = useState("");
+  const [editUsername, setEditUsername] = useState("");
+  const [editPassword, setEditPassword] = useState("");
+  const [editNiche, setEditNiche] = useState("hollywood");
+  const [editAutoPush, setEditAutoPush] = useState(false);
 
   // SaaS and integration settings
   const [saasConfig, setSaasConfig] = useState<any>({
@@ -174,14 +634,30 @@ export default function App() {
       geminiApiKey: "",
       openaiApiKey: "",
       openrouterApiKey: "",
+      minimaxApiKey: "",
       clarityApiKey: "",
-      researchModel: "gemini-3.5-flash",
-      draftModel: "gemini-3.5-flash",
-      humanizeModel: "gemini-3.5-flash",
-      seoModel: "gemini-3.5-flash",
-      imageModel: "imagen-3",
+      researchModel: "gemini-2.5-flash",
+      researchCustomModel: "moonshotai/kimi-k2.6:free",
+      draftModel: "gemini-2.5-pro",
+      draftCustomModel: "openrouter/free",
+      humanizeModel: "gemini-2.5-flash",
+      humanizeCustomModel: "nvidia/nemotron-3-super-120b-a12b:free",
+      seoModel: "gemini-2.5-flash",
+      imageModel: "imagen-3.0-generate-001",
+      imageFallbackModel: "nanobana",
+      imageCustomModel: "imagen-3.0-generate-001",
+      aiImagePreferred: true,
       minHumanScoreTarget: 95,
+      maxConcurrentAgents: 3,
       openrouterCustomModel: "deepseek/deepseek-chat",
+      discoveryModel: "gemini-2.5-flash",
+      discoveryCustomModel: "google/gemini-2.5-flash",
+      discoveryFallbackModel: "global",
+      discoveryFallbackCustomModel: "",
+      nicheDiscoveryModel: "gemini-2.5-flash",
+      nicheDiscoveryCustomModel: "google/gemini-2.5-flash",
+      nicheDiscoveryFallbackModel: "global",
+      nicheDiscoveryFallbackCustomModel: "",
     },
     wordpress: {
       hollywood: {
@@ -206,6 +682,7 @@ export default function App() {
         autoPush: false,
       },
     },
+    wordpressSites: [],
   });
 
   const [notifications, setNotifications] = useState<any[]>([]);
@@ -268,6 +745,8 @@ export default function App() {
     useState<string>("");
   const [rewriteAdsenseOptimized, setRewriteAdsenseOptimized] =
     useState<boolean>(false);
+  const [rewriteInlineImageMode, setRewriteInlineImageMode] =
+    useState<string>("generate");
   const [showExpandedRewriteSettings, setShowExpandedRewriteSettings] =
     useState<boolean>(false);
 
@@ -339,14 +818,97 @@ export default function App() {
     useState<string>("");
   const [isSynthesizingCopilot, setIsSynthesizingCopilot] =
     useState<boolean>(false);
+  const [resolvedWriterId, setResolvedWriterId] = useState<string>("");
 
   // New RSS / Writer forms
   const [showAddFeed, setShowAddFeed] = useState(false);
   const [newFeedName, setNewFeedName] = useState("");
   const [newFeedUrl, setNewFeedUrl] = useState("");
 
+  const [addFeedMethod, setAddFeedMethod] = useState<"single" | "json">("single");
+  const [bulkFeedsFile, setBulkFeedsFile] = useState<File | null>(null);
+  const [bulkFeedsError, setBulkFeedsError] = useState("");
+  const [isUploadingBulkFeeds, setIsUploadingBulkFeeds] = useState(false);
+  const [bulkUploadResult, setBulkUploadResult] = useState<any>(null);
+
+  const handleBulkUploadJsonFeeds = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!bulkFeedsFile) {
+      setBulkFeedsError("Please select a valid JSON feed file first.");
+      return;
+    }
+
+    setIsUploadingBulkFeeds(true);
+    setBulkFeedsError("");
+    setBulkUploadResult(null);
+
+    const reader = new FileReader();
+    reader.onload = async (evt) => {
+      try {
+        const text = evt.target?.result as string;
+        const parsed = JSON.parse(text);
+        
+        let feedArray: any[] = [];
+        if (Array.isArray(parsed)) {
+          feedArray = parsed;
+        } else if (parsed.feeds && Array.isArray(parsed.feeds)) {
+          feedArray = parsed.feeds;
+        } else {
+          setBulkFeedsError("Invalid format. Expected a JSON array of feeds, or an object containing a 'feeds' array.");
+          setIsUploadingBulkFeeds(false);
+          return;
+        }
+
+        // Map them to the active niche, prioritizing item.niche, then the selected feed niche dropdown, and finally selectedNiche
+        const formattedFeeds = feedArray.map((item: any) => ({
+          name: item.name || item.title || "Imported RSS Link",
+          url: item.url || item.rss || item.link,
+          niche: item.niche || newFeedNiche || selectedNiche
+        }));
+
+        if (formattedFeeds.length === 0) {
+          setBulkFeedsError("No valid RSS feeds were detected in this JSON payload.");
+          setIsUploadingBulkFeeds(false);
+          return;
+        }
+
+        const response = await fetch("/api/feeds/bulk", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ feeds: formattedFeeds })
+        });
+
+        if (response.ok) {
+          const result = await response.json();
+          setBulkUploadResult(result);
+          await fetchConfig();
+          setBulkFeedsFile(null);
+          // Zero domestic input
+          const el = document.getElementById("bulk-feeds-input") as HTMLInputElement;
+          if (el) el.value = "";
+        } else {
+          const errData = await response.json();
+          setBulkFeedsError(errData.error || "Failed to process bulk feeds upload.");
+        }
+      } catch (err: any) {
+        setBulkFeedsError("Malformed JSON file. Please verify content grammar.");
+      } finally {
+        setIsUploadingBulkFeeds(false);
+      }
+    };
+    reader.readAsText(bulkFeedsFile);
+  };
+
+  // Internet Search & Discovery of RSS Paths
+  const [customDiscoveredFeeds, setCustomDiscoveredFeeds] = useState<any[]>([]);
+  const [deletedDiscoveryUrls, setDeletedDiscoveryUrls] = useState<any[]>([]);
+  const [searchKeyword, setSearchKeyword] = useState("");
+  const [isSearchingFeeds, setIsSearchingFeeds] = useState(false);
+  const [selectedPresetUrls, setSelectedPresetUrls] = useState<string[]>([]);
+
   const [showAddWriter, setShowAddWriter] = useState(false);
   const [newWriterName, setNewWriterName] = useState("");
+  const [newWriterNiche, setNewWriterNiche] = useState("");
   const [newWriterVoice, setNewWriterVoice] = useState("");
   const [newWriterBio, setNewWriterBio] = useState("");
   const [newWriterInstruction, setNewWriterInstruction] = useState("");
@@ -355,8 +917,21 @@ export default function App() {
   const [selectedSkillsTags, setSelectedSkillsTags] = useState<string[]>([]);
   const [isCorrectingWriter, setIsCorrectingWriter] = useState<boolean>(false);
 
+  // Writer Alignment Tester state hooks
+  const [testingWriterId, setTestingWriterId] = useState<string | null>(null);
+  const [testSampleText, setTestSampleText] = useState("");
+  const [isTestingAlignment, setIsTestingAlignment] = useState(false);
+  const [alignmentResult, setAlignmentResult] = useState<{
+    score: number;
+    verdict: string;
+    strengths: string[];
+    gaps: string[];
+  } | null>(null);
+  const [alignmentTestError, setAlignmentTestError] = useState<string | null>(null);
+
   // Reader, Manual Editor, and Copilot States
   const [showReaderId, setShowReaderId] = useState<string | null>(null);
+  const [selectedWpSiteId, setSelectedWpSiteId] = useState<string>("");
   const [isEditingDraft, setIsEditingDraft] = useState<boolean>(false);
   const [editableTitle, setEditableTitle] = useState<string>("");
   const [editableContent, setEditableContent] = useState<string>("");
@@ -365,13 +940,20 @@ export default function App() {
   const [isOptimizingWithAI, setIsOptimizingWithAI] = useState<boolean>(false);
   const [customTagsText, setCustomTagsText] = useState<string>("");
   const [editableFocusKeyword, setEditableFocusKeyword] = useState<string>("");
+  const [editableMetaDescriptionOverride, setEditableMetaDescriptionOverride] = useState<string>("");
+  const [editableCanonicalUrlOverride, setEditableCanonicalUrlOverride] = useState<string>("");
   const [activeDraftModalTab, setActiveDraftModalTab] = useState<
     "preview" | "editor" | "workflow"
   >("preview");
   const [articleIdToConfirmDelete, setArticleIdToConfirmDelete] = useState<
     string | null
   >(null);
+  const [writerIdToConfirmDelete, setWriterIdToConfirmDelete] = useState<
+    string | null
+  >(null);
   const [showWipeConfirm, setShowWipeConfirm] = useState<boolean>(false);
+  const [showClearSavedConfirm, setShowClearSavedConfirm] = useState<boolean>(false);
+  const [showClearPushedConfirm, setShowClearPushedConfirm] = useState<boolean>(false);
 
   // Filter & Search States
   const [draftSearchQuery, setDraftSearchQuery] = useState<string>("");
@@ -379,20 +961,8 @@ export default function App() {
   const [draftStatusFilter, setDraftStatusFilter] = useState<
     "all" | "draft" | "published"
   >("all");
+  const [draftDateFilter, setDraftDateFilter] = useState<string>("all");
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState<boolean>(false);
-
-  // Editorial Opportunity Control Center filters
-  const [ccNicheFilter, setCcNicheFilter] = useState<string>("all");
-  const [ccSourceFilter, setCcSourceFilter] = useState<string>("all");
-  const [ccWpSiteFilter, setCcWpSiteFilter] = useState<string>("all");
-  const [ccMinOppFilter, setCcMinOppFilter] = useState<string>("all"); // 'all' | 'high' | 'medium' | 'low'
-  const [ccMaxRiskFilter, setCcMaxRiskFilter] = useState<string>("all"); // 'all' | 'safe' | 'high'
-  const [ccPipelineFilter, setCcPipelineFilter] = useState<string>("all"); // 'all' | 'cheap' | 'balanced' | 'premium' | 'emergency'
-  const [ccManualReviewFilter, setCcManualReviewFilter] =
-    useState<string>("all"); // 'all' | 'yes' | 'no'
-  const [ccPublishedFilter, setCcPublishedFilter] = useState<string>("all"); // 'all' | 'published' | 'unpublished'
-  const [ccFailedFilter, setCcFailedFilter] = useState<string>("all"); // 'all' | 'failed' | 'normal'
-  const [ccDateFilter, setCcDateFilter] = useState<string>("all"); // 'all' | 'today' | 'week' | 'older'
 
   // Control Center row expansion & multi-tab details
   const [expandedControlCenterId, setExpandedControlCenterId] = useState<
@@ -405,87 +975,71 @@ export default function App() {
   const [isRetryingStepId, setIsRetryingStepId] = useState<string | null>(null);
 
   // Niche configuration maps for Writers Factory
-  const nicheSkills: Record<string, string[]> = {
+  const nicheSkills = new Proxy<Record<string, string[]>>({
     tech: [
       "Technical Explainer 🔬",
       "Deep Code Analysis 💻",
-      "Sarcastic Tone 🌶️",
-      "SEO Keyword Stuffer 📈",
-      "Clickbait Catalyst 🚀",
+      "Witty Commentary 🌶️",
+      "Organic Keyword Integration 📈",
+      "Viral Hook Writing 🚀",
       "Analytical Blueprinting 🧠",
-      "Fact-Checking Zealot 🕵️",
+      "Lead Quality Verification 🕵️",
     ],
     sports: [
       "Stat Teardowns 📊",
       "Game Timing 🕰️",
-      "Bold Predictions 🔮",
-      "Sarcastic Tone 🌶️",
-      "SEO Keyword Stuffer 📈",
-      "Clickbait Catalyst 🚀",
-      "Fact-Checking Zealot 🕵️",
+      "Strategic Predictions 🔮",
+      "Witty Commentary 🌶️",
+      "Organic Keyword Integration 📈",
+      "Viral Hook Writing 🚀",
+      "Lead Quality Verification 🕵️",
     ],
     hollywood: [
-      "Gossip Sourcing 💅",
-      "Exposé Hooking ⚡",
-      "Sensational Framing 📣",
-      "Sarcastic Tone 🌶️",
-      "SEO Keyword Stuffer 📈",
-      "Clickbait Catalyst 🚀",
-      "Fact-Checking Zealot 🕵️",
+      "Trending Culture Analysis 💅",
+      "Deep-Dive Reporting ⚡",
+      "Editorial Storytelling 📣",
+      "Witty Commentary 🌶️",
+      "Organic Keyword Integration 📈",
+      "Viral Hook Writing 🚀",
+      "Lead Quality Verification 🕵️",
     ],
-  };
+    traveling: [
+      "Itinerary Mapping 🗺️",
+      "Slow Travel Philosophy 🌿",
+      "Local Food Scouter 🍜",
+      "Witty Commentary 🌶️",
+      "Organic Keyword Integration 📈",
+      "Viral Hook Writing 🚀",
+      "Lead Quality Verification 🕵️",
+    ],
+  }, {
+    get: (target, prop: string) => {
+      if (prop in target) return target[prop];
+      return [
+        "Custom Analytical Review 🔬",
+        "Deep Narrative Exploration 🏛️",
+        "Witty Commentary & Prose 🌶️",
+        "Organic Keyword Integration 📈",
+        "Viral Topic Hooking 🚀",
+        "Lead Quality Verification 🕵️",
+      ];
+    }
+  });
 
-  const nicheCompetitors: Record<string, string[]> = {
+  const nicheCompetitors = new Proxy<Record<string, string[]>>({
     tech: ["TechCrunch", "The Verge", "Engadget", "Wired"],
     sports: ["ESPN", "SBNation", "The Athletic", "Bleacher Report"],
     hollywood: ["TMZ", "Perez Hilton", "E! Online", "Page Six"],
-  };
+    traveling: ["Lonely Planet", "National Geographic", "Nomadic Matt", "Travel + Leisure"],
+  }, {
+    get: (target, prop: string) => {
+      if (prop in target) return target[prop];
+      return ["Google Trends", "Top Subreddits", "Authority Feeds", "Competitor Blueprint"];
+    }
+  });
 
-  const boardApplicants = [
-    {
-      name: "Aria Sterling",
-      niche: "tech",
-      competitor: "The Verge",
-      avatar:
-        "https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?w=150",
-      skills: [
-        "Technical Explainer 🔬",
-        "Analytical Blueprinting 🧠",
-        "Sarcastic Tone 🌶️",
-      ],
-      voiceStyle: "Profound Gadget Ethicist & Sarcastic Explainer",
-      bio: "Ex-Verge columnist focusing on the high-level philosophical questions of machine learning and hardware engineering loops.",
-      customPromptInstruction:
-        "Write with aesthetic, prose-heavy paragraphs and rich vocabulary. Use sarcastic, slightly cynical undertones when inspecting company claims, paired with deep historical parallels.",
-    },
-    {
-      name: "Marcus Broadus",
-      niche: "sports",
-      competitor: "ESPN",
-      avatar:
-        "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150",
-      skills: ["Stat Teardowns 📊", "Game Timing 🕰️", "Bold Predictions 🔮"],
-      voiceStyle: "High-Energy Playbook Front-Office Insider",
-      bio: "High-level athletic analyst specialized in cap sheet negotiations, player behavior psychology, and rapid transaction scoops.",
-      customPromptInstruction:
-        "Always start with a sensational breaking hook. Use active collegiate team code phrases and raw financial valuation parameters to explain executive level sports trades.",
-    },
-    {
-      name: "Lola Perez",
-      niche: "hollywood",
-      competitor: "TMZ",
-      avatar: "https://images.unsplash.com/photo-1544005313-94ddf0286df2?w=150",
-      skills: [
-        "Gossip Sourcing 💅",
-        "Exposé Hooking ⚡",
-        "Sensational Framing 📣",
-      ],
-      voiceStyle: "Ultimate Red Carpet Scandal Spotlight Host",
-      bio: "Highly connected Pop Culture analyst with a relentless eye for breaking relationship updates and luxury drama leaks.",
-      customPromptInstruction:
-        "Keep sentences incredibly short, dramatic, and direct. Rely on bold text tags, exclamations, rhetorical questions, and highly sensational, fast-moving conversational cues.",
-    },
-  ];
+  const [boardApplicants, setBoardApplicants] = useState<any[]>([]);
+  const [isScoutingCandidates, setIsScoutingCandidates] = useState(false);
 
   // Original Editorial Persona Presets
   const WRITER_PRESETS = [
@@ -561,6 +1115,14 @@ export default function App() {
       instruction:
         "Write like a seasoned industry journalist tracking studio executive moves, box office metrics, guild disputes, and multi-million packaging deals. Avoid fan-circle gossip; focus on legal filings, budget escalations, and executive politics.",
     },
+    {
+      name: "Arthur Frommer",
+      voiceStyle: "Authentic Slow Travel Guidebook Pioneer",
+      bio: "Legendary budget traveler advocating for cultural immersion, slow travel, and real local connections.",
+      targetInspiration: "Lonely Planet",
+      instruction:
+        "Write in a highly warm, inviting, and practical travel style. Avoid sterile resort marketing; focus heavily on the sensory details of streets, local eateries, environmental responsibility, and cultural respect. Give crisp, specific budgeting advice and step-by-step pedestrian walking pathways.",
+    },
   ];
 
   const handleOpenReader = (art: Article) => {
@@ -573,6 +1135,8 @@ export default function App() {
     setEditableFocusKeyword(
       art.seo?.focusKeyword || (art.seo?.keywords && art.seo.keywords[0]) || "",
     );
+    setEditableMetaDescriptionOverride(art.seo?.metaDescriptionOverride || "");
+    setEditableCanonicalUrlOverride(art.seo?.canonicalUrlOverride || "");
     setIsEditingDraft(false);
     setActiveDraftModalTab("preview");
   };
@@ -596,6 +1160,8 @@ export default function App() {
           seo: {
             ...(activeArt?.seo || {}),
             focusKeyword: editableFocusKeyword,
+            metaDescriptionOverride: editableMetaDescriptionOverride,
+            canonicalUrlOverride: editableCanonicalUrlOverride,
           },
         }),
       });
@@ -655,12 +1221,15 @@ export default function App() {
     setNewWriterVoice(preset.voiceStyle);
     setNewWriterBio(preset.bio);
     setNewWriterInstruction(preset.instruction);
+    setVoiceStudioSubTab("create");
     setShowAddWriter(true);
 
-    const formElement = document.getElementById("btn-show-add-writer");
-    if (formElement) {
-      formElement.scrollIntoView({ behavior: "smooth" });
-    }
+    setTimeout(() => {
+      const formElement = document.getElementById("vs-subtab-create");
+      if (formElement) {
+        formElement.scrollIntoView({ behavior: "smooth" });
+      }
+    }, 50);
   };
 
   const [isGeneratingImage, setIsGeneratingImage] = useState(false);
@@ -673,23 +1242,36 @@ export default function App() {
     fetchSaaSSettings();
     fetchNotifications();
     fetchRealSaaSStats();
+    fetchDiscoveryData();
 
     // Poll notifications every 12 seconds to instantly capture api quotas or breakdowns
     const interval = setInterval(fetchNotifications, 12000);
     return () => clearInterval(interval);
   }, []);
 
-  // Update lists whenever niche or active items change
+  // Update lists whenever niche or active items change, but strictly preserve Autopilot choice ("auto")!
   useEffect(() => {
     if (writers.length > 0) {
+      if (selectedWriterId === "auto" || !selectedWriterId) {
+        return; // Keep dynamic autopilot selection active!
+      }
       const filteredWriters = writers.filter((w) => w.niche === selectedNiche);
       if (filteredWriters.length > 0) {
-        setSelectedWriterId(filteredWriters[0].id);
+        const isCurrentValid = filteredWriters.some((w) => w.id === selectedWriterId);
+        if (!isCurrentValid) {
+          setSelectedWriterId("auto");
+        }
       } else {
-        setSelectedWriterId("");
+        setSelectedWriterId("auto");
       }
     }
   }, [selectedNiche, writers]);
+
+  useEffect(() => {
+    if (saasConfig?.modelSettings?.inlineImageMode) {
+      setRewriteInlineImageMode(saasConfig.modelSettings.inlineImageMode);
+    }
+  }, [saasConfig?.modelSettings?.inlineImageMode]);
 
   const fetchNotifications = async () => {
     try {
@@ -732,7 +1314,22 @@ export default function App() {
       const res = await fetch("/api/saas-settings");
       if (res.ok) {
         const data = await res.json();
-        setSaasConfig(data);
+        if (data.isFirestoreQuotaExceeded !== undefined) {
+          setIsFirestoreQuotaExceeded(!!data.isFirestoreQuotaExceeded);
+        }
+        setSaasConfig((prev: any) => {
+          const merged = { ...data };
+          if (!merged.wordpress) merged.wordpress = {};
+          // Dynamically ensure all active design/niche pathways have structural objects initialized 
+          // to prevent undefined access crash in settings rendering
+          const activeNiches = prev?.niches || niches || [];
+          activeNiches.forEach((n: any) => {
+            if (!merged.wordpress[n.id]) {
+              merged.wordpress[n.id] = { url: "", username: "", appPassword: "", isConfigured: false, autoPush: false };
+            }
+          });
+          return merged;
+        });
       }
     } catch (err) {
       console.error("Error loading SaaS settings:", err);
@@ -768,7 +1365,63 @@ export default function App() {
         const data = await res.json();
         setWriters(data.writers || []);
         setFeeds(data.feeds || []);
+        if (data.niches) {
+          setNiches(data.niches);
+          // Dynamically initialize WordPress configurations for all custom niches
+          setSaasConfig((prev: any) => {
+            const nextWp = { ...(prev?.wordpress || {}) };
+            data.niches.forEach((n: any) => {
+              if (!nextWp[n.id]) {
+                nextWp[n.id] = { url: "", username: "", appPassword: "", isConfigured: false, autoPush: false };
+              }
+            });
+            return {
+              ...prev,
+              wordpress: nextWp
+            };
+          });
+          // Dynamically initialize autopilot limits, enabled states, and session counts for custom niches
+          setAutopilotNicheLimits((prev) => {
+            const next = { ...prev };
+            data.niches.forEach((n: any) => {
+              if (next[n.id] === undefined) {
+                next[n.id] = 5;
+              }
+            });
+            return next;
+          });
+          setAutopilotNicheEnabled((prev) => {
+            const next = { ...prev };
+            data.niches.forEach((n: any) => {
+              if (next[n.id] === undefined) {
+                next[n.id] = true;
+              }
+            });
+            return next;
+          });
+          setAutopilotProcessedCounts((prev) => {
+            const next = { ...prev };
+            data.niches.forEach((n: any) => {
+              if (next[n.id] === undefined) {
+                next[n.id] = 0;
+              }
+            });
+            return next;
+          });
+        }
         setAllSuggestedSources(data.suggestedSources || []);
+        setBoardApplicants(data.candidates || []);
+        setSkills(data.skills || []);
+
+        if (data.isFirestoreQuotaExceeded !== undefined) {
+          setIsFirestoreQuotaExceeded(!!data.isFirestoreQuotaExceeded);
+        }
+        if (data.firebaseProjectId) {
+          setFirebaseProjectId(data.firebaseProjectId);
+        }
+        if (data.firestoreDatabaseId) {
+          setFirestoreDatabaseId(data.firestoreDatabaseId);
+        }
       }
     } catch (err) {
       console.error("Error loading config:", err);
@@ -776,11 +1429,16 @@ export default function App() {
   };
 
   useEffect(() => {
-    const nicheSources = allSuggestedSources.filter(
-      (s: SuggestedSource) => s.niche === selectedNiche,
-    );
-    setSuggestedSources(nicheSources);
-  }, [selectedNiche, allSuggestedSources]);
+    setHeadlineNicheFilter(selectedNiche);
+  }, [selectedNiche]);
+
+  useEffect(() => {
+    const filtered = allSuggestedSources.filter((s: SuggestedSource) => {
+      if (headlineNicheFilter === "all") return true;
+      return s.niche === headlineNicheFilter;
+    });
+    setSuggestedSources(filtered);
+  }, [headlineNicheFilter, allSuggestedSources]);
 
   const fetchArticles = async () => {
     try {
@@ -798,14 +1456,16 @@ export default function App() {
   const handleSyncFeeds = async () => {
     setIsSyncingFeeds(true);
     try {
-      const res = await fetch(`/api/feeds/sync?niche=${selectedNiche}`);
+      const res = await fetch(`/api/feeds/sync?niche=${headlineNicheFilter}`);
       if (res.ok) {
         await fetchConfig(); // Reload and filter completely
       } else {
-        setErrorMsg("Failed to synchronize active RSS feeds correctly.");
+        const err = await res.json().catch(() => ({}));
+        alert(`Failed to synchronize feeds: ${err.error || res.statusText}`);
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error("Sync error:", err);
+      alert(`Sync error: ${err.message}`);
     } finally {
       setIsSyncingFeeds(false);
     }
@@ -813,7 +1473,15 @@ export default function App() {
 
   const handleCreateFeed = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newFeedName || !newFeedUrl) return;
+    if (!newFeedName || !newFeedUrl) {
+      alert("Please provide both a feed name and a feed URL.");
+      return;
+    }
+
+    let finalUrl = newFeedUrl.trim();
+    if (!finalUrl.startsWith("http://") && !finalUrl.startsWith("https://")) {
+      finalUrl = "https://" + finalUrl;
+    }
 
     try {
       const res = await fetch("/api/feeds", {
@@ -821,16 +1489,20 @@ export default function App() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           name: newFeedName,
-          url: newFeedUrl,
-          niche: selectedNiche,
+          url: finalUrl,
+          niche: newFeedNiche || selectedNiche,
         }),
       });
 
       if (res.ok) {
         setNewFeedName("");
         setNewFeedUrl("");
+        setNewFeedNiche("");
         setShowAddFeed(false);
         fetchConfig();
+      } else {
+        const errorData = await res.json();
+        alert(`Failed to add feed: ${errorData.error || res.statusText}`);
       }
     } catch (err) {
       console.error("Create feed error:", err);
@@ -846,9 +1518,92 @@ export default function App() {
       });
       if (res.ok) {
         await fetchConfig();
+      } else {
+        const errorData = await res.json().catch(() => ({}));
+        alert(`Failed to add feed: ${errorData.error || res.statusText}`);
+      }
+    } catch (err: any) {
+      console.error("Add preset feed error:", err);
+      alert(`Error: ${err.message}`);
+    }
+  };
+
+  const fetchDiscoveryData = async () => {
+    try {
+      const res = await fetch("/api/feeds/discovery");
+      if (res.ok) {
+        const data = await res.json();
+        setCustomDiscoveredFeeds(data.customFeeds || []);
+        setDeletedDiscoveryUrls(data.deletedUrls || []);
       }
     } catch (err) {
-      console.error("Add preset feed error:", err);
+      console.error("Error fetching discovery feeds:", err);
+    }
+  };
+
+  const handleSearchOnlineFeeds = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!searchKeyword.trim()) return;
+    setIsSearchingFeeds(true);
+    try {
+      const res = await fetch("/api/feeds/discovery/search", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ keyword: searchKeyword })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        await fetchDiscoveryData();
+        setSearchKeyword("");
+      } else {
+        alert("Failed to perform internet feed discovery. Please try again.");
+      }
+    } catch (err) {
+      console.error("Discovery search error:", err);
+    } finally {
+      setIsSearchingFeeds(false);
+    }
+  };
+
+  const handleDeleteDiscoveryFeed = async (urls: string[]) => {
+    if (urls.length === 0) return;
+    try {
+      const res = await fetch("/api/feeds/discovery/delete", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ urls })
+      });
+      if (res.ok) {
+        await fetchDiscoveryData();
+        setSelectedPresetUrls(prev => prev.filter(u => !urls.includes(u)));
+      }
+    } catch (err) {
+      console.error("Failed to delete preset from discovery catalog:", err);
+    }
+  };
+
+  const handleDeploySelectedFeeds = async (feedsToDeploy: any[]) => {
+    if (feedsToDeploy.length === 0) {
+      alert("No feeds selected to deploy!");
+      return;
+    }
+    try {
+      const res = await fetch("/api/feeds/bulk", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ feeds: feedsToDeploy }),
+      });
+      if (res.ok) {
+        await fetchConfig();
+        setSelectedPresetUrls([]);
+        alert(`Successfully deployed ${feedsToDeploy.length} RSS feed pathways!`);
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        alert(`Failed to deploy feeds: ${errData.error || res.statusText}`);
+      }
+    } catch (err: any) {
+      console.error("Error deploying selected feeds:", err);
+      alert(`Error deploying selected feeds: ${err.message}`);
     }
   };
 
@@ -861,9 +1616,13 @@ export default function App() {
       });
       if (res.ok) {
         await fetchConfig();
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        alert(`Failed to bulk add feeds: ${errData.error || res.statusText}`);
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error("Bulk addition error:", err);
+      alert(`Error in bulk addition: ${err.message}`);
     }
   };
 
@@ -887,6 +1646,9 @@ export default function App() {
         setNewWriterVoice(corrected.voiceStyle || "");
         setNewWriterBio(corrected.bio || "");
         setNewWriterInstruction(corrected.customPromptInstruction || "");
+        if (corrected.skills && Array.isArray(corrected.skills)) {
+          setSelectedSkillsTags(corrected.skills);
+        }
       }
     } catch (err) {
       console.error("Failed to correct writer tone:", err);
@@ -901,19 +1663,41 @@ export default function App() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          id: candidate.id,
           name: candidate.name,
           voiceStyle: candidate.voiceStyle,
           bio: candidate.bio,
           customPromptInstruction: candidate.customPromptInstruction,
           niche: selectedNiche,
           avatar: candidate.avatar,
+          skills: candidate.skills,
+          competitor: candidate.competitor,
         }),
+      });
+      if (res.ok) {
+        await fetchConfig();
+        alert(`${candidate.name} was successfully recruited to the board!`);
+      }
+    } catch (err) {
+      console.error("Failed to hire candidate:", err);
+    }
+  };
+
+  const handleScoutCandidates = async () => {
+    setIsScoutingCandidates(true);
+    try {
+      const res = await fetch("/api/writers/candidates/scout", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ niche: selectedNiche }),
       });
       if (res.ok) {
         await fetchConfig();
       }
     } catch (err) {
-      console.error("Failed to hire candidate:", err);
+      console.error("Failed to scout candidates:", err);
+    } finally {
+      setIsScoutingCandidates(false);
     }
   };
 
@@ -932,7 +1716,7 @@ export default function App() {
           voiceStyle: newWriterVoice,
           bio: newWriterBio,
           customPromptInstruction: newWriterInstruction,
-          niche: selectedNiche,
+          niche: newWriterNiche || selectedNiche,
           skills: selectedSkillsTags,
           competitor: selectedCompetitor
         }),
@@ -942,11 +1726,14 @@ export default function App() {
         setNewWriterName("");
         setNewWriterVoice("");
         setNewWriterBio("");
+        setNewWriterNiche("");
         setNewWriterInstruction("");
         setSelectedSkillsTags([]);
         setShowAddWriter(false);
         setEditingWriterId(null);
+        setVoiceStudioSubTab("profiles");
         fetchConfig();
+        alert("Editorial Voice Specialist registered successfully!");
       }
     } catch (err) {
       console.error("Create writer error:", err);
@@ -954,21 +1741,113 @@ export default function App() {
   };
 
   const handleEditWriterClick = (writer: Writer) => {
+     setVoiceStudioSubTab("create");
      setShowAddWriter(true);
      setEditingWriterId(writer.id);
      setNewWriterName(writer.name);
      setNewWriterVoice(writer.voiceStyle);
      setNewWriterBio(writer.bio);
      setNewWriterInstruction(writer.customPromptInstruction);
-     setSelectedSkillsTags([]);
-     setSelectedCompetitor(nicheCompetitors[writer.niche]?.[0] || "TechCrunch");
+     setSelectedSkillsTags(writer.skills || []);
+     setSelectedCompetitor(writer.competitor || nicheCompetitors[writer.niche]?.[0] || "TechCrunch");
+   };
+
+   const handleSaveSkill = async (e: React.FormEvent) => {
+     e.preventDefault();
+     if (!newSkillName.trim() || !newSkillDirective.trim()) {
+       return;
+     }
+     setIsSavingSkill(true);
+     try {
+       const res = await fetch("/api/skills", {
+         method: "POST",
+         headers: { "Content-Type": "application/json" },
+         body: JSON.stringify({
+           id: editingSkillId,
+           name: newSkillName,
+           niche: newSkillNiche,
+           directive: newSkillDirective
+         })
+       });
+       if (res.ok) {
+         await fetchConfig();
+         setNewSkillName("");
+         setNewSkillDirective("");
+         setEditingSkillId(null);
+       }
+     } catch (err) {
+       console.error("Save skill error:", err);
+     } finally {
+       setIsSavingSkill(false);
+     }
+   };
+
+   const handleDeleteSkill = async (id: string) => {
+     try {
+       const res = await fetch(`/api/skills/${id}`, {
+         method: "DELETE"
+       });
+       if (res.ok) {
+         await fetchConfig();
+         if (editingSkillId === id) {
+           setEditingSkillId(null);
+           setNewSkillName("");
+           setNewSkillDirective("");
+         }
+       }
+     } catch (err) {
+       console.error("Delete skill error:", err);
+     }
+   };
+
+   const handleTestWriterAlignment = async (writerId: string, text: string) => {
+     if (!writerId || !text.trim()) {
+       setAlignmentTestError("Please select a writer and enter some sample text.");
+       return;
+     }
+     setIsTestingAlignment(true);
+     setAlignmentTestError(null);
+     setAlignmentResult(null);
+
+     try {
+       const res = await fetch(`/api/writers/${writerId}/test-alignment`, {
+         method: "POST",
+         headers: { "Content-Type": "application/json" },
+         body: JSON.stringify({ sampleText: text })
+       });
+       if (res.ok) {
+         const data = await res.json();
+         if (data.success && data.alignment) {
+           setAlignmentResult(data.alignment);
+         } else {
+           throw new Error(data.error || "Failed to evaluate style alignment.");
+         }
+       } else {
+         const errData = await res.json();
+         throw new Error(errData.error || `HTTP ${res.status}`);
+       }
+     } catch (err: any) {
+       console.error("Test alignment error:", err);
+       setAlignmentTestError(err.message || "Quality validation processing failed");
+     } finally {
+       setIsTestingAlignment(false);
+     }
+   };
+
+   const dummyNoop = () => {
   };
 
-  const handleDeleteWriter = async (id: string) => {
-    if(!confirm("Are you sure you want to fire this digital writer?")) return;
+  const handleDeleteWriter = async (id: string, resolveConfirm = false) => {
+    if (!resolveConfirm) {
+      setWriterIdToConfirmDelete(id);
+      return;
+    }
     try {
        const res = await fetch(`/api/writers/${id}`, { method: "DELETE" });
-       if (res.ok) fetchConfig();
+       if (res.ok) {
+         setWriterIdToConfirmDelete(null);
+         fetchConfig();
+       }
     } catch(err) {
        console.error("Delete writer error:", err);
     }
@@ -993,17 +1872,22 @@ export default function App() {
     }
   };
 
-  const handlePushToWordPress = async (id: string) => {
+  const handlePushToWordPress = async (id: string, siteId?: string) => {
     setIsPushingWp((prev) => ({ ...prev, [id]: true }));
     const art = articles.find((a) => a.id === id);
     setWpLogs((prev) => [
       ...prev,
       `[PUSH ENGINE] Initiating WordPress REST sync workflow for Article ID: ${id}...`,
+      siteId ? `[PUSH ENGINE] Selected target site ID: "${siteId}"` : `[PUSH ENGINE] No site chosen; using default niche portal...`,
       `[MEDIA PROCESS] Processing media attachments ("${art?.title.substring(0, 30)}...")...`,
     ]);
     try {
       const res = await fetch(`/api/articles/${id}/push-wp`, {
         method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ siteId }),
       });
       if (res.ok) {
         const updatedArticle = await res.json();
@@ -1034,6 +1918,143 @@ export default function App() {
       console.error(err);
     } finally {
       setIsPushingWp((prev) => ({ ...prev, [id]: false }));
+    }
+  };
+
+  const fetchQueueJobs = async () => {
+    setIsLoadingQueue(true);
+    try {
+      const res = await fetch("/api/publishing-queue/jobs");
+      if (res.ok) {
+        const data = await res.json();
+        setQueueJobs(data);
+      }
+    } catch (err) {
+      console.error("Error fetching queue jobs:", err);
+    } finally {
+      setIsLoadingQueue(false);
+    }
+  };
+
+  useEffect(() => {
+    if (wpLeftTab === "queue") {
+      fetchQueueJobs();
+      const interval = setInterval(fetchQueueJobs, 10000);
+      return () => clearInterval(interval);
+    }
+  }, [wpLeftTab]);
+
+  const handleQueueEnqueue = async (articleId: string, siteId?: string, scheduledPublishAt?: string | null) => {
+    try {
+      const res = await fetch("/api/publishing-queue/enqueue", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ articleId, siteId, scheduledPublishAt })
+      });
+      if (res.ok) {
+        alert("Successfully enqueued this draft for durable publication!");
+        fetchArticles();
+        if (wpLeftTab === "queue") fetchQueueJobs();
+      } else {
+        const err = await res.json();
+        alert("Enqueue failed: " + (err.error || "Unspecified server rejection"));
+      }
+    } catch (e: any) {
+      alert("Network Error: " + e.message);
+    }
+  };
+
+  const handleQueueRetry = async (jobId: string) => {
+    try {
+      const res = await fetch(`/api/publishing-queue/jobs/${jobId}/retry`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" }
+      });
+      if (res.ok) {
+        alert("Manual retry registered successfully!");
+        fetchQueueJobs();
+      } else {
+        const err = await res.json();
+        alert("Retry failed: " + (err.error || "Server rejected action"));
+      }
+    } catch (e: any) {
+      alert("Network error: " + e.message);
+    }
+  };
+
+  const handleQueueResolve = async (jobId: string) => {
+    if (!manualWpPostId || !manualDestUrl) {
+      alert("Please fill both Post ID and Destination URL!");
+      return;
+    }
+    try {
+      const res = await fetch(`/api/publishing-queue/jobs/${jobId}/resolve`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ wordpressPostId: manualWpPostId, destinationUrl: manualDestUrl })
+      });
+      if (res.ok) {
+        alert("Manual reconciliation resolved successfully!");
+        setManualResolveJobId(null);
+        setManualWpPostId("");
+        setManualDestUrl("");
+        fetchQueueJobs();
+        fetchArticles();
+      } else {
+        const err = await res.json();
+        alert("Resolution failed: " + (err.error || "Server rejected action"));
+      }
+    } catch (e: any) {
+      alert("Network error: " + e.message);
+    }
+  };
+
+  const handleQueueAbort = async (jobId: string) => {
+    if (!abortReason) {
+      alert("Please provide an abort reason!");
+      return;
+    }
+    try {
+      const res = await fetch(`/api/publishing-queue/jobs/${jobId}/abort`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reason: abortReason })
+      });
+      if (res.ok) {
+        alert("Job aborted successfully!");
+        setAbortJobId(null);
+        setAbortReason("");
+        fetchQueueJobs();
+        fetchArticles();
+      } else {
+        const err = await res.json();
+        alert("Abort action failed: " + (err.error || "Server rejected action"));
+      }
+    } catch (e: any) {
+      alert("Network error: " + e.message);
+    }
+  };
+
+  const handleQueueRunWorker = async () => {
+    setIsExecutingQueue(true);
+    try {
+      const res = await fetch("/api/publishing-queue/worker/run", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" }
+      });
+      if (res.ok) {
+        const stats = await res.json();
+        alert(`Worker Run Completed!\nJobs Processed: ${stats.processedCount}\nSuccessful: ${stats.successCount}\nFailures: ${stats.failCount}`);
+        fetchQueueJobs();
+        fetchArticles();
+      } else {
+        const err = await res.json();
+        alert("Worker execution failed: " + (err.error || "Server error"));
+      }
+    } catch (e: any) {
+      alert("Network error during worker cycle: " + e.message);
+    } finally {
+      setIsExecutingQueue(false);
     }
   };
 
@@ -1086,6 +2107,10 @@ export default function App() {
     setIsRewriting(true);
     setActiveWorkflowLogs([]);
     setWorkflowCurrentStep("research");
+
+    setRewritingStatusText("Synthesizing Copilot Strategy automatically...");
+    const copilotData = await handleAutoSynthesizeCopilot(source);
+
     setRewritingStatusText("Assembling Council & checking baseline facts...");
 
     try {
@@ -1097,22 +2122,25 @@ export default function App() {
           sourceUrl: source.url,
           sourceDescription: source.description,
           writerId: selectedWriterId,
-          niche: selectedNiche,
+          niche: source.niche || selectedNiche,
+          opportunityScore: copilotData?.opportunityScore || source.opportunityScore,
+          riskScore: copilotData?.riskScore || source.riskScore,
           targetLength: rewriteDepth,
-          targetSubstyle: rewriteSubstyle,
-          customFacts: rewriteCustomFacts,
+          targetSubstyle: copilotData?.substyle || rewriteSubstyle,
+          customFacts: copilotData?.factualContent || rewriteCustomFacts,
           customKeywords: rewriteCustomKeywords,
           adsenseOptimized: rewriteAdsenseOptimized,
+          inlineImageMode: rewriteInlineImageMode,
 
           // New strategic Copilot parameters
-          targetAudience: copilotTargetAudience,
-          targetTone: copilotTone,
-          targetStructure: copilotStructure,
-          seoStrategy: copilotSeoStrategy,
-          contentObjectives: copilotContentObjectives,
-          engagementOptimization: copilotEngagementOptimization,
-          authorityBuilding: copilotAuthorityBuilding,
-          conversionOptimization: copilotConversionOptimization,
+          targetAudience: copilotData?.targetAudience || copilotTargetAudience,
+          targetTone: copilotData?.tone || copilotTone,
+          targetStructure: copilotData?.structure || copilotStructure,
+          seoStrategy: copilotData?.seoStrategy || copilotSeoStrategy,
+          contentObjectives: copilotData?.contentObjectives || copilotContentObjectives,
+          engagementOptimization: copilotData?.engagementOptimization || copilotEngagementOptimization,
+          authorityBuilding: copilotData?.authorityBuilding || copilotAuthorityBuilding,
+          conversionOptimization: copilotData?.conversionOptimization || copilotConversionOptimization,
         }),
         signal: controller.signal,
       });
@@ -1191,21 +2219,74 @@ export default function App() {
       });
       if (res.ok) {
         fetchArticles(); // Reload images
+      } else {
+        throw new Error(`Failed to generate image: HTTP ${res.status}`);
       }
     } catch (err) {
-      console.error("Image gen error:", err);
+      console.error("Image generation API failed. Applying beautiful category-appropriate fallback image:", err);
+      // Determine the category fallback image
+      const article = articles.find((a) => a.id === articleId);
+      let niche = (article?.niche || selectedNiche || "tech").toLowerCase().trim();
+      if (niche === "travel" || niche === "traveling" || niche === "nomad" || niche === "nomad-chronics" || niche === "nomad_chronics" || niche === "lifestyle") {
+        niche = "traveling";
+      }
+      
+      const categoryFallbacks: Record<string, string[]> = {
+        hollywood: [
+          "https://images.unsplash.com/photo-1514306191717-452ec28c7814?w=800&auto=format&fit=crop&q=80",
+          "https://images.unsplash.com/photo-1492684223066-81342ee5ff30?w=800&auto=format&fit=crop&q=80",
+          "https://images.unsplash.com/photo-1517604931442-7e0c8ed2963c?w=800&auto=format&fit=crop&q=80"
+        ],
+        sports: [
+          "https://images.unsplash.com/photo-1508098682722-e99c43a406b2?w=800&auto=format&fit=crop&q=80",
+          "https://images.unsplash.com/photo-1461896836934-ffe607ba8211?w=800&auto=format&fit=crop&q=80",
+          "https://images.unsplash.com/photo-1517649763962-0c623066013b?w=800&auto=format&fit=crop&q=80"
+        ],
+        tech: [
+          "https://images.unsplash.com/photo-1488590528505-98d2b5aba04b?w=800&auto=format&fit=crop&q=80",
+          "https://images.unsplash.com/photo-1518770660439-4636190af475?w=800&auto=format&fit=crop&q=80",
+          "https://images.unsplash.com/photo-1451187580459-43490279c0fa?w=800&auto=format&fit=crop&q=80"
+        ],
+        traveling: [
+          "https://images.unsplash.com/photo-1469854523086-cc02fe5d8800?w=800&auto=format&fit=crop&q=80",
+          "https://images.unsplash.com/photo-1488646953014-85cb44e25828?w=800&auto=format&fit=crop&q=80",
+          "https://images.unsplash.com/photo-1476514525535-07fb3b4ae5f1?w=800&auto=format&fit=crop&q=80",
+          "https://images.unsplash.com/photo-1501785888041-af3ef285b470?w=800&auto=format&fit=crop&q=80",
+          "https://images.unsplash.com/photo-1507525428034-b723cf961d3e?w=800&auto=format&fit=crop&q=80"
+        ]
+      };
+      const list = categoryFallbacks[niche] || categoryFallbacks.traveling || categoryFallbacks.tech;
+      // Reversible hash selection for a stable, high-quality Unsplash match
+      let promptHash = 0;
+      for (let i = 0; i < (prompt || "").length; i++) {
+        promptHash = (promptHash << 5) - promptHash + (prompt || "").charCodeAt(i);
+        promptHash |= 0;
+      }
+      const index = Math.abs(promptHash) % list.length;
+      const fallbackUrl = list[index];
+
+      try {
+        await fetch(`/api/articles/${articleId}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ originalImageUrl: fallbackUrl }),
+        });
+        fetchArticles(); // Reload newly configured image back into client listing state
+      } catch (patchErr) {
+        console.error("Failed to apply dynamic fallback image details:", patchErr);
+      }
     } finally {
       setIsGeneratingImage(false);
     }
   };
 
-  const handleAutoSynthesizeCopilot = async () => {
-    const activeSrc = selectedSource || suggestedSources[0];
+  const handleAutoSynthesizeCopilot = async (sourceToSynthesize?: SuggestedSource, overrideWriterId?: string) => {
+    const activeSrc = sourceToSynthesize || selectedSource || suggestedSources[0];
     if (!activeSrc) {
       alert(
         "No active breakout opportunity has been loaded in the RSS feed queue. Please sync feeds first.",
       );
-      return;
+      return null;
     }
     setIsSynthesizingCopilot(true);
     try {
@@ -1215,14 +2296,21 @@ export default function App() {
         body: JSON.stringify({
           sourceTitle: activeSrc.title,
           sourceDescription: activeSrc.description || "",
-          niche: selectedNiche,
-          writerId: selectedWriterId,
+          niche: activeSrc.niche || selectedNiche,
+          writerId: overrideWriterId || selectedWriterId,
         }),
       });
 
       if (res.ok) {
         const data = await res.json();
         if (data) {
+          let resolvedWriterIdVal = data.resolvedWriterId;
+          if (!resolvedWriterIdVal || resolvedWriterIdVal === "auto" || !writers.some((w) => w.id === resolvedWriterIdVal)) {
+            const expert = getNicheExpertWriter(selectedNiche, writers);
+            resolvedWriterIdVal = expert.id;
+          }
+          setResolvedWriterId(resolvedWriterVal => resolvedWriterIdVal);
+          data.resolvedWriterId = resolvedWriterIdVal;
           if (data.substyle) setRewriteSubstyle(data.substyle);
           if (data.targetAudience)
             setCopilotTargetAudience(data.targetAudience);
@@ -1238,6 +2326,14 @@ export default function App() {
             setCopilotAuthorityBuilding(data.authorityBuilding);
           if (data.conversionOptimization)
             setCopilotConversionOptimization(data.conversionOptimization);
+
+          if (data.opportunityScore !== undefined || data.riskScore !== undefined) {
+             const updatedScore = data.opportunityScore || activeSrc.opportunityScore;
+             const updatedRisk = data.riskScore || activeSrc.riskScore;
+             setSelectedSource({...activeSrc, opportunityScore: updatedScore, riskScore: updatedRisk});
+             setSuggestedSources(sources => sources.map(s => s.id === activeSrc.id ? {...s, opportunityScore: updatedScore, riskScore: updatedRisk} : s));
+          }
+          return data;
         }
       }
     } catch (err) {
@@ -1248,6 +2344,7 @@ export default function App() {
     } finally {
       setIsSynthesizingCopilot(false);
     }
+    return null;
   };
 
   const handleExecuteAutopilotCycleInstantly = async () => {
@@ -1349,12 +2446,13 @@ export default function App() {
         return;
       }
 
+      // 2. Concurrently process all drafted articles in the batch in chunks of maxConcurrentAgents
+      const maxConcurrency = saasConfig.modelSettings.maxConcurrentAgents || 3;
       setAutopilotLog(
-        `🎰 Selected champion workload: ${selectedJobs.length} opportunities! Dispatching premium content rewrites...`,
+        `🎰 Selected champion workload: ${selectedJobs.length} opportunities! Dispatching premium content rewrites with concurrency level: ${maxConcurrency}...`,
       );
 
-      // 2. Sequentially process all drafted concurrent articles in the batch
-      for (let index = 0; index < selectedJobs.length; index++) {
+      for (let index = 0; index < selectedJobs.length; index += maxConcurrency) {
         if (autopilotStopRequestRef.current) {
           setAutopilotLog(
             "🛑 Active Autopilot sequence forcefully STOPPED by user.",
@@ -1362,270 +2460,249 @@ export default function App() {
           break;
         }
 
-        const { winningSource, chosenNiche } = selectedJobs[index];
-        const jobNum = index + 1;
-        const totalJobs = selectedJobs.length;
-
-        const nicheNameMapped =
-          chosenNiche === "hollywood"
-            ? "Gossip & Glam"
-            : chosenNiche === "sports"
-              ? "The Arena"
-              : "Alpha Teardown";
-        setAutopilotLog(
-          `🚀 [Job ${jobNum}/${totalJobs}] Processing for [${nicheNameMapped}]: "${winningSource.title}" (Score: ${winningSource.opportunityScore || 90}%)`,
-        );
-
-        // Map default writer for this niche
-        const nicheWriters = writers.filter((w) => w.niche === chosenNiche);
-        const activeWriter = nicheWriters[0] || writers[0];
-        if (!activeWriter) {
-          setAutopilotLog(
-            `❌ [Job ${jobNum}/${totalJobs}] Mapped digital writer does not exist.`,
-          );
-          continue;
-        }
-
-        // OPEN THE REAL-TIME AGENTIC EDITORIAL COUNCIL MODAL TO MIRROR SEMI-AUTOMATION
-        setSelectedSource(winningSource);
-        setSelectedWriterId(activeWriter.id);
-        setShowCouncilModal(true);
-        setIsRewriting(true);
-        setActiveWorkflowLogs([]);
-        setWorkflowCurrentStep("research");
-        setRewritingStatusText(
-          `🤖 [Autopilot Job ${jobNum}/${totalJobs}] Assembling Editorial Council & validating news facts...`,
-        );
+        const chunk = selectedJobs.slice(index, index + maxConcurrency);
+        const chunkIndexStart = index;
 
         setAutopilotLog(
-          `👥 [Job ${jobNum}/${totalJobs}] Initiating rewrite council matching voice: ${activeWriter.name}...`,
+          `⚡ [Batch ${Math.floor(index / maxConcurrency) + 1}/${Math.ceil(selectedJobs.length / maxConcurrency)}] Initiating up to ${chunk.length} parallel agent councils...`,
         );
 
-        const jobController = new AbortController();
-        autopilotJobAbortControllerRef.current = jobController;
+        await Promise.all(
+          chunk.map(async (jobItem, subIndex) => {
+            const globalIdx = chunkIndexStart + subIndex;
+            const { winningSource, chosenNiche } = jobItem;
+            const jobNum = globalIdx + 1;
+            const totalJobs = selectedJobs.length;
 
-        let response;
-        try {
-          response = await fetch("/api/articles/create", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              sourceTitle: winningSource.title,
-              sourceUrl: winningSource.url,
-              sourceDescription: winningSource.description,
-              writerId: activeWriter.id,
-              niche: chosenNiche,
-              targetLength: rewriteDepth,
-              targetSubstyle: rewriteSubstyle,
-              customFacts: rewriteCustomFacts,
-              customKeywords: rewriteCustomKeywords,
-              adsenseOptimized: rewriteAdsenseOptimized,
+            const nicheNameMapped =
+              chosenNiche === "hollywood"
+                ? "Gossip & Glam"
+                : chosenNiche === "sports"
+                  ? "The Arena"
+                  : "Alpha Teardown";
 
-              targetAudience: copilotTargetAudience,
-              targetTone: copilotTone,
-              targetStructure: copilotStructure,
-              seoStrategy: copilotSeoStrategy,
-              contentObjectives: copilotContentObjectives,
-              engagementOptimization: copilotEngagementOptimization,
-              authorityBuilding: autopilotSystems.editorialRefinement
-                ? "Include editorial style anchors"
-                : copilotAuthorityBuilding,
-              conversionOptimization: copilotConversionOptimization,
-            }),
-            signal: jobController.signal,
-          });
-        } catch (fetchErr: any) {
-          if (fetchErr.name === "AbortError") {
             setAutopilotLog(
-              `🛑 [Job ${jobNum}/${totalJobs}] Aborted by operator.`,
+              `🚀 [Job ${jobNum}/${totalJobs}] Processing for [${nicheNameMapped}]: "${winningSource.title}" (Score: ${winningSource.opportunityScore || 90}%)`,
             );
-          } else {
+
+            // Fetch Advanced Copilot Synthesized settings for this exact article!
+            setAutopilotLog(`🤖 [Job ${jobNum}/${totalJobs}] Synthesizing Copilot Content Strategy automatically...`);
+            const jobCopilotData = await handleAutoSynthesizeCopilot({
+              ...winningSource,
+              opportunityScore: winningSource.opportunityScore || 90,
+              riskScore: winningSource.riskScore || 0
+            }, "auto"); // Force auto selection of writer per article
+
+            let resolvedWriterId = jobCopilotData?.resolvedWriterId;
+            if (!resolvedWriterId || resolvedWriterId === "auto" || !writers.some((w) => w.id === resolvedWriterId)) {
+              resolvedWriterId = getNicheExpertWriter(chosenNiche, writers).id;
+            }
+
+            const activeWriter = writers.find((w) => w.id === resolvedWriterId) || getNicheExpertWriter(chosenNiche, writers);
+
+            // ONLY Open details in the main modal for the first item of the chunk to avoid flickering
+            if (subIndex === 0) {
+              setSelectedSource(winningSource);
+              setSelectedWriterId(activeWriter.id);
+              setShowCouncilModal(true);
+              setIsRewriting(true);
+              setActiveWorkflowLogs([]);
+              setWorkflowCurrentStep("research");
+              setRewritingStatusText(
+                `🤖 [Batch Leader ${jobNum}/${totalJobs}] Assembling Editorial Council & validating news facts...`,
+              );
+            }
+
             setAutopilotLog(
-              `❌ [Job ${jobNum}/${totalJobs}] Network error: ${fetchErr.message}`,
+              `👥 [Job ${jobNum}/${totalJobs}] Initiating rewrite council matching voice: ${activeWriter.name}...`,
             );
-          }
-          const errDetail = {
-            step: "failed",
-            agentName: "Editorial Director Exception",
-            status: "failed",
-            timestamp: new Date().toLocaleTimeString(),
-            output:
-              fetchErr.name === "AbortError"
-                ? "Force stopped by operator decision."
-                : `Failed to connect with background service: ${fetchErr.message}`,
-          };
-          setActiveWorkflowLogs((prev) => [...prev, errDetail]);
-          setWorkflowCurrentStep("failed");
-          setRewritingStatusText(
-            fetchErr.name === "AbortError"
-              ? "🛑 Stopped by operator decision."
-              : `Failed to connect with server: ${fetchErr.message}`,
-          );
-          setIsRewriting(false);
-          autopilotJobAbortControllerRef.current = null;
-          continue;
-        }
 
-        if (!response.ok) {
-          setAutopilotLog(
-            `❌ [Job ${jobNum}/${totalJobs}] Editorial council rewrite api returned non-ok status.`,
-          );
-          const errDetail = {
-            step: "failed",
-            agentName: "Editorial Director",
-            status: "failed",
-            timestamp: new Date().toLocaleTimeString(),
-            output: `Editorial server returned non-ok status code: ${response.status} (${response.statusText}).`,
-          };
-          setActiveWorkflowLogs((prev) => [...prev, errDetail]);
-          setWorkflowCurrentStep("failed");
-          setRewritingStatusText(
-            `Editorial server returned code: ${response.status}`,
-          );
-          setIsRewriting(false);
-          autopilotJobAbortControllerRef.current = null;
-          continue;
-        }
+            const jobController = new AbortController();
 
-        const reader = response.body?.getReader();
-        const decoder = new TextDecoder();
-        let partialLine = "";
-        let createdArticleId = "";
+            let response;
+            try {
+              response = await fetch("/api/articles/create", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  sourceTitle: winningSource.title,
+                  sourceUrl: winningSource.url,
+                  sourceDescription: winningSource.description,
+                  writerId: activeWriter.id,
+                  niche: chosenNiche,
+                  opportunityScore: jobCopilotData?.opportunityScore || winningSource.opportunityScore || 90,
+                  riskScore: jobCopilotData?.riskScore || winningSource.riskScore || 0,
+                  targetLength: rewriteDepth,
+                  targetSubstyle: jobCopilotData?.substyle || rewriteSubstyle,
+                  customFacts: jobCopilotData?.factualContent || rewriteCustomFacts,
+                  customKeywords: rewriteCustomKeywords,
+                  adsenseOptimized: rewriteAdsenseOptimized,
+                  inlineImageMode: rewriteInlineImageMode,
 
-        if (reader) {
-          try {
-            while (true) {
-              if (autopilotStopRequestRef.current) {
-                reader.cancel();
-                break;
+                  targetAudience: jobCopilotData?.targetAudience || copilotTargetAudience,
+                  targetTone: jobCopilotData?.tone || copilotTone,
+                  targetStructure: jobCopilotData?.structure || copilotStructure,
+                  seoStrategy: jobCopilotData?.seoStrategy || copilotSeoStrategy,
+                  contentObjectives: jobCopilotData?.contentObjectives || copilotContentObjectives,
+                  engagementOptimization: jobCopilotData?.engagementOptimization || copilotEngagementOptimization,
+                  authorityBuilding: autopilotSystems.editorialRefinement
+                    ? "Include editorial style anchors"
+                    : (jobCopilotData?.authorityBuilding || copilotAuthorityBuilding),
+                  conversionOptimization: jobCopilotData?.conversionOptimization || copilotConversionOptimization,
+                }),
+                signal: jobController.signal,
+              });
+            } catch (fetchErr: any) {
+              if (fetchErr.name === "AbortError") {
+                setAutopilotLog(
+                  `🛑 [Job ${jobNum}/${totalJobs}] Aborted by operator.`,
+                );
+              } else {
+                setAutopilotLog(
+                  `❌ [Job ${jobNum}/${totalJobs}] Network error: ${fetchErr.message}`,
+                );
               }
-              const { done, value } = await reader.read();
-              if (done) break;
-              const chunk = decoder.decode(value, { stream: true });
-              const lines = (partialLine + chunk).split("\n");
-              partialLine = lines.pop() || "";
-              for (const line of lines) {
-                if (!line.trim()) continue;
-                try {
-                  const payload = JSON.parse(line);
-                  if (payload.log) {
-                    setAutopilotLog(
-                      `👉 [GP ${jobNum}/${totalJobs}] ${payload.log}`,
-                    );
-                  }
-                  if (payload.articleId) {
-                    createdArticleId = payload.articleId;
-                  }
+              return;
+            }
 
-                  // LIVE UPDATE AGENT WORKFLOW LOG DETAILS IN Editorial Council Panel
-                  if (payload.step) {
-                    setWorkflowCurrentStep(payload.step);
-                    setRewritingStatusText(payload.log || "");
+            if (!response.ok) {
+              setAutopilotLog(
+                `❌ [Job ${jobNum}/${totalJobs}] Editorial council rewrite api returned non-ok status: ${response.status}.`,
+              );
+              return;
+            }
 
-                    if (payload.detail) {
-                      setActiveWorkflowLogs((prev) => {
-                        const exists = prev.some(
-                          (l) => l.step === payload.detail.step,
+            const reader = response.body?.getReader();
+            const decoder = new TextDecoder();
+            let partialLine = "";
+            let createdArticleId = "";
+
+            if (reader) {
+              try {
+                while (true) {
+                  if (autopilotStopRequestRef.current) {
+                    reader.cancel();
+                    break;
+                  }
+                  const { done, value } = await reader.read();
+                  if (done) break;
+                  const chunkStr = decoder.decode(value, { stream: true });
+                  const lines = (partialLine + chunkStr).split("\n");
+                  partialLine = lines.pop() || "";
+                  for (const line of lines) {
+                    if (!line.trim()) continue;
+                    try {
+                      const payload = JSON.parse(line);
+                      if (payload.log) {
+                        setAutopilotLog(
+                          `👉 [GP ${jobNum}/${totalJobs}] ${payload.log}`,
                         );
-                        if (exists) {
-                          return prev.map((l) =>
-                            l.step === payload.detail.step ? payload.detail : l,
-                          );
+                      }
+                      if (payload.articleId) {
+                        createdArticleId = payload.articleId;
+                      }
+
+                      // Stream visual details only if this is the batch leader
+                      if (subIndex === 0 && payload.step) {
+                        setWorkflowCurrentStep(payload.step);
+                        setRewritingStatusText(payload.log || "");
+
+                        if (payload.detail) {
+                          setActiveWorkflowLogs((prev) => {
+                            const exists = prev.some(
+                              (l) => l.step === payload.detail.step,
+                            );
+                            if (exists) {
+                              return prev.map((l) =>
+                                l.step === payload.detail.step ? payload.detail : l,
+                              );
+                            }
+                            return [...prev, payload.detail];
+                          });
                         }
-                        return [...prev, payload.detail];
-                      });
+                      }
+                    } catch (e) {
+                      // Skip partial chunks
                     }
                   }
-                } catch (e) {
-                  // Ignore partial chunk parse error
+                }
+              } catch (streamErr: any) {
+                setAutopilotLog(
+                  `⚠️ [Job ${jobNum}/${totalJobs}] Encountered stream issue: ${streamErr.message}`,
+                );
+              }
+            }
+
+            if (subIndex === 0) {
+              setIsRewriting(false);
+            }
+
+            if (autopilotStopRequestRef.current) {
+              return;
+            }
+
+            setAutopilotLog(
+              `🎨 [Job ${jobNum}/${totalJobs}] Standard Image Illustrating (ChatGPT / Nano Banana 2)...`,
+            );
+            let finalArtId = createdArticleId;
+            await fetchArticles();
+
+            if (!finalArtId) {
+              const latestResponse = await fetch("/api/articles");
+              if (latestResponse.ok) {
+                const list = await latestResponse.json();
+                if (list && list.length > 0) {
+                  const matchingArt = list.find((artObj: any) => artObj.sourceTitle === winningSource.title);
+                  if (matchingArt) finalArtId = matchingArt.id;
+                  else finalArtId = list[0].id;
                 }
               }
             }
-          } catch (streamErr: any) {
-            setAutopilotLog(
-              `⚠️ [Job ${jobNum}/${totalJobs}] Encountered stream issue: ${streamErr.message}`,
-            );
-          } finally {
-            autopilotJobAbortControllerRef.current = null;
-          }
-        }
 
-        // Close rewrite state for active modal view
-        setIsRewriting(false);
+            if (finalArtId) {
+              setAutopilotLog(
+                `⚡ [Job ${jobNum}/${totalJobs}] Syndicating & Publishing directly as approved draft!`,
+              );
+              const pubRes = await fetch(`/api/articles/${finalArtId}`, {
+                method: "PATCH",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ status: "published" }),
+              });
 
-        if (autopilotStopRequestRef.current) {
-          setAutopilotLog(
-            "🛑 Active Autopilot sequence forcefully STOPPED by user.",
-          );
-          break;
-        }
+              if (pubRes.ok) {
+                setAutopilotLog(
+                  `🎉 [Job ${jobNum}/${totalJobs}] SUCCESS! Article drafted, illustrated, refined, and syndicated successfully.`,
+                );
+              } else {
+                setAutopilotLog(
+                  `⚠️ [Job ${jobNum}/${totalJobs}] saved as active draft but syndication failed.`,
+                );
+              }
 
-        setAutopilotLog(
-          `🎨 [Job ${jobNum}/${totalJobs}] Standard Image Illustrating (ChatGPT / Nano Banana 2)...`,
-        );
-        let finalArtId = createdArticleId;
-        await fetchArticles();
+              if (autopilotSystems.wordpressSyndication) {
+                setAutopilotLog(
+                  `🌐 [Job ${jobNum}/${totalJobs}] Sending post directly to WordPress...`,
+                );
+                await fetch(`/api/articles/${finalArtId}/push-wp`, {
+                  method: "POST",
+                });
+                setAutopilotLog(
+                  `🎉 [Job ${jobNum}/${totalJobs}] SUCCESS! Live synced to WordPress!`,
+                );
+              }
 
-        if (!finalArtId) {
-          const latestResponse = await fetch("/api/articles");
-          if (latestResponse.ok) {
-            const list = await latestResponse.json();
-            if (list && list.length > 0) {
-              finalArtId = list[0].id;
+              // Increment processed count
+              setAutopilotProcessedCounts((prev) => ({
+                ...prev,
+                [chosenNiche]: (prev[chosenNiche] ?? 0) + 1,
+              }));
+            } else {
+              setAutopilotLog(
+                `❌ [Job ${globalIdx + 1}/${totalJobs}] Failed to resolve article ID for finishing.`,
+              );
             }
-          }
-        }
-
-        if (autopilotStopRequestRef.current) {
-          setAutopilotLog(
-            "🛑 Active Autopilot sequence forcefully STOPPED by user.",
-          );
-          break;
-        }
-
-        if (finalArtId) {
-          setAutopilotLog(
-            `⚡ [Job ${jobNum}/${totalJobs}] Syndicating & Publishing directly as approved draft!`,
-          );
-          const pubRes = await fetch(`/api/articles/${finalArtId}`, {
-            method: "PATCH",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ status: "published" }),
-          });
-
-          if (pubRes.ok) {
-            setAutopilotLog(
-              `🎉 [Job ${jobNum}/${totalJobs}] SUCCESS! Article drafted, illustrated, refined, and syndicated successfully.`,
-            );
-          } else {
-            setAutopilotLog(
-              `⚠️ [Job ${jobNum}/${totalJobs}] Article saved as active draft but syndication returned status error.`,
-            );
-          }
-
-          if (autopilotSystems.wordpressSyndication) {
-            if (autopilotStopRequestRef.current) break;
-            setAutopilotLog(
-              `🌐 [Job ${jobNum}/${totalJobs}] Sending post directly to configured WordPress Syndicate site...`,
-            );
-            await fetch(`/api/articles/${finalArtId}/push-wp`, {
-              method: "POST",
-            });
-            setAutopilotLog(
-              `🎉 [Job ${jobNum}/${totalJobs}] SUCCESS! Fully pushed and live synced to WordPress!`,
-            );
-          }
-
-          // Increment processed count for this niche!
-          setAutopilotProcessedCounts((prev) => ({
-            ...prev,
-            [chosenNiche]: (prev[chosenNiche] ?? 0) + 1,
-          }));
-        } else {
-          setAutopilotLog(
-            `❌ [Job ${jobNum}/${totalJobs}] Failed to resolve created article ID for autopilot finishing.`,
-          );
-        }
+          }),
+        );
       }
     } catch (error: any) {
       console.error("Autopilot process failed:", error);
@@ -1648,42 +2725,11 @@ export default function App() {
     }
   };
 
+  // The background scheduler has been permanently removed/disabled per user request
+  // to ensure no tasks run for unlimited time (which exceeds API quotas).
   useEffect(() => {
-    let interval: any = null;
-    if (autopilotSchedulerActive && !isAutopilotRunningCycle) {
-      interval = setInterval(() => {
-        setAutopilotCountdown((prev) => {
-          if (prev <= 1) {
-            handleExecuteAutopilotCycleInstantly();
-            return 45;
-          }
-          return prev - 1;
-        });
-      }, 1000);
-    } else {
-      if (interval) clearInterval(interval);
-    }
-    return () => {
-      if (interval) clearInterval(interval);
-    };
-  }, [
-    autopilotSchedulerActive,
-    isAutopilotRunningCycle,
-    selectedNiche,
-    writers,
-    rewriteDepth,
-    rewriteSubstyle,
-    rewriteCustomFacts,
-    rewriteCustomKeywords,
-    rewriteAdsenseOptimized,
-    copilotTargetAudience,
-    copilotTone,
-    copilotStructure,
-    copilotSeoStrategy,
-    copilotContentObjectives,
-    copilotConversionOptimization,
-    autopilotSystems,
-  ]);
+    // Deliberately empty, tasks are no longer scheduled to loop infinitely
+  }, [autopilotSchedulerActive]);
 
   const currentNicheConfig =
     niches.find((n) => n.id === selectedNiche) || niches[0];
@@ -1714,25 +2760,93 @@ export default function App() {
           <label className="block text-[8.5px] font-black text-[#8B8E96] uppercase tracking-widest mb-1.5 font-mono">
             TENANT PROJECT/BLOG
           </label>
-          <div className="relative">
+          <div className="relative space-y-2">
             <select
               value={selectedNiche}
               onChange={(e) => {
                 setSelectedNiche(e.target.value as NicheType);
                 setSelectedSource(null);
               }}
-              className="w-full text-xs font-bold text-[#0D1219] dark:text-slate-205 bg-slate-50 dark:bg-slate-950 border border-[#E3E5E8] dark:border-slate-800 rounded-xl p-2.5 outline-none cursor-pointer focus:ring-1 focus:ring-[#5F528E] transition"
+              className="w-full text-xs font-bold text-[#0D1219] dark:text-slate-200 bg-slate-50 dark:bg-slate-950 border border-[#E3E5E8] dark:border-slate-800 rounded-xl p-2.5 outline-none cursor-pointer focus:ring-1 focus:ring-[#5F528E] transition"
             >
-              {niches.map((n) => (
-                <option key={n.id} value={n.id}>
-                  {n.id === "hollywood"
-                    ? "🎬 Gossip & Glam"
-                    : n.id === "sports"
-                      ? "🏀 The Arena"
-                      : "💻 Alpha Teardown"}
-                </option>
-              ))}
+              {niches.map((n) => {
+                let icon = "🌐";
+                if (n.id === "hollywood") icon = "🎬";
+                else if (n.id === "sports") icon = "🏀";
+                else if (n.id === "tech") icon = "💻";
+                else if (n.id === "traveling") icon = "🧭";
+                else if (n.id.includes("mystery") || n.id.includes("mystirious")) icon = "🕵️‍♂️";
+                else if (n.id.includes("top-10") || n.id.includes("top10")) icon = "🔟";
+                else if (n.id.includes("fact") || n.id.includes("facts")) icon = "💡";
+
+                return (
+                  <option key={n.id} value={n.id}>
+                    {icon} {n.name}
+                  </option>
+                );
+              })}
             </select>
+
+            <div className="flex gap-1.5 mt-2">
+              <button
+                onClick={() => {
+                  setNicheCreationError("");
+                  setShowNicheModal(true);
+                }}
+                className="flex-1 h-8 flex items-center justify-center gap-1 text-[9.5px] font-black text-[#3F5353] dark:text-indigo-300 hover:text-white bg-[#F0F1F2] hover:bg-[#3F5353] dark:bg-slate-900/45 dark:hover:bg-indigo-650 border border-dashed border-[#C3C5C8] dark:border-slate-800 hover:border-solid rounded-lg transition cursor-pointer font-sans"
+                title="Add Custom Niche"
+              >
+                <Plus className="w-3 h-3" /> Niche
+              </button>
+
+              <button
+                onClick={() => {
+                  const currNiche = niches.find((n) => n.id === selectedNiche);
+                  if (currNiche) {
+                    setEditingNicheId(currNiche.id);
+                    setEditingNicheName(currNiche.name);
+                    setEditingNicheTagline(currNiche.tagline || "");
+                    setEditingNicheTheme(currNiche.themeStyle || "editorial");
+                    setEditingNichePrimaryColor(currNiche.primaryColor || "");
+                    setEditingNicheAccentColor(currNiche.accentColor || "");
+                    setEditingNicheFontFamily(currNiche.fontFamily || "Space Grotesk");
+                    setShowEditNicheModal(true);
+                  }
+                }}
+                className="h-8 px-2 flex items-center justify-center gap-1 text-[9.5px] font-black text-slate-700 dark:text-slate-300 bg-slate-100 hover:bg-slate-200 dark:bg-slate-900 dark:hover:bg-slate-800 border border-[#E3E5E8] dark:border-slate-800 rounded-lg transition cursor-pointer"
+                title="Edit Selected Niche"
+              >
+                ⚙️ Setup
+              </button>
+
+              <button
+                type="button"
+                onClick={async () => {
+                  const currNiche = niches.find((n) => n.id === selectedNiche);
+                  if (!currNiche) return;
+                  try {
+                    const response = await fetch(`/api/niches/${currNiche.id}`, {
+                      method: "DELETE",
+                    });
+                    if (response.ok) {
+                      const remaining = niches.filter((n) => n.id !== currNiche.id);
+                      const nextNicheId = remaining[0]?.id || "hollywood";
+                      setSelectedNiche(nextNicheId);
+                      await fetchConfig();
+                    } else {
+                      const err = await response.json();
+                      console.error(`Failed to delete niche:`, err.error || "Unknown server error.");
+                    }
+                  } catch (e: any) {
+                    console.error(`Network error to delete niche:`, e.message);
+                  }
+                }}
+                className="h-8 px-2 flex items-center justify-center gap-1 text-[9.5px] font-black text-red-650 dark:text-rose-455 bg-red-50 hover:bg-red-100 dark:bg-rose-950/20 dark:hover:bg-[#4C1D24] border border-red-200 dark:border-rose-900/40 rounded-lg transition cursor-pointer"
+                title="Delete Niche"
+              >
+                <Trash2 className="w-3 h-3" />
+              </button>
+            </div>
           </div>
         </div>
 
@@ -1858,6 +2972,19 @@ export default function App() {
             <FileCode className="w-4 h-4 text-purple-500" />
             <span>API Engine Config</span>
           </button>
+
+          <button
+            id="admin-tab-logs"
+            onClick={() => setActiveAdminTab("logs")}
+            className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold cursor-pointer transition text-left ${
+              activeAdminTab === "logs"
+                ? "bg-[#F0F1F2] dark:bg-slate-800 text-[#0D1219] dark:text-white font-bold"
+                : "text-[#8B8E96] hover:text-[#0D1219] dark:hover:text-white hover:bg-slate-50 dark:hover:bg-slate-900/60"
+            }`}
+          >
+            <Terminal className="w-4 h-4 text-emerald-500" />
+            <span>Unified System Logs</span>
+          </button>
         </nav>
 
         {/* Tenant Stats Card inside Sidebar */}
@@ -1923,7 +3050,7 @@ export default function App() {
             </div>
 
             {/* Select site niche drop and navigation items */}
-            <div className="mb-4">
+            <div className="mb-4 space-y-2">
               <label className="block text-[9px] font-bold text-[#8B8E96] uppercase tracking-wider mb-1 font-mono">
                 Select Active Niche
               </label>
@@ -1942,6 +3069,17 @@ export default function App() {
                   </option>
                 ))}
               </select>
+
+              <button
+                onClick={() => {
+                  setNicheCreationError("");
+                  setShowNicheModal(true);
+                  setMobileSidebarOpen(false);
+                }}
+                className="w-full h-8 flex items-center justify-center gap-1 text-[10px] font-bold text-[#3F5353] dark:text-indigo-300 bg-[#F0F1F2] dark:bg-slate-900 border border-dashed border-[#C3C5C8] dark:border-slate-800 rounded-lg transition cursor-pointer font-sans"
+              >
+                <span>+ Add Custom Niche</span>
+              </button>
             </div>
 
             {/* Side list of command keys */}
@@ -2034,6 +3172,21 @@ export default function App() {
               >
                 <Globe className="w-4 h-4 text-[#3F5353] dark:text-[#5F528E]" />
                 <span>WordPress Sync Gate</span>
+              </button>
+
+              <button
+                onClick={() => {
+                  setActiveAdminTab("logs");
+                  setMobileSidebarOpen(false);
+                }}
+                className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-xs font-semibold cursor-pointer transition text-left ${
+                  activeAdminTab === "logs"
+                    ? "bg-[#F0F1F2] dark:bg-slate-800 text-[#0D1219] dark:text-white font-bold"
+                    : "text-[#8B8E96]"
+                }`}
+              >
+                <Terminal className="w-4 h-4 text-[#3F5353] dark:text-[#5F528E]" />
+                <span>Unified System Logs</span>
               </button>
             </nav>
           </div>
@@ -2236,13 +3389,59 @@ export default function App() {
           </div>
         </header>
 
+        {isFirestoreQuotaExceeded && (
+          <div className="mx-6 mt-4 p-5 bg-gradient-to-r from-amber-500/10 via-amber-600/5 to-transparent border border-amber-500/20 rounded-2xl flex flex-col md:flex-row md:items-center justify-between gap-5 shadow-sm text-left animate-in fade-in slide-in-from-top-4 duration-300">
+            <div className="space-y-2 max-w-4xl">
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] font-black tracking-widest text-amber-600 dark:text-amber-400 uppercase font-mono px-2 py-0.5 bg-amber-500/10 border border-amber-500/20 rounded-full inline-block">
+                  ⚠️ CLOUD DATA NOTIFICATION
+                </span>
+                <span className="text-[10px] font-bold text-slate-400 font-mono">
+                  Database ID: {firestoreDatabaseId}
+                </span>
+              </div>
+              <h4 className="text-sm font-black text-slate-800 dark:text-amber-100 uppercase tracking-wider font-sans">
+                Firestore Daily Write Quota Exhausted
+              </h4>
+              <p className="text-[11.5px] leading-relaxed text-slate-600 dark:text-slate-300">
+                Your Firebase project <code className="font-mono text-amber-600 dark:text-amber-400 bg-amber-500/5 px-1 py-0.5 rounded">{firebaseProjectId}</code> has hit its free-tier daily write limit (20,000 writes/day). 
+                <span className="font-semibold block mt-1.5 text-slate-700 dark:text-emerald-400">
+                  🛡️ Reassurance Guard: Your drafts, writers, and automated RSS engines remain 100% functional! 
+                </span>
+                We have automatically engaged our secondary self-contained backup storage (<code className="font-mono">db.json</code>) so that all edits persist locally. Your autonomous workflows and remote WordPress connections are completely unimpeded.
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2 shrink-0">
+              <a
+                href={`https://console.firebase.google.com/project/${firebaseProjectId}/firestore/databases/${firestoreDatabaseId}/data?openUpgradeDialog=true`}
+                target="_blank"
+                referrerPolicy="no-referrer"
+                className="text-[11.5px] font-black uppercase tracking-wider text-slate-900 bg-amber-400 hover:bg-amber-300 px-4 py-2 rounded-xl transition duration-150 inline-flex items-center gap-1.5 shadow-sm select-none"
+              >
+                <span>🚀 Lift Quota / Enable Billing</span>
+              </a>
+              <button
+                type="button"
+                onClick={async () => {
+                  await fetchConfig();
+                  await fetchSaaSSettings();
+                }}
+                className="text-[11.5px] font-bold uppercase tracking-wider text-slate-700 dark:text-slate-300 hover:text-white bg-slate-200 dark:bg-slate-900 hover:bg-slate-300 dark:hover:bg-slate-800 border border-slate-300 dark:border-slate-800 px-4 py-2 rounded-xl transition duration-150 shadow-sm cursor-pointer"
+              >
+                🔄 Recheck Status
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Main Dashboard Interactive Area */}
         <main className="max-w-[1680px] mx-auto p-4 md:p-6 w-full flex-grow">
+
           {/* Main Grid: split 12 columns layout as a beautiful spacious bento workspace */}
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 lg:items-stretch w-full">
             {/* Control Column - Left area for active command suites (lg:col-span-4 xl:col-span-3) */}
             <div
-              className={`${activeAdminTab === "dashboard" ? "lg:hidden" : ["settings", "feeds", "writers", "contentFactory"].includes(activeAdminTab) ? "lg:col-span-12" : "lg:col-span-4 xl:col-span-3"} space-y-6 flex flex-col lg:h-full w-full`}
+              className={`${activeAdminTab === "dashboard" ? "lg:hidden" : ["settings", "feeds", "writers", "contentFactory", "logs"].includes(activeAdminTab) ? "lg:col-span-12" : "lg:col-span-4 xl:col-span-3"} space-y-6 flex flex-col lg:h-full w-full`}
             >
               {/* Legacy tab selector wrapper for screen compliance and fallback toggle on mobile select screen */}
               <div
@@ -2259,6 +3458,7 @@ export default function App() {
                     "feeds",
                     "wordpress",
                     "settings",
+                    "logs",
                   ] as const
                 ).map((tab) => (
                   <button
@@ -2286,7 +3486,9 @@ export default function App() {
                                   ? "📡 Feeds"
                                   : tab === "wordpress"
                                     ? "🔌 WP"
-                                    : "⚙️ Config"}
+                                    : tab === "logs"
+                                      ? "💻 Logs"
+                                      : "⚙️ Config"}
                   </button>
                 ))}
               </div>
@@ -2299,6 +3501,92 @@ export default function App() {
                   {/* TAB 1: RSS PUBLIC CRAWLER SOURCE LIST (Moved to Editorial Catalog) */}
                   {activeAdminTab === "contentFactory" && (
                     <div className="flex flex-col h-full overflow-hidden justify-between">
+                      {/* REAL TIME MULTI AGENT CONSOLE PANEL (Displays on top of catalog) */}
+                      {showCouncilModal && (
+                        <div className="bg-slate-955 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl p-5 shadow-2xl relative overflow-hidden mb-6">
+                          <div className="absolute top-3 right-3 flex items-center gap-2">
+                            {isRewriting && (
+                              <button
+                                id="btn-abort-active-rewrite"
+                                onClick={() => {
+                                  if (rewriteAbortControllerRef.current) {
+                                    rewriteAbortControllerRef.current.abort();
+                                  }
+                                  if (autopilotJobAbortControllerRef.current) {
+                                    autopilotJobAbortControllerRef.current.abort();
+                                  }
+                                  autopilotStopRequestRef.current = true;
+                                  setIsRewriting(false);
+                                }}
+                                className="text-white hover:bg-rose-700 bg-rose-600 border border-rose-500 px-3 py-1.5 rounded-lg text-xs font-bold transition-all scroll-smooth shadow-lg cursor-pointer"
+                              >
+                                🛑 Force Abort Rewrite
+                              </button>
+                            )}
+                            <button
+                              id="btn-close-council"
+                              onClick={() => setShowCouncilModal(false)}
+                              className="text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-white font-sans text-xs bg-slate-100 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 px-3 py-1.5 rounded-lg transition-all cursor-pointer"
+                            >
+                              Close & Minimize
+                            </button>
+                          </div>
+
+                          <div className="flex items-center gap-2 pb-2.5 border-b border-slate-200 dark:border-slate-800 mb-4 animate-fade-in">
+                            <Terminal className="w-5 h-5 text-rose-500 animate-pulse" />
+                            <span className="text-xs font-mono font-black text-slate-800 dark:text-white uppercase tracking-wider">
+                              Live Agentic Workflow monitor
+                            </span>
+                            <span className="text-[9px] bg-indigo-50 dark:bg-indigo-950/50 text-indigo-600 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800/20 px-1.5 py-0.5 rounded font-mono font-bold">
+                              Autonomous Multi-Agent Council
+                            </span>
+                          </div>
+
+                          <div className="grid grid-cols-1 gap-4">
+                            {/* Active rewrite message focus */}
+                            <div className="bg-slate-50 dark:bg-slate-900/60 p-4 rounded-xl border border-slate-200 dark:border-slate-800/80">
+                              <div className="text-[9px] text-[#7c3aed] font-extrabold uppercase tracking-widest font-mono">
+                                Focus Story Source Topic
+                              </div>
+                              <h4 className="text-sm font-black text-slate-800 dark:text-white mt-1 pr-12 line-clamp-1">
+                                {selectedSource?.title || "Evaluating Opportunity Feed Stream..."}
+                              </h4>
+                              <div className="text-[11px] text-slate-550 dark:text-slate-400 mt-2.5 flex flex-wrap items-center gap-3 font-sans">
+                                <span className="font-semibold text-rose-500 dark:text-rose-400">
+                                  Writer Persona:{" "}
+                                  {selectedWriterId === "auto"
+                                    ? `Autopilot Digital Specialist ✨${resolvedWriterId ? ` (Resolved to: ${writers.find((w) => w.id === resolvedWriterId)?.name || "Strategic Editor"})` : ""}`
+                                    : (writers.find((w) => w.id === selectedWriterId)?.name || "Strategic Editor")
+                                  }
+                                </span>
+                                <span>•</span>
+                                <span className="flex items-center gap-1.5">
+                                  Status:
+                                  {isRewriting ? (
+                                    <span className="text-rose-500 dark:text-rose-400 flex items-center gap-1 animate-pulse font-bold">
+                                      Processing Step{" "}
+                                      <RefreshCw className="w-3 h-3 animate-spin inline-block ml-0.5" />
+                                    </span>
+                                  ) : (
+                                    <span className="text-emerald-600 dark:text-emerald-400 font-bold flex items-center gap-1">
+                                      ● successfully generated!
+                                    </span>
+                                  )}
+                                </span>
+                              </div>
+                            </div>
+
+                            {/* Sub logs container mapping */}
+                            <div className="mt-1">
+                              <AgentFlowVisualizer
+                                logs={activeWorkflowLogs}
+                                currentStep={workflowCurrentStep}
+                                isGenerating={isRewriting}
+                              />
+                            </div>
+                          </div>
+                        </div>
+                      )}
                       <div>
                         <div className="flex items-center justify-between pb-3.5 border-b border-[#E3E5E8] dark:border-slate-800/60">
                           <div>
@@ -2323,6 +3611,66 @@ export default function App() {
                               {isSyncingFeeds ? "Syncing..." : "Sync Feeds"}
                             </span>
                           </button>
+                        </div>
+
+                        {/* Pathway Niche Filter Tabs */}
+                        <div className="mt-3.5 bg-slate-50 dark:bg-[#070b14]/40 p-3 rounded-2xl border border-dashed border-[#E3E5E8] dark:border-slate-805">
+                          <label className="block text-[8.5px] font-black text-[#8B8E96] dark:text-slate-500 uppercase tracking-widest mb-2 font-mono">
+                            Filter Articles By Niche Pathway
+                          </label>
+                          <div className="flex flex-wrap gap-1.5">
+                            <button
+                              id="btn-filter-niche-all"
+                              type="button"
+                              onClick={() => setHeadlineNicheFilter("all")}
+                              className={`px-2.5 py-1 text-[9.5px] font-bold rounded-lg border transition-all cursor-pointer flex items-center gap-1.5 ${
+                                headlineNicheFilter === "all"
+                                  ? "bg-indigo-600 text-white border-indigo-600 shadow-sm font-extrabold"
+                                  : "bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-400 border-slate-200 dark:border-slate-800 hover:bg-slate-55 dark:hover:bg-slate-850"
+                              }`}
+                            >
+                              <span>📚</span>
+                              <span>All Niches</span>
+                              <span className={`text-[8px] px-1 rounded-md ${
+                                headlineNicheFilter === "all" ? "bg-indigo-700 text-white" : "bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400"
+                              }`}>
+                                {allSuggestedSources.length}
+                              </span>
+                            </button>
+                            {niches.map((n) => {
+                              const count = allSuggestedSources.filter(s => s.niche === n.id).length;
+                              let icon = "🌐";
+                              if (n.id === "hollywood") icon = "🎬";
+                              else if (n.id === "sports") icon = "🏀";
+                              else if (n.id === "tech") icon = "💻";
+                              else if (n.id === "traveling") icon = "🧭";
+                              else if (n.id.includes("mystery") || n.id.includes("mystirious")) icon = "🕵️‍♂️";
+                              else if (n.id.includes("top-10") || n.id.includes("top10")) icon = "🔟";
+                              else if (n.id.includes("fact") || n.id.includes("facts")) icon = "💡";
+
+                              return (
+                                <button
+                                  key={n.id}
+                                  id={`btn-filter-niche-${n.id}`}
+                                  type="button"
+                                  onClick={() => setHeadlineNicheFilter(n.id)}
+                                  className={`px-2.5 py-1 text-[9.5px] font-bold rounded-lg border transition-all cursor-pointer flex items-center gap-1.5 ${
+                                    headlineNicheFilter === n.id
+                                      ? "bg-indigo-600 text-white border-indigo-600 shadow-sm font-extrabold"
+                                      : "bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-400 border-slate-200 dark:border-slate-800 hover:bg-slate-55 dark:hover:bg-slate-850"
+                                  }`}
+                                >
+                                  <span>{icon}</span>
+                                  <span>{n.name}</span>
+                                  <span className={`text-[8px] px-1 rounded-md ${
+                                    headlineNicheFilter === n.id ? "bg-indigo-700 text-white" : "bg-slate-100 dark:bg-slate-800 text-slate-500"
+                                  }`}>
+                                    {count}
+                                  </span>
+                                </button>
+                              );
+                            })}
+                          </div>
                         </div>
 
                         {/* Segmented Mode Selector Toggle */}
@@ -2608,13 +3956,13 @@ export default function App() {
                                       </span>
                                       <button
                                         type="button"
-                                        onClick={() =>
-                                          setAutopilotProcessedCounts({
-                                            hollywood: 0,
-                                            sports: 0,
-                                            tech: 0,
-                                          })
-                                        }
+                                        onClick={() => {
+                                          const nextCounts: Record<string, number> = {};
+                                          niches.forEach((n) => {
+                                            nextCounts[n.id] = 0;
+                                          });
+                                          setAutopilotProcessedCounts(nextCounts);
+                                        }}
                                         className="text-[7.5px] px-1 py-0.5 rounded bg-[#3F5353]/15 dark:bg-[#5F528E]/15 text-[#3F5353] dark:text-[#9A8FCD] border border-[#3F5353]/25 dark:border-[#5F528E]/25 font-black hover:bg-[#3F5353]/25 dark:hover:bg-[#5F528E]/25 uppercase cursor-pointer"
                                         style={{
                                           backgroundColor: "#dadede",
@@ -2626,23 +3974,21 @@ export default function App() {
                                     </h6>
 
                                     <div className="space-y-3">
-                                      {[
-                                        {
-                                          key: "hollywood",
-                                          label: "Gossip & Glam",
-                                          emoji: "💄",
-                                        },
-                                        {
-                                          key: "sports",
-                                          label: "The Arena",
-                                          emoji: "🏀",
-                                        },
-                                        {
-                                          key: "tech",
-                                          label: "ALPHA TEARDOWN",
-                                          emoji: "🔌",
-                                        },
-                                      ].map((site) => {
+                                      {niches.map((n) => {
+                                        let icon = "🌐";
+                                        if (n.id === "hollywood") icon = "🎬";
+                                        else if (n.id === "sports") icon = "🏀";
+                                        else if (n.id === "tech") icon = "💻";
+                                        else if (n.id === "traveling") icon = "🧭";
+                                        else if (n.id.includes("mystery") || n.id.includes("mystirious")) icon = "🕵️‍♂️";
+                                        else if (n.id.includes("top-10") || n.id.includes("top10")) icon = "🔟";
+                                        else if (n.id.includes("fact") || n.id.includes("facts")) icon = "💡";
+
+                                        const site = {
+                                          key: n.id,
+                                          label: n.name,
+                                          emoji: icon,
+                                        };
                                         const limit =
                                           autopilotNicheLimits[site.key] ?? 0;
                                         const processed =
@@ -2887,6 +4233,9 @@ export default function App() {
                             }
                             className="w-full bg-white dark:bg-[#070b14] hover:bg-[#F0F1F2] dark:hover:bg-[#0c1222] border border-[#E3E5E8] dark:border-slate-800 rounded-lg p-2 text-xs text-[#0D1219] dark:text-slate-205 font-semibold focus:outline-none focus:ring-1 focus:ring-indigo-500 transition-colors cursor-pointer"
                           >
+                            <option value="auto" className="bg-white dark:bg-slate-950 text-[#0D1219] dark:text-slate-205 font-sans font-bold text-indigo-500">
+                              ⚡ Automatic Optimization
+                            </option>
                             {writers
                               .filter((w) => w.niche === selectedNiche)
                               .map((w) => (
@@ -2899,6 +4248,34 @@ export default function App() {
                                 </option>
                               ))}
                           </select>
+
+                          <div className="mt-3 pt-3 border-t border-[#E3E5E8] dark:border-slate-800/60 flex flex-col gap-1.5">
+                            <label htmlFor="select-visual-mode" className="block text-[10px] font-black text-[#5F528E] dark:text-indigo-400 uppercase tracking-widest select-none font-mono flex items-center gap-1.5">
+                              <Sparkles className="w-3.5 h-3.5 text-amber-500 animate-pulse" />
+                              <span>Article Visual Image Mode:</span>
+                            </label>
+                            <select
+                              id="select-visual-mode"
+                              value={rewriteInlineImageMode}
+                              onChange={(e) =>
+                                setRewriteInlineImageMode(e.target.value)
+                              }
+                              className="w-full bg-white dark:bg-[#070b14] hover:bg-[#F0F1F2] dark:hover:bg-[#0c1222] border border-[#E3E5E8] dark:border-slate-800 rounded-lg p-2 text-xs text-[#0D1219] dark:text-slate-205 font-bold focus:outline-none focus:ring-1 focus:ring-indigo-500 transition-all cursor-pointer"
+                            >
+                              <option value="generate" className="bg-white dark:bg-slate-950 font-bold">
+                                ✦ Render Live Images: Create and insert complete generated images
+                              </option>
+                              <option value="promptOnly" className="bg-white dark:bg-slate-950 font-bold text-violet-500 dark:text-violet-400">
+                                ✦ Offline Prompts: Extract copying cards with prompts for Midjourney/Gemini
+                              </option>
+                              <option value="none" className="bg-[#FAF9FB] dark:bg-slate-950 font-bold text-slate-500">
+                                ✦ Strip Graphics: Do not include image blocks in content body
+                              </option>
+                            </select>
+                            <p className="text-[9px] text-[#8B8E96] dark:text-slate-400 font-sans leading-normal">
+                              Control whether the multi-agent council finishes images immediately or outputs text prompts so you can run the final rendering offline or manually outside.
+                            </p>
+                          </div>
 
                           <div className="mt-2.5 pt-2.5 border-t border-slate-800/40 font-sans">
                             <button
@@ -2996,7 +4373,7 @@ export default function App() {
 
                                   <button
                                     type="button"
-                                    onClick={handleAutoSynthesizeCopilot}
+                                    onClick={() => handleAutoSynthesizeCopilot()}
                                     disabled={
                                       isSynthesizingCopilot ||
                                       (!selectedSource &&
@@ -3260,6 +4637,8 @@ export default function App() {
                                       {rewriteAdsenseOptimized ? "ON" : "OFF"}
                                     </button>
                                   </div>
+
+
                                 </div>
                               </div>
                             )}
@@ -3295,8 +4674,29 @@ export default function App() {
                               >
                                 <div>
                                   <div className="flex items-center justify-between text-[10px] text-slate-400 font-bold gap-2 flex-wrap pb-1.5">
-                                    <span className="truncate max-w-[120px] font-semibold text-slate-405 font-mono">
-                                      {source.sourceName}
+                                    <span className="truncate font-semibold text-slate-405 font-mono flex items-center gap-1.5">
+                                      <span>{source.sourceName}</span>
+                                      {(() => {
+                                        const nInfo = niches.find(n => n.id === source.niche);
+                                        if (nInfo) {
+                                          let icon = "🌐";
+                                          if (nInfo.id === "hollywood") icon = "🎬";
+                                          else if (nInfo.id === "sports") icon = "🏀";
+                                          else if (nInfo.id === "tech") icon = "💻";
+                                          else if (nInfo.id === "traveling") icon = "🧭";
+                                          else if (nInfo.id.includes("mystery") || nInfo.id.includes("mystirious")) icon = "🕵️‍♂️";
+                                          else if (nInfo.id.includes("top-10") || nInfo.id.includes("top10")) icon = "🔟";
+                                          else if (nInfo.id.includes("fact") || nInfo.id.includes("facts")) icon = "💡";
+
+                                          return (
+                                            <span className="text-[9px] px-1.5 py-0.5 bg-indigo-950/45 text-indigo-300 font-sans rounded-md border border-indigo-900/30 flex items-center gap-1" title={`Niche: ${nInfo.name}`}>
+                                              <span>{icon}</span>
+                                              <span>{nInfo.name}</span>
+                                            </span>
+                                          );
+                                        }
+                                        return null;
+                                      })()}
                                     </span>
                                     <div className="flex items-center gap-1.5">
                                       <span
@@ -3513,88 +4913,6 @@ export default function App() {
                         )}
 
 
-                {/* REAL TIME MULTI AGENT CONSOLE PANEL (Displays on top when open) */}
-                {showCouncilModal && (
-                  <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 shadow-xl relative overflow-hidden">
-                    <div className="absolute top-2 right-2 flex items-center gap-2">
-                      {isRewriting && (
-                        <button
-                          id="btn-abort-active-rewrite"
-                          onClick={() => {
-                            if (rewriteAbortControllerRef.current) {
-                              rewriteAbortControllerRef.current.abort();
-                            }
-                            if (autopilotJobAbortControllerRef.current) {
-                              autopilotJobAbortControllerRef.current.abort();
-                            }
-                            autopilotStopRequestRef.current = true;
-                            setIsRewriting(false);
-                          }}
-                          className="text-white hover:bg-rose-700 bg-rose-600 border border-rose-500 px-2.5 py-1 rounded text-xs font-bold transition-all scroll-smooth"
-                        >
-                          🛑 Force Abort Rewrite
-                        </button>
-                      )}
-                      <button
-                        id="btn-close-council"
-                        onClick={() => setShowCouncilModal(false)}
-                        className="text-slate-400 hover:text-white font-sans text-xs bg-slate-900 border border-slate-800 px-2 py-1 rounded"
-                      >
-                        Minimize Council Board
-                      </button>
-                    </div>
-
-                    <div className="flex items-center gap-2 pb-2 border-b border-slate-800 mb-3">
-                      <Terminal className="w-5 h-5 text-rose-500" />
-                      <span className="text-xs font-bold text-white uppercase tracking-wider">
-                        Live Agentic Workflow monitor
-                      </span>
-                    </div>
-
-                    <div className="flex flex-col gap-4">
-                      {/* Active rewrite message focus */}
-                      <div className="bg-slate-900 p-3 rounded-lg border border-slate-800">
-                        <div className="text-[10px] text-slate-400 font-bold uppercase tracking-widest font-sans">
-                          Focus Story Source Topic:
-                        </div>
-                        <h4 className="text-sm font-bold text-white mt-1 pr-12 line-clamp-1">
-                          {selectedSource?.title}
-                        </h4>
-                        <div className="text-[11px] text-slate-400 mt-2 flex flex-wrap items-center gap-3 font-sans">
-                          <span className="font-semibold text-rose-400">
-                            Writer Tone:{" "}
-                            {
-                              writers.find((w) => w.id === selectedWriterId)
-                                ?.name
-                            }
-                          </span>
-                          <span>•</span>
-                          <span className="flex items-center gap-1">
-                            Status:
-                            {isRewriting ? (
-                              <span className="text-rose-400 flex items-center gap-1 animate-pulse">
-                                Running{" "}
-                                <RefreshCw className="w-3 h-3 animate-spin" />
-                              </span>
-                            ) : (
-                              <span className="text-emerald-400 font-bold">
-                                Successfully rewrite drafted! Checked.
-                              </span>
-                            )}
-                          </span>
-                        </div>
-                      </div>
-
-                      {/* Sub logs container mapping */}
-                      <AgentFlowVisualizer
-                        logs={activeWorkflowLogs}
-                        currentStep={workflowCurrentStep}
-                        isGenerating={isRewriting}
-                      />
-                    </div>
-                  </div>
-                )}
-
                       </div>
                     </div>
                   )}
@@ -3603,7 +4921,7 @@ export default function App() {
                   {activeAdminTab === "writers" && (
                     <div className="flex flex-col h-full overflow-hidden justify-between">
                       <div>
-                        <div className="flex items-center justify-between pb-3 border-b border-slate-205 dark:border-slate-850">
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-3 border-b border-slate-205 dark:border-slate-850 gap-2">
                           <div>
                             <h4 className="text-xs font-black text-[#0D1219] dark:text-slate-101 uppercase tracking-widest font-mono flex items-center gap-1.5">
                               <Users className="w-4 h-4 text-violet-500" />
@@ -3614,53 +4932,83 @@ export default function App() {
                               rules, and AI correction
                             </p>
                           </div>
-                          <button
-                            id="btn-show-add-writer"
-                            onClick={() => {
-                              setShowAddWriter(!showAddWriter);
-                              setSelectedSkillsTags([]);
-                              setSelectedCompetitor(
-                                nicheCompetitors[selectedNiche]?.[0] ||
-                                  "TechCrunch",
-                              );
-                            }}
-                            className="px-2.5 py-1.5 text-[10px] font-bold border border-transparent bg-indigo-650 dark:bg-[#5F528E] text-white rounded-lg flex items-center gap-1 hover:bg-opacity-90 active:scale-95 transition-all cursor-pointer shadow-sm font-mono"
-                          >
-                            <Plus className="w-3 h-3 text-white" />
-                            {showAddWriter ? "View Profiles" : "Design Specialist"}
-                          </button>
+                          
+                          {/* SUB TAB SELECTOR */}
+                          <div className="flex items-center gap-1">
+                            <button
+                              id="vs-subtab-profiles"
+                              type="button"
+                              onClick={() => {
+                                setVoiceStudioSubTab("profiles");
+                                setShowAddWriter(false);
+                              }}
+                              className={`px-2.5 py-1 text-[10px] font-bold font-mono rounded border transition-all cursor-pointer ${
+                                voiceStudioSubTab === "profiles"
+                                  ? "bg-violet-600 text-white border-violet-600 shadow-sm font-black"
+                                  : "bg-transparent border-slate-200 dark:border-slate-800 text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-white"
+                              }`}
+                            >
+                              Profiles List 📁
+                            </button>
+                            <button
+                              id="vs-subtab-create"
+                              type="button"
+                              onClick={() => {
+                                setVoiceStudioSubTab("create");
+                                setShowAddWriter(true);
+                                setEditingWriterId(null);
+                                setNewWriterName("");
+                                setNewWriterVoice("");
+                                setNewWriterNiche(selectedNiche);
+                                setNewWriterBio("");
+                                setNewWriterInstruction("");
+                                setSelectedSkillsTags([]);
+                              }}
+                              className={`px-2.5 py-1 text-[10px] font-bold font-mono rounded border transition-all cursor-pointer ${
+                                voiceStudioSubTab === "create"
+                                  ? "bg-violet-600 text-white border-violet-600 shadow-sm font-black"
+                                  : "bg-transparent border-slate-200 dark:border-slate-800 text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-white"
+                              }`}
+                            >
+                              {editingWriterId ? "Edit Specialist ✍️" : "Hire Specialist ➕"}
+                            </button>
+                            <button
+                              id="vs-subtab-skills"
+                              type="button"
+                              onClick={() => {
+                                setVoiceStudioSubTab("skills");
+                                setShowAddWriter(false);
+                              }}
+                              className={`px-2.5 py-1 text-[10px] font-bold font-mono rounded border transition-all cursor-pointer ${
+                                voiceStudioSubTab === "skills"
+                                  ? "bg-violet-600 text-white border-violet-600 shadow-sm font-black"
+                                  : "bg-transparent border-slate-200 dark:border-slate-800 text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-white"
+                              }`}
+                            >
+                              Skill Manager ⚙️
+                            </button>
+                          </div>
                         </div>
                       </div>
 
-                      {showAddWriter ? (
+                      {voiceStudioSubTab === "create" ? (
                         /* Create Custom Tone Writer form / Editorial Voice Studio */
                         <form
                           onSubmit={handleCreateWriter}
-                          className="flex-1 overflow-y-auto space-y-4 mt-4 pr-1 max-h-[580px] lg:max-h-[740px]"
+                          className="flex-1 min-h-0 overflow-y-auto space-y-4 mt-4 pr-1"
                         >
                           {/* COMPETITOR SELECTOR */}
                           <div className="space-y-1.5 bg-[#F8F9FA]/60 dark:bg-slate-950/45 p-3 rounded-xl border border-slate-200 dark:border-slate-850">
                             <label className="text-[9.5px] font-bold text-slate-500 dark:text-slate-400 block uppercase tracking-wider font-mono">
                               1. Target Competitor blueprint
                             </label>
-                            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                              {(nicheCompetitors[selectedNiche] || []).map(
-                                (comp) => (
-                                  <button
-                                    key={comp}
-                                    type="button"
-                                    onClick={() => setSelectedCompetitor(comp)}
-                                    className={`p-2 rounded-lg border text-center text-[10.5px] font-bold transition-all ${
-                                      selectedCompetitor === comp
-                                        ? "bg-indigo-600 text-white border-indigo-600 shadow-sm font-extrabold"
-                                        : "bg-white dark:bg-[#070b14] text-slate-600 dark:text-slate-400 border-slate-200 dark:border-slate-805 hover:bg-slate-50 dark:hover:bg-slate-900"
-                                    }`}
-                                  >
-                                    {comp}
-                                  </button>
-                                ),
-                              )}
-                            </div>
+                            <input
+                              type="text"
+                              value={selectedCompetitor}
+                              onChange={(e) => setSelectedCompetitor(e.target.value)}
+                              placeholder="e.g. TMZ, The Verge, ESPN, Vogue"
+                              className="w-full text-xs font-semibold text-[#0D1219] dark:text-white bg-white dark:bg-slate-900 border border-[#E3E5E8] dark:border-slate-800 rounded-lg p-2.5 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                            />
                           </div>
 
                           {/* SKILL TAGS SELECTOR */}
@@ -3670,41 +5018,56 @@ export default function App() {
                               multiple)
                             </label>
                             <div className="flex flex-wrap gap-1.5">
-                              {(nicheSkills[selectedNiche] || []).map(
-                                (skill) => {
-                                  const isSelected =
-                                    selectedSkillsTags.includes(skill);
+                              {skills
+                                .filter((s: any) => s.niche === selectedNiche || s.niche === "all")
+                                .map((skillObj) => {
+                                  const isSelected = selectedSkillsTags.includes(skillObj.id) || selectedSkillsTags.includes(skillObj.name);
                                   return (
                                     <button
-                                      key={skill}
+                                      key={skillObj.id}
                                       type="button"
                                       onClick={() => {
+                                        const valueToStore = skillObj.id || skillObj.name;
                                         if (isSelected) {
                                           setSelectedSkillsTags((prev) =>
-                                            prev.filter((s) => s !== skill),
+                                            prev.filter((s) => s !== skillObj.id && s !== skillObj.name),
                                           );
                                         } else {
                                           setSelectedSkillsTags((prev) => [
                                             ...prev,
-                                            skill,
+                                            valueToStore,
                                           ]);
                                         }
                                       }}
-                                      className={`px-2.5 py-1.5 rounded-lg text-[10px] font-bold border transition-all flex items-center gap-1 ${
+                                      className={`px-2.5 py-1.5 rounded-lg text-[10px] font-bold border transition-all flex items-center gap-1 cursor-pointer ${
                                         isSelected
                                           ? "bg-violet-605/10 text-violet-600 dark:text-violet-400 border-violet-500/40 shadow-xs"
                                           : "bg-white dark:bg-[#070b14] text-slate-600 dark:text-slate-400 border-slate-200 dark:border-slate-805 hover:bg-slate-50 dark:hover:bg-slate-900"
                                       }`}
                                     >
-                                      <span>{skill}</span>
+                                      <span>{skillObj.name}</span>
                                       {isSelected && (
                                         <span className="text-[8px]">✨</span>
                                       )}
                                     </button>
                                   );
-                                },
-                              )}
+                                })}
                             </div>
+                          </div>
+
+                          <div className="space-y-1.5 bg-[#F8F9FA]/60 dark:bg-slate-950/45 p-3 rounded-xl border border-slate-200 dark:border-slate-850 mb-4">
+                            <label className="text-[9.5px] font-bold text-slate-500 dark:text-slate-400 block uppercase tracking-wider font-mono">
+                              Assigned Editorial Niche
+                            </label>
+                            <select
+                              value={newWriterNiche || selectedNiche}
+                              onChange={(e) => setNewWriterNiche(e.target.value)}
+                              className="w-full text-xs font-semibold text-[#0D1219] dark:text-white bg-white dark:bg-slate-900 border border-[#E3E5E8] dark:border-slate-800 rounded-lg p-2.5 focus:outline-none focus:ring-1 focus:ring-indigo-500 transition-all outline-none"
+                            >
+                              {niches.map((n) => (
+                                <option key={n.id} value={n.id}>{n.name}</option>
+                              ))}
+                            </select>
                           </div>
 
                           {/* DRAFT IDENTITY NAME & VOICE */}
@@ -3751,8 +5114,8 @@ export default function App() {
                                 className={`w-3.5 h-3.5 text-white ${isCorrectingWriter ? "animate-spin" : ""}`}
                               />
                               {isCorrectingWriter
-                                ? "Synthesizing tone matrix with Gemini..."
-                                : "✨ Optimize & Correct Writer with Gemini"}
+                                ? "Synthesizing tone matrix using AI Orchestrator..."
+                                : "✨ Synthesize Tone Strategy using AI"}
                             </button>
                           </div>
 
@@ -3790,126 +5153,624 @@ export default function App() {
                             </div>
                           </div>
 
+                           {/* VALIDATION HELPER */}
+                          {(!newWriterName || !newWriterVoice || !newWriterInstruction) && (
+                            <div className="p-3 bg-amber-50 dark:bg-amber-955/20 border border-amber-205 dark:border-amber-500/20 rounded-xl space-y-1 mt-2">
+                              <p className="text-[10px] font-black text-amber-600 dark:text-amber-400 uppercase tracking-widest font-mono">
+                                ⚠️ Requirements to Register Specialist:
+                              </p>
+                              <ul className="text-[10px] text-slate-600 dark:text-slate-350 list-disc list-inside space-y-0.5 font-medium">
+                                {!newWriterName && <li>Provide a <strong className="text-slate-800 dark:text-white">Draft Writer Full Name</strong></li>}
+                                {!newWriterVoice && <li>Provide a <strong className="text-slate-800 dark:text-white">Draft Voice Style Identifier</strong></li>}
+                                {!newWriterInstruction && (
+                                  <li>
+                                    Compile <strong className="text-slate-800 dark:text-white">Linguistic Tone Concept Directives</strong> (Click the <em className="text-violet-600 dark:text-violet-400 font-bold font-sans">"✨ Synthesize Tone Strategy using AI"</em> button above)
+                                  </li>
+                                )}
+                              </ul>
+                            </div>
+                          )}
+
                           {/* FORM CONTROL BUTTONS */}
-                          <div className="flex items-center gap-3 pt-2">
+                          <div className="flex items-center gap-3 pt-3">
                             <button
                               type="submit"
-                              className="bg-gradient-to-r from-violet-605 to-indigo-655 text-white text-xs font-bold py-2 px-4 rounded-xl shadow-lg shadow-indigo-600/10 cursor-pointer transition-all duration-300"
+                              className="bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white text-xs font-bold py-2.5 px-5 rounded-xl shadow-lg transition-all duration-300 select-none cursor-pointer"
                             >
                               Register Editorial Voice Specialist
                             </button>
                             <button
                               type="button"
                               onClick={() => {
-                                setShowAddWriter(false);
                                 setNewWriterName("");
                                 setNewWriterVoice("");
                                 setNewWriterBio("");
                                 setNewWriterInstruction("");
+                                setSelectedSkillsTags([]);
+                                setVoiceStudioSubTab("profiles");
                               }}
-                              className="text-slate-450 text-xs hover:text-slate-100 transition-colors cursor-pointer"
+                              className="text-slate-450 text-xs hover:text-slate-800 dark:hover:text-slate-100 transition-colors cursor-pointer"
                             >
                               Cancel
                             </button>
                           </div>
                         </form>
-                      ) : (
-                        /* Digital Writer portfolio layout cards & Preset Writers */
-                        <div className="flex-1 overflow-y-auto space-y-3 mt-4 pr-1 max-h-[520px] lg:max-h-[720px] select-text">
-                          {/* Active Registry */}
-                          <div className="space-y-2">
-                            <h5 className="text-[10px] font-black text-slate-500 uppercase tracking-widest font-mono">
-                              Active Registered Guild
+                      ) : voiceStudioSubTab === "skills" ? (
+                        /* Dynamic Skill Manager workspace UI styling */
+                        <div className="flex-1 min-h-0 overflow-y-auto space-y-4 mt-4 pr-1 select-text">
+                          <div className="p-4 bg-slate-50 dark:bg-slate-950/40 border border-slate-200 dark:border-slate-805 rounded-xl">
+                            <h5 className="text-[11px] font-black uppercase tracking-wider font-mono text-violet-600 dark:text-violet-400">
+                              Reusable Writer Capability Skill Manager ⚙️
                             </h5>
-                            {writers.filter((w) => w.niche === selectedNiche)
-                              .length === 0 ? (
-                              <div className="text-center p-5 bg-slate-950/40 border border-dashed border-slate-800 rounded-xl text-xs text-slate-450 font-sans">
-                                No digital reporters registered in this niche.
-                                Add your first custom writer or hire candidates
-                                below!
+                            <p className="text-[10px] text-slate-500 mt-1 leading-normal">
+                              Define and govern specialized cognitive capabilities. The guidelines, layouts, and constraints of active skills are dynamically woven directly into your digital writers' system prompts before every content generation loop.
+                            </p>
+                          </div>
+
+                          <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
+                            {/* Left Form: Create/Edit Skill */}
+                            <form onSubmit={handleSaveSkill} className="lg:col-span-4 bg-white dark:bg-slate-950/20 border border-slate-202 dark:border-slate-805 p-4 rounded-xl space-y-3.5">
+                              <h6 className="text-[10px] font-black uppercase tracking-wider font-mono text-slate-700 dark:text-slate-300 border-b border-slate-100 dark:border-slate-850 pb-1.5 flex items-center justify-between">
+                                <span>{editingSkillId ? "Edit Skill Directive ✍️" : "Define New Skill Cluster 💎"}</span>
+                                {editingSkillId && (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setEditingSkillId(null);
+                                      setNewSkillName("");
+                                      setNewSkillDirective("");
+                                    }}
+                                    className="text-[9px] font-bold text-rose-500 hover:underline cursor-pointer"
+                                  >
+                                    Reset
+                                  </button>
+                                )}
+                              </h6>
+
+                              <div className="space-y-1">
+                                <label className="text-[9.5px] font-bold text-slate-400 uppercase tracking-wider font-mono block">
+                                  Skill / Competency Name
+                                </label>
+                                <input
+                                  type="text"
+                                  required
+                                  placeholder="e.g. Dynamic Technical Analogy"
+                                  value={newSkillName}
+                                  onChange={(e) => setNewSkillName(e.target.value)}
+                                  className="w-full text-xs text-[#0D1219] dark:text-white bg-slate-50 dark:bg-[#070b14] border border-slate-205 dark:border-slate-800 rounded-lg p-2 focus:outline-none focus:ring-1 focus:ring-violet-500 outline-none"
+                                />
                               </div>
-                            ) : (
-                              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-                              {writers
-                                .filter((w) => w.niche === selectedNiche)
-                                .map((writer, idx) => {
-                                  const isFirstWriter = idx === 0;
-                                  return (
-                                    <div
-                                      key={writer.id}
-                                      className={`journalist-guild-card p-3.5 rounded-xl border flex flex-col gap-3 shadow-xs transition-all duration-300 select-text ${
-                                        isFirstWriter
-                                          ? "bg-[#3F5353]/5 dark:bg-[#5F528E]/10 border-[#3F5353] dark:border-[#5F528E]"
-                                          : "border-slate-205 dark:border-slate-800 bg-[#F8F9FA]/40 dark:bg-slate-950/25"
-                                      }`}
-                                    >
-                                      <img
-                                        src={
-                                          writer.avatar ||
-                                          "https://images.unsplash.com/photo-1542282088-72c9c27ed0cd?w=150"
-                                        }
-                                        alt={writer.name}
-                                        className="w-10 h-10 rounded-full border object-cover shrink-0 filter brightness-90 shadow-inner border-[#E3E5E8] dark:border-slate-800"
-                                        referrerPolicy="no-referrer"
-                                      />
-                                      <div className="min-w-0 flex-1">
-                                        <div className="flex items-center justify-between">
-                                          <h6 className="journalist-guild-title text-xs font-black text-[#0D1219] dark:text-slate-101 flex items-center gap-1.5 font-sans">
-                                            {isFirstWriter && (
-                                              <span className="w-1.5 h-1.5 bg-[#3F5353] dark:bg-[#5F528E] rounded-full inline-block shrink-0 animate-pulse" />
-                                            )}
-                                            {writer.name}
-                                          </h6>
-                                          <span className="journalist-guild-badge text-[8.5px] border font-mono rounded-md px-1.5 py-0.5 shrink-0 select-none bg-white dark:bg-[#070b14] border-[#E3E5E8] dark:border-slate-800 text-slate-705 dark:text-slate-400">
-                                            Rating: {writer.popularity || 85}%
-                                          </span>
-                                        </div>
 
-                                        <div className="text-[10px] font-bold uppercase tracking-wider font-mono mt-0.5 select-none text-indigo-600 dark:text-amber-400">
-                                          {writer.voiceStyle}
-                                        </div>
+                              <div className="space-y-1">
+                                <label className="text-[9.5px] font-bold text-slate-400 uppercase tracking-wider font-mono block">
+                                  Niche Affinity Target
+                                </label>
+                                <select
+                                  value={newSkillNiche}
+                                  onChange={(e) => setNewSkillNiche(e.target.value)}
+                                  className="w-full text-xs font-bold p-2 bg-slate-50 dark:bg-[#070b14] border border-slate-205 dark:border-slate-800 rounded-lg text-slate-800 dark:text-slate-300 focus:outline-none"
+                                >
+                                  <option value="all">Universal (All Niches)</option>
+                                  {niches.map((n) => (
+                                    <option key={n.id} value={n.id}>
+                                      {n.name}
+                                    </option>
+                                  ))}
+                                </select>
+                              </div>
 
-                                        <p className="journalist-guild-desc text-[11px] mt-1 leading-relaxed font-sans text-slate-600 dark:text-slate-400">
-                                          {writer.bio}
-                                        </p>
+                              <div className="space-y-1">
+                                <label className="text-[9.5px] font-bold text-slate-400 uppercase tracking-wider font-mono block">
+                                  Cognitive System Directive Instruction
+                                </label>
+                                <textarea
+                                  required
+                                  rows={5}
+                                  placeholder="Explain structural formatting, phrasing restrictions, stylistic obligations, and how the model must reason or act when this skill is requested..."
+                                  value={newSkillDirective}
+                                  onChange={(e) => setNewSkillDirective(e.target.value)}
+                                  className="w-full text-xs text-slate-800 dark:text-slate-200 bg-slate-50 dark:bg-[#070b14] border border-slate-202 dark:border-slate-800 rounded-lg p-2 focus:outline-none font-mono text-[10.5px] leading-relaxed outline-none"
+                                />
+                              </div>
 
-                                        <div className="journalist-guild-footer mt-2 text-[10px] font-mono p-2 rounded-lg border max-h-[100px] overflow-y-auto select-text text-slate-800 dark:text-slate-300 bg-white/70 dark:bg-slate-950/60 border-slate-205 dark:border-slate-855">
-                                          <strong className="text-indigo-600 dark:text-[#9A8FCD] font-bold font-mono">
-                                            Concept Directives:
-                                          </strong>{" "}
-                                          {writer.customPromptInstruction}
-                                        </div>
-                                        <div className="mt-3 flex items-center justify-end gap-2">
-                                          <button
-                                            onClick={() => handleEditWriterClick(writer)}
-                                            className="px-2.5 py-1 text-[9px] font-bold rounded border border-indigo-200 dark:border-indigo-500/30 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-900/30 font-mono transition-colors cursor-pointer"
-                                          >
-                                            Edit Profile
-                                          </button>
-                                          {!isFirstWriter && (
-                                            <button
-                                              onClick={() => handleDeleteWriter(writer.id)}
-                                              className="px-2.5 py-1 text-[9px] font-bold rounded border border-rose-200 dark:border-rose-500/30 text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-900/30 font-mono transition-colors cursor-pointer"
-                                            >
-                                              Fire Writer
-                                            </button>
-                                          )}
-                                        </div>
+                              <button
+                                type="submit"
+                                disabled={isSavingSkill}
+                                className="w-full bg-gradient-to-r from-violet-650 to-indigo-650 text-white font-bold text-xs py-2 px-3 rounded-lg hover:brightness-105 active:scale-98 transition-all duration-200 shadow-sm cursor-pointer"
+                              >
+                                {isSavingSkill ? "Applying Directives..." : editingSkillId ? "Save Directive Upgrades" : "Authorize Capability Cluster"}
+                              </button>
+                            </form>
+
+                            {/* Right List: Display Reusable Skills Catalog */}
+                            <div className="lg:col-span-8 space-y-3">
+                              <h6 className="text-[10px] font-black uppercase tracking-widest font-mono text-slate-500 dark:text-slate-400">
+                                Active Capabilities Registry
+                              </h6>
+
+                              <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
+                                {skills.map((sk: any) => (
+                                  <div key={sk.id} className="p-3.5 bg-[#F8F9FA]/40 dark:bg-slate-950/25 border border-slate-202 dark:border-slate-805 rounded-xl flex flex-col justify-between gap-3 shadow-xs">
+                                    <div className="space-y-1">
+                                      <div className="flex items-center justify-between gap-1">
+                                        <span className="font-sans text-xs font-black text-slate-850 dark:text-slate-101 truncate">
+                                          {sk.name}
+                                        </span>
+                                        <span className="text-[7.5px] font-bold font-mono px-1.5 py-0.5 rounded uppercase shrink-0 bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600 dark:text-indigo-400 border border-indigo-200/20">
+                                          {sk.niche}
+                                        </span>
                                       </div>
+                                      <p className="text-[10.5px] text-slate-600 dark:text-slate-350 leading-normal font-sans bg-white/60 dark:bg-slate-950/50 p-2 border border-slate-100 dark:border-slate-855 rounded-lg max-h-[90px] overflow-y-auto">
+                                        {sk.directive}
+                                      </p>
+                                    </div>
+                                    <div className="flex items-center justify-end gap-2 border-t border-slate-100 dark:border-slate-855 pt-2">
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setEditingSkillId(sk.id);
+                                          setNewSkillName(sk.name);
+                                          setNewSkillNiche(sk.niche || "tech");
+                                          setNewSkillDirective(sk.directive);
+                                        }}
+                                        className="px-2 py-1 text-[9px] font-bold font-mono border border-indigo-350 dark:border-indigo-500/30 text-indigo-650 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-950/30 rounded cursor-pointer transition-colors"
+                                      >
+                                        Edit Directive
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => handleDeleteSkill(sk.id)}
+                                        className="px-2 py-1 text-[9px] font-bold font-mono border border-rose-350 dark:border-rose-500/30 text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-955/30 rounded cursor-pointer transition-colors"
+                                      >
+                                        Decommission
+                                      </button>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      ) : (
+                        /* Detailed Profiles & Capability Radar chart grid split layouts */
+                        <div className="flex-1 min-h-0 overflow-y-auto space-y-4 mt-4 pr-1 select-text">
+                          <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
+                            
+                            {/* Left Side Column: Interactive concise roster lists (5 cols) */}
+                            <div className="lg:col-span-5 space-y-3">
+                              <div className="flex items-center justify-between gap-2">
+                                <h5 className="text-[10px] font-black text-slate-500 uppercase tracking-widest font-mono">
+                                  Active Editorial Specialists Guild 📁
+                                </h5>
+                                <select
+                                  value={activeWriterNicheFilter}
+                                  onChange={(e) => setActiveWriterNicheFilter(e.target.value)}
+                                  className="text-[9.5px] font-bold p-1 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded outline-none"
+                                >
+                                  <option value="all">All Niches</option>
+                                  {niches.map((n) => (
+                                    <option key={n.id} value={n.id}>{n.name}</option>
+                                  ))}
+                                </select>
+                              </div>
+                              
+                              {writers.filter((w) => activeWriterNicheFilter === "all" ? true : w.niche === activeWriterNicheFilter).length === 0 ? (
+                                <div className="text-center p-5 bg-slate-950/30 border border-dashed border-slate-805 rounded-xl text-xs text-slate-450">
+                                  No specialists registered. Click "Hire Specialist" to add one!
+                                </div>
+                              ) : (
+                                <div className="space-y-2.5">
+                                  {writers
+                                    .filter((w) => activeWriterNicheFilter === "all" ? true : w.niche === activeWriterNicheFilter)
+                                    .map((writer) => {
+                                      const isFocused = focusWriterId === writer.id || (!focusWriterId && writers.filter((w) => activeWriterNicheFilter === "all" ? true : w.niche === activeWriterNicheFilter)[0]?.id === writer.id);
+                                      return (
+                                        <div
+                                          key={writer.id}
+                                          onClick={() => setFocusWriterId(writer.id)}
+                                          className={`p-3 rounded-xl border flex items-center gap-3 shadow-xs transition-all duration-300 cursor-pointer hover:border-violet-500/40 select-text ${
+                                            isFocused
+                                              ? "bg-[#3F5353]/10 dark:bg-[#5F528E]/15 border-[#3F5353] dark:border-[#5F528E] ring-1 ring-[#3F5353]/25"
+                                              : "border-slate-205 dark:border-slate-805 bg-[#F8F9FA]/40 dark:bg-slate-950/25"
+                                          }`}
+                                        >
+                                          <img
+                                            src={writer.avatar || "https://images.unsplash.com/photo-1542282088-72c9c27ed0cd?w=150"}
+                                            alt={writer.name}
+                                            className="w-10 h-10 rounded-full border object-cover shrink-0 filter brightness-95 border-slate-202 dark:border-slate-800"
+                                            referrerPolicy="no-referrer"
+                                          />
+                                          <div className="min-w-0 flex-1">
+                                            <div className="flex items-center justify-between gap-1">
+                                              <h6 className="text-[11.5px] font-black text-slate-800 dark:text-slate-101 truncate">
+                                                {writer.name}
+                                              </h6>
+                                              <span className="text-[8.5px] border font-mono rounded px-1 shrink-0 bg-white dark:bg-slate-950 border-slate-202 dark:border-slate-800 text-slate-500">
+                                                ★ {writer.popularity || 85}%
+                                              </span>
+                                            </div>
+                                            <div className="text-[9px] font-extrabold uppercase font-mono text-indigo-500 dark:text-[#9A8FCD] truncate mt-0.5">
+                                              {writer.voiceStyle}
+                                            </div>
+                                          </div>
+                                        </div>
+                                      );
+                                    })}
+                                </div>
+                              )}
+                            </div>
+
+                            {/* Right Side Column: Dynamic detail info card + Recharts Capability Radar (7 cols) */}
+                            <div className="lg:col-span-7 space-y-4">
+                              {(() => {
+                                const nicheWriters = writers.filter((w) => activeWriterNicheFilter === "all" ? true : w.niche === activeWriterNicheFilter);
+                                const focusWriter = nicheWriters.find((w) => w.id === focusWriterId) || nicheWriters[0];
+                                
+                                if (!focusWriter) {
+                                  return (
+                                    <div className="p-8 bg-[#F8F9FA]/30 dark:bg-slate-950/20 border border-slate-205 dark:border-slate-805 rounded-xl text-center text-xs text-slate-450 italic">
+                                      Register or recruit an editorial voice candidate to instantiate visual profiles.
                                     </div>
                                   );
-                                })}
+                                }
+
+                                // Compose secure Radar Data
+                                const activeSkillsList = focusWriter.skills || [];
+                                const radarData = activeSkillsList.map((skName: string) => {
+                                  const match = skills.find((s: any) => s.id === skName || s.name === skName);
+                                  const displayName = match ? match.name : skName;
+                                  const rating = 70 + ((focusWriter.name.length + displayName.length) % 26);
+                                  return {
+                                    subject: displayName.replace(/[\uE000-\uF8FF]|\uD83C[\uDC00-\uDFFF]|\uD83D[\uDC05-\uDDFF]|[\u2011-\u26FF]|\uD83E[\uDD10-\uDDFF]/g, ''),
+                                    A: rating,
+                                    fullMark: 100
+                                  };
+                                });
+
+                                const paddedRadarData = [...radarData];
+                                if (paddedRadarData.length < 3) {
+                                  paddedRadarData.push({ subject: "Factual Safety", A: 92, fullMark: 100 });
+                                  paddedRadarData.push({ subject: "Tone Alignment", A: 88, fullMark: 100 });
+                                  paddedRadarData.push({ subject: "Paragraph Flow", A: focusWriter.popularity || 85, fullMark: 100 });
+                                }
+
+                                return (
+                                  <div className="p-4 bg-white dark:bg-slate-950/20 border border-slate-205 dark:border-slate-805 rounded-xl space-y-4 shadow-sm select-text">
+                                    <div className="flex flex-col sm:flex-row sm:items-start gap-4">
+                                      <img
+                                        src={focusWriter.avatar || "https://images.unsplash.com/photo-1542282088-72c9c27ed0cd?w=150"}
+                                        alt={focusWriter.name}
+                                        className="w-12 h-12 rounded-full border border-indigo-400/20 object-cover filter brightness-95 shadow-md shrink-0"
+                                        referrerPolicy="no-referrer"
+                                      />
+                                      <div className="min-w-0 flex-1 space-y-1">
+                                        <div className="flex flex-wrap items-center justify-between gap-1.5">
+                                          <h4 className="text-sm font-black text-slate-850 dark:text-slate-101 font-sans">
+                                            {focusWriter.name}
+                                          </h4>
+                                          <div className="flex items-center gap-1 shrink-0">
+                                            <span className="text-[8px] font-mono font-bold uppercase px-1.5 py-0.5 rounded-full bg-violet-50 dark:bg-violet-955/20 text-violet-655 dark:text-violet-400 border border-violet-150/40">
+                                              Popularity: {focusWriter.popularity || 85}%
+                                            </span>
+                                          </div>
+                                        </div>
+                                        <div className="text-[9.5px] font-extrabold uppercase font-mono text-indigo-600 dark:text-amber-400">
+                                          {focusWriter.voiceStyle}
+                                        </div>
+                                        <p className="text-[11px] text-slate-550 dark:text-slate-355 leading-relaxed font-sans mt-1.5 p-2 bg-[#F8F9FA] dark:bg-slate-950/50 rounded-lg">
+                                          {focusWriter.bio}
+                                        </p>
+                                      </div>
+                                    </div>
+
+                                    {/* CAPABILITY RADAR CHART */}
+                                    <div className="bg-slate-50 dark:bg-slate-950/70 p-3 shadow-xs border border-slate-100 dark:border-slate-855 rounded-xl space-y-2">
+                                      <h6 className="text-[9px] font-black uppercase tracking-widest font-mono text-slate-400 block border-b border-slate-201 dark:border-slate-805 pb-1">
+                                        Specialist Capability Radar 📊
+                                      </h6>
+                                      
+                                      <div className="h-48 w-full flex items-center justify-center">
+                                        <ResponsiveContainer width="100%" height="100%">
+                                          <RadarChart cx="50%" cy="50%" outerRadius="70%" data={paddedRadarData}>
+                                            <PolarGrid stroke="#475569" strokeOpacity={0.15} />
+                                            <PolarAngleAxis 
+                                              dataKey="subject" 
+                                              tick={{ fill: '#3b82f6', fontSize: 8.5, fontWeight: 'bold', fontFamily: 'monospace' }} 
+                                            />
+                                            <PolarRadiusAxis 
+                                              angle={30} 
+                                              domain={[0, 100]} 
+                                              tick={{ fill: '#64748b', fontSize: 7.5 }} 
+                                            />
+                                            <Radar 
+                                              name={focusWriter.name} 
+                                              dataKey="A" 
+                                              stroke="#8b5cf6" 
+                                              fill="#8b5cf6" 
+                                              fillOpacity={0.3} 
+                                            />
+                                          </RadarChart>
+                                        </ResponsiveContainer>
+                                      </div>
+                                      
+                                      <div className="flex flex-wrap gap-1.5 pt-1 border-t border-slate-100 dark:border-slate-805/85">
+                                        {activeSkillsList.length === 0 ? (
+                                          <span className="text-[9px] text-slate-500 italic font-mono">No explicitly assigned expertise skills. Incorporating default directives.</span>
+                                        ) : (
+                                          activeSkillsList.map((tag: string) => {
+                                            const matchObj = skills.find((s: any) => s.id === tag || s.name === tag);
+                                            return (
+                                              <span 
+                                                key={tag} 
+                                                className="bg-indigo-50/70 dark:bg-indigo-950/20 border border-indigo-200/20 text-indigo-700 dark:text-indigo-400 text-[8px] px-2 py-0.5 rounded font-mono font-black shrink-0"
+                                              >
+                                                ✦ {matchObj ? matchObj.name : tag}
+                                              </span>
+                                            );
+                                          })
+                                        )}
+                                      </div>
+                                    </div>
+
+                                    {/* Directives parameters details */}
+                                    <div className="p-3 bg-[#F8F9FA] dark:bg-slate-950/70 border border-slate-100 dark:border-slate-855 rounded-xl space-y-1">
+                                      <span className="text-[9px] font-black uppercase tracking-widest text-[#3F5353] dark:text-[#9A8FCD] block border-b border-slate-202 dark:border-slate-805 pb-1">Concept Directives Layout</span>
+                                      <p className="leading-relaxed mt-1 text-[10.5px] max-h-[140px] overflow-y-auto font-sans text-slate-650 dark:text-slate-350">
+                                        {focusWriter.customPromptInstruction}
+                                      </p>
+                                    </div>
+
+                                    {/* Compact Action Panel Footer */}
+                                    <div className="flex items-center justify-end gap-2 pr-0.5">
+                                      <button
+                                        type="button"
+                                        onClick={() => handleEditWriterClick(focusWriter)}
+                                        className="px-2 py-1 text-[9px] font-black rounded border border-indigo-200 dark:border-indigo-500/30 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-900/30 font-mono transition-colors cursor-pointer"
+                                      >
+                                        Edit Profile ✍️
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setTestingWriterId(focusWriter.id);
+                                          const sampledDraft = articles.find(a => a.niche === selectedNiche);
+                                          if (sampledDraft) {
+                                            setTestSampleText(sampledDraft.content || sampledDraft.title);
+                                          } else {
+                                            setTestSampleText("Input some draft content here to analyze stylistic alignment with the writer persona.");
+                                          }
+                                          setAlignmentResult(null);
+                                          setAlignmentTestError(null);
+                                          setTimeout(() => {
+                                            document.getElementById("writer-alignment-lab")?.scrollIntoView({ behavior: "smooth" });
+                                          }, 100);
+                                        }}
+                                        className="px-2 py-1 text-[9px] font-black rounded border border-emerald-200 dark:border-emerald-500/30 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/30 font-mono transition-colors cursor-pointer flex items-center gap-1 shrink-0"
+                                      >
+                                        Test Alignment 🧪
+                                      </button>
+                                      {nicheWriters[0]?.id !== focusWriter.id && (
+                                        writerIdToConfirmDelete === focusWriter.id ? (
+                                          <div className="flex items-center gap-1">
+                                            <span className="text-[9px] text-rose-500 font-bold px-1">Fire?</span>
+                                            <button
+                                              onClick={() => handleDeleteWriter(focusWriter.id, true)}
+                                              className="px-2 py-0.5 text-[9px] font-bold rounded bg-rose-500 text-white hover:bg-rose-600 cursor-pointer"
+                                            >
+                                              Confirm
+                                            </button>
+                                            <button
+                                              onClick={() => setWriterIdToConfirmDelete(null)}
+                                              className="px-2 py-0.5 text-[9px] font-bold rounded bg-slate-250 dark:bg-slate-750 text-slate-700 dark:text-slate-300 cursor-pointer"
+                                            >
+                                              Cancel
+                                            </button>
+                                          </div>
+                                        ) : (
+                                          <button
+                                            onClick={() => handleDeleteWriter(focusWriter.id)}
+                                            className="px-2 py-1 text-[9px] font-bold rounded border border-rose-200 dark:border-rose-500/30 text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-900/40 font-mono transition-colors cursor-pointer"
+                                          >
+                                            Fire Writer
+                                          </button>
+                                        )
+                                      )}
+                                    </div>
+                                  </div>
+                                );
+                              })()}
+                            </div>
+
+                          </div>
+                        </div>
+                      )}
+
+                          {/* WRITER ALIGNMENT LAB */}
+                          <div id="writer-alignment-lab" className="my-5 p-4 bg-white dark:bg-[#070b14]/40 border border-slate-200 dark:border-slate-805 rounded-xl space-y-4 shadow-xs select-text">
+                            <div className="flex items-center justify-between">
+                              <div className="flex items-center gap-2">
+                                <span className="p-1 px-1.5 bg-indigo-50 dark:bg-indigo-950/40 rounded text-indigo-600 dark:text-indigo-400 text-[10px] font-black font-mono">LAB</span>
+                                <div>
+                                  <h5 className="text-[11px] font-black text-[#0D1219] dark:text-slate-101 uppercase tracking-wider font-mono">
+                                    Editorial Alignment & Voice Calibration Lab 🧪
+                                  </h5>
+                                  <p className="text-[10px] text-slate-500 leading-normal">
+                                    Grade sample text layouts against digital writer directives using our Calibration Agent
+                                  </p>
+                                </div>
+                              </div>
+                            </div>
+
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                              {/* Left parameters */}
+                              <div className="md:col-span-1 space-y-3">
+                                <div className="space-y-1">
+                                  <label className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block font-mono">
+                                    1. Selected Digital Writer
+                                  </label>
+                                  <select
+                                    value={testingWriterId || ""}
+                                    onChange={(e) => {
+                                      setTestingWriterId(e.target.value);
+                                      setAlignmentResult(null);
+                                      setAlignmentTestError(null);
+                                    }}
+                                    className="w-full text-xs font-bold p-2 bg-[#F8F9FA] dark:bg-slate-950 border border-slate-205 dark:border-slate-800 rounded-lg text-slate-800 dark:text-slate-205 focus:outline-hidden"
+                                  >
+                                    <option value="" disabled>Select writer...</option>
+                                    {writers.filter((w) => w.niche === selectedNiche).map((w) => (
+                                      <option key={w.id} value={w.id}>{w.name} ({w.voiceStyle})</option>
+                                    ))}
+                                  </select>
+                                </div>
+
+                                <div className="space-y-2">
+                                  <label className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block font-mono">
+                                    2. Quick Seed Content
+                                  </label>
+                                  {articles.filter(a => a.niche === selectedNiche).length > 0 ? (
+                                    <div className="space-y-1.5 max-h-[140px] overflow-y-auto pr-1">
+                                      {articles.filter(a => a.niche === selectedNiche).map((art) => (
+                                        <button
+                                          key={art.id}
+                                          type="button"
+                                          onClick={() => {
+                                            setTestSampleText(art.content || art.title);
+                                          }}
+                                          className="w-full text-left p-1.5 rounded border border-slate-100 dark:border-slate-850 hover:bg-slate-50 dark:hover:bg-slate-900 text-[10px] text-slate-600 dark:text-slate-400 truncate block font-sans cursor-pointer"
+                                        >
+                                          📄 {art.title}
+                                        </button>
+                                      ))}
+                                    </div>
+                                  ) : (
+                                    <p className="text-[9px] text-slate-500 italic">No generated drafts in the registry yet.</p>
+                                  )}
+                                </div>
+                              </div>
+
+                              {/* Text evaluation area */}
+                              <div className="md:col-span-2 space-y-2">
+                                <label className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block font-mono flex items-center justify-between">
+                                  <span>3. Draft Text to Evaluate</span>
+                                  <span className="text-[8.5px] text-slate-500">{(testSampleText || "").length} chars</span>
+                                </label>
+                                <textarea
+                                  value={testSampleText}
+                                  onChange={(e) => setTestSampleText(e.target.value)}
+                                  placeholder="Paste raw draft content sections here to run simulated stylistic tone matching checks..."
+                                  rows={5}
+                                  className="w-full font-sans text-xs p-3 bg-white dark:bg-slate-950/60 border border-slate-205 dark:border-slate-850 rounded-xl text-slate-800 dark:text-slate-350 focus:outline-[#5F528E]/40"
+                                />
+
+                                <div className="flex items-center justify-end">
+                                  <button
+                                    type="button"
+                                    disabled={isTestingAlignment || !testingWriterId || !testSampleText.trim()}
+                                    onClick={() => handleTestWriterAlignment(testingWriterId || "", testSampleText)}
+                                    className={`px-3 py-1.5 text-[10px] font-bold font-mono rounded-lg flex items-center gap-1.5 shadow-xs transition-all text-white cursor-pointer ${
+                                      isTestingAlignment || !testingWriterId || !testSampleText.trim()
+                                        ? "bg-slate-300 dark:bg-slate-800 text-slate-500 cursor-not-allowed"
+                                        : "bg-indigo-650 dark:bg-[#5F528E] hover:bg-indigo-700 dark:hover:bg-indigo-600"
+                                    }`}
+                                  >
+                                    {isTestingAlignment ? (
+                                      <>
+                                        <span className="w-1.5 h-1.5 bg-white rounded-full animate-ping mr-0.5" />
+                                        Validation Agent Assessing...
+                                      </>
+                                    ) : (
+                                      <>Run Calibration Agent</>
+                                    )}
+                                  </button>
+                                </div>
+                              </div>
+                            </div>
+
+                            {/* Evaluation results */}
+                            {alignmentTestError && (
+                              <div className="p-3 bg-rose-50/70 dark:bg-rose-950/20 border border-rose-250/50 rounded-lg text-xs font-bold text-rose-500 font-sans leading-relaxed">
+                                ⚠ {alignmentTestError}
+                              </div>
+                            )}
+
+                            {alignmentResult && (
+                              <div className="p-3.5 bg-slate-50 dark:bg-slate-950/40 border border-slate-250/30 dark:border-slate-805 rounded-xl space-y-3">
+                                <div className="flex items-center justify-between border-b pb-2.5 border-slate-200 dark:border-slate-850/60">
+                                  <div className="flex items-center gap-2">
+                                    <span className="font-mono text-[9px] text-slate-550 uppercase tracking-widest block font-bold">Calibration Metrics</span>
+                                    <span className="text-[8px] font-mono text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/20 px-1.5 py-0.5 rounded border border-emerald-250/50">VAL-OK</span>
+                                  </div>
+                                  <div className="flex items-center gap-1">
+                                    <span className="text-[10px] text-slate-500 font-mono font-bold uppercase tracking-wider">Style Alignment Score:</span>
+                                    <span className={`text-xs font-black font-mono px-2 py-0.5 rounded-md ${
+                                      alignmentResult.score >= 90
+                                        ? "bg-emerald-100 dark:bg-emerald-950 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20"
+                                        : alignmentResult.score >= 75
+                                          ? "bg-amber-100 dark:bg-amber-955 text-amber-600 dark:text-amber-400 border border-amber-500/20"
+                                          : "bg-rose-100 dark:bg-rose-950 text-rose-500 border border-rose-500/20"
+                                    }`}>
+                                      {alignmentResult.score}%
+                                    </span>
+                                  </div>
+                                </div>
+
+                                <p className="text-xs font-sans italic text-slate-700 dark:text-slate-300 leading-relaxed">
+                                  "{alignmentResult.verdict}"
+                                </p>
+
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 pt-1">
+                                  {/* Strengths */}
+                                  <div className="p-2.5 bg-emerald-50/20 dark:bg-emerald-950/10 rounded-lg border border-emerald-300/10 space-y-1">
+                                    <span className="text-[9.5px] font-black text-emerald-650 uppercase tracking-wide font-mono block">✦ Aligned Strengths</span>
+                                    <ul className="text-[10px] text-slate-600 dark:text-slate-400 space-y-1 pl-1 list-disc list-inside leading-normal">
+                                      {alignmentResult.strengths?.map((s, i) => (
+                                        <li key={i}>{s}</li>
+                                      )) || <li>Tonal clarity matches well</li>}
+                                    </ul>
+                                  </div>
+
+                                  {/* Gaps */}
+                                  <div className="p-2.5 bg-amber-50/20 dark:bg-amber-955/10 rounded-lg border border-amber-300/10 space-y-1">
+                                    <span className="text-[9.5px] font-black text-amber-650 uppercase tracking-wide font-mono block">▲ Discrepancy Gaps</span>
+                                    <ul className="text-[10px] text-slate-600 dark:text-slate-400 space-y-1 pl-1 list-disc list-inside leading-normal">
+                                      {alignmentResult.gaps?.map((g, i) => (
+                                        <li key={i}>{g}</li>
+                                      )) || <li>No custom discrepancies noticed</li>}
+                                    </ul>
+                                  </div>
+                                </div>
                               </div>
                             )}
                           </div>
 
                           {/* Candidates waiting to join the board (Applicants) */}
                           <div className="pt-4 border-t border-slate-205 dark:border-slate-850 space-y-3">
-                            <div className="flex items-center gap-1.5">
-                              <Sparkles className="w-4 h-4 text-violet-500 shrink-0 select-none animate-pulse" />
-                              <h5 className="text-[10px] font-black text-[#0D1219] dark:text-slate-101 uppercase tracking-widest font-mono">
-                                Candidates Ready to Join Board
-                              </h5>
+                            <div className="flex items-center justify-between gap-1.5">
+                              <div className="flex items-center gap-1.5">
+                                <Sparkles className="w-4 h-4 text-violet-500 shrink-0 select-none animate-pulse" />
+                                <h5 className="text-[10px] font-black text-[#0D1219] dark:text-slate-101 uppercase tracking-widest font-mono">
+                                  Candidates Ready to Join Board
+                                </h5>
+                              </div>
+                              <button
+                                type="button"
+                                disabled={isScoutingCandidates}
+                                onClick={handleScoutCandidates}
+                                className="px-2 py-1 text-[9px] font-bold bg-indigo-50 dark:bg-slate-900 border border-indigo-200 dark:border-indigo-950 text-indigo-700 dark:text-indigo-400 hover:bg-indigo-100 dark:hover:bg-slate-800 rounded-lg flex items-center gap-1 transition-all cursor-pointer disabled:opacity-50"
+                              >
+                                {isScoutingCandidates ? (
+                                  <>
+                                    <span className="animate-spin inline-block mr-0.5">🔄</span>
+                                    Scouting...
+                                  </>
+                                ) : (
+                                  <>
+                                    <span>📡</span>
+                                    Scout Fresh Talents
+                                  </>
+                                )}
+                              </button>
                             </div>
                             <p className="text-[10px] text-slate-500/90 -mt-2 leading-relaxed font-sans">
                               Highly suggested talents ready to deploy directly
@@ -4023,8 +5884,6 @@ export default function App() {
                           </div>
                         </div>
                       )}
-                    </div>
-                  )}
 
                   {activeAdminTab === "feeds" && (
                     <div className="flex flex-col h-full overflow-hidden justify-between">
@@ -4034,6 +5893,12 @@ export default function App() {
                             <h4 className="text-xs font-black text-[#0D1219] dark:text-slate-100 uppercase tracking-widest font-mono">
                               XML Sourcing feeds
                             </h4>
+                            <button
+                              onClick={() => setShowNicheModal(true)}
+                              className="mt-2 text-[10px] text-[#5F528E] dark:text-indigo-300 font-bold hover:underline cursor-pointer"
+                            >
+                              + Create New Niche
+                            </button>
                             <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-0.5 font-sans">
                               Modify the crawler stream pathways
                             </p>
@@ -4085,212 +5950,676 @@ export default function App() {
                       </div>
 
                       {showAddFeed ? (
-                        /* Custom Feed URL entry */
-                        <form
-                          onSubmit={handleCreateFeed}
-                          className="flex-1 overflow-y-auto space-y-4 mt-4 pr-1"
-                        >
-                          <div className="space-y-1">
-                            <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 block uppercase tracking-widest font-mono">
-                              Feed Agency Name
-                            </label>
-                            <input
-                              type="text"
-                              required
-                              placeholder="e.g. ESPN News Feed"
-                              value={newFeedName}
-                              onChange={(e) => setNewFeedName(e.target.value)}
-                              className="w-full text-xs text-[#0D1219] dark:text-white bg-white dark:bg-[#070b14] border border-slate-250 dark:border-slate-800 rounded-lg p-2.5 focus:outline-none focus:ring-1 focus:ring-[#3F5353] dark:focus:ring-[#5F528E] transition-all outline-none"
-                            />
-                          </div>
-                          <div className="space-y-1">
-                            <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 block uppercase tracking-widest font-mono">
-                              Secure RSS XML Source URL
-                            </label>
-                            <input
-                              type="url"
-                              required
-                              placeholder="https://agency.com/rss.xml"
-                              value={newFeedUrl}
-                              onChange={(e) => setNewFeedUrl(e.target.value)}
-                              className="w-full text-xs text-[#0D1219] dark:text-white bg-white dark:bg-[#070b14] border border-slate-250 dark:border-slate-800 rounded-lg p-2.5 focus:outline-none focus:ring-1 focus:ring-[#3F5353] dark:focus:ring-[#5F528E] transition-all outline-none"
-                            />
-                          </div>
-
-                          <div className="flex items-center gap-3 pt-2">
+                        <div className="flex-1 flex flex-col mt-4 overflow-hidden space-y-4">
+                          {/* Feed registration sub-selector */}
+                          <div className="flex bg-slate-100 dark:bg-[#070b14] rounded-lg p-0.5 mt-1 text-[9px] font-bold select-none border border-slate-205 dark:border-slate-805 gap-1 shrink-0">
                             <button
-                              type="submit"
-                              className="bg-[#3F5353] dark:bg-[#5F528E] hover:bg-opacity-90 text-white text-xs font-bold py-2 px-4 rounded-xl shadow-md cursor-pointer transition-all duration-300"
+                              type="button"
+                              onClick={() => { setAddFeedMethod("single"); setBulkFeedsError(""); setBulkUploadResult(null); }}
+                              className={`flex-1 py-1 rounded-md transition-all duration-300 cursor-pointer ${
+                                addFeedMethod === "single"
+                                  ? "bg-white dark:bg-slate-800 text-slate-800 dark:text-white shadow-sm font-extrabold"
+                                  : "text-slate-500 hover:text-slate-800"
+                              }`}
                             >
-                              Register Feed Link
+                              🔗 Single Link Registration
                             </button>
                             <button
                               type="button"
-                              onClick={() => setShowAddFeed(false)}
-                              className="text-slate-500 dark:text-slate-450 text-xs hover:text-[#0D1219] dark:hover:text-white transition-colors cursor-pointer"
+                              onClick={() => { setAddFeedMethod("json"); setBulkFeedsError(""); setBulkUploadResult(null); }}
+                              className={`flex-1 py-1 rounded-md transition-all duration-300 cursor-pointer ${
+                                addFeedMethod === "json"
+                                  ? "bg-white dark:bg-slate-800 text-slate-800 dark:text-white shadow-sm font-extrabold"
+                                  : "text-slate-500 hover:text-slate-800"
+                              }`}
                             >
-                              Cancel
+                              📂 Upload JSON Feeds File
                             </button>
                           </div>
-                        </form>
+
+                          {addFeedMethod === "single" ? (
+                            <form
+                              onSubmit={handleCreateFeed}
+                              className="overflow-y-auto space-y-4 pr-1"
+                            >
+                              <div className="space-y-1">
+                                <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 block uppercase tracking-widest font-mono">
+                                  Feed Name Title
+                                </label>
+                                <input
+                                  type="text"
+                                  required
+                                  placeholder="e.g. ESPN News Feed"
+                                  value={newFeedName}
+                                  onChange={(e) => setNewFeedName(e.target.value)}
+                                  className="w-full text-xs text-[#0D1219] dark:text-white bg-white dark:bg-[#070b14] border border-slate-250 dark:border-slate-800 rounded-lg p-2.5 focus:outline-none focus:ring-1 focus:ring-[#3F5353] dark:focus:ring-[#5F528E] transition-all outline-none"
+                                />
+                              </div>
+                              <div className="space-y-1">
+                                <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 block uppercase tracking-widest font-mono">
+                                  Secure RSS XML Source URL
+                                </label>
+                                <input
+                                  type="text"
+                                  required
+                                  placeholder="https://agency.com/rss.xml"
+                                  value={newFeedUrl}
+                                  onChange={(e) => setNewFeedUrl(e.target.value)}
+                                  className="w-full text-xs text-[#0D1219] dark:text-white bg-white dark:bg-[#070b14] border border-slate-250 dark:border-slate-800 rounded-lg p-2.5 focus:outline-none focus:ring-1 focus:ring-[#3F5353] dark:focus:ring-[#5F528E] transition-all outline-none"
+                                />
+                              </div>
+
+                              <div className="space-y-1 text-left">
+                                <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 block uppercase tracking-widest font-mono">
+                                  Associated Niche Project
+                                </label>
+                                <select
+                                  value={newFeedNiche || selectedNiche}
+                                  onChange={(e) => setNewFeedNiche(e.target.value)}
+                                  className="w-full text-xs font-bold text-[#0D1219] dark:text-white bg-white dark:bg-[#070b14] border border-slate-250 dark:border-slate-800 rounded-lg p-2.5 outline-none cursor-pointer focus:ring-1 focus:ring-[#3F5353] dark:focus:ring-[#5F528E] transition-all"
+                                >
+                                  {niches.map(n => (
+                                    <option key={n.id} value={n.id}>
+                                      {n.name} ({n.id})
+                                    </option>
+                                  ))}
+                                </select>
+                              </div>
+
+                              <div className="flex items-center gap-3 pt-2">
+                                <button
+                                  type="submit"
+                                  className="bg-[#3F5353] dark:bg-[#5F528E] hover:bg-opacity-90 text-white text-xs font-bold py-2 px-4 rounded-xl shadow-md cursor-pointer transition-all duration-300"
+                                >
+                                  Register Feed Link
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setShowAddFeed(false)}
+                                  className="text-slate-500 dark:text-slate-450 text-xs hover:text-[#0D1219] dark:hover:text-white transition-colors cursor-pointer"
+                                >
+                                  Cancel
+                                </button>
+                              </div>
+                            </form>
+                          ) : (
+                            <form
+                              onSubmit={handleBulkUploadJsonFeeds}
+                              className="overflow-y-auto space-y-4 pr-1 text-left"
+                            >
+                              {bulkFeedsError && (
+                                <div className="p-2.5 bg-rose-50 dark:bg-rose-950/20 text-rose-600 dark:text-rose-400 border border-rose-100 dark:border-rose-900/55 rounded-lg text-xs font-bold font-sans">
+                                  ⚠️ {bulkFeedsError}
+                                </div>
+                              )}
+
+                              {bulkUploadResult && (
+                                <div className="p-2.5 bg-emerald-50 dark:bg-emerald-950/20 text-emerald-750 dark:text-emerald-405 border border-emerald-100 dark:border-emerald-900/55 rounded-lg text-xs font-bold font-sans">
+                                  ✅ {bulkUploadResult.message}
+                                  {bulkUploadResult.skipped && bulkUploadResult.skipped.length > 0 && (
+                                    <span className="block text-[10px] mt-0.5 text-slate-500 font-normal">
+                                      ({bulkUploadResult.skipped.length} existing duplicate endpoints safely bypassed)
+                                    </span>
+                                  )}
+                                </div>
+                              )}
+
+                              <div className="space-y-1.5 text-left mb-3">
+                                <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 block uppercase tracking-widest font-mono">
+                                  Default Fallback Niche
+                                </label>
+                                <select
+                                  value={newFeedNiche || selectedNiche}
+                                  onChange={(e) => setNewFeedNiche(e.target.value)}
+                                  className="w-full text-xs font-bold text-[#0D1219] dark:text-white bg-white dark:bg-[#070b14] border border-slate-250 dark:border-slate-800 rounded-lg p-2.5 outline-none cursor-pointer focus:ring-1 focus:ring-[#3F5353] dark:focus:ring-[#5F528E]"
+                                >
+                                  {niches.map((n) => (
+                                    <option key={n.id} value={n.id}>
+                                      {n.name} ({n.id})
+                                    </option>
+                                  ))}
+                                </select>
+                                <p className="text-[9px] text-slate-400 leading-snug mt-1">
+                                  Feeds listed in the JSON file that do not have an explicit "niche" field specified will automatically inherit this selected project domain.
+                                </p>
+                              </div>
+
+                              <div className="border-2 border-dashed border-slate-300 dark:border-slate-800 hover:border-indigo-405 cursor-pointer rounded-2xl p-6 text-center bg-[#F8F9FA]/40 dark:bg-slate-950/25 relative transition">
+                                <input
+                                  id="bulk-feeds-input"
+                                  type="file"
+                                  accept=".json"
+                                  className="absolute inset-0 opacity-0 cursor-pointer"
+                                  onChange={(e) => {
+                                    if (e.target.files && e.target.files[0]) {
+                                      setBulkFeedsFile(e.target.files[0]);
+                                      setBulkFeedsError("");
+                                      setBulkUploadResult(null);
+                                    }
+                                  }}
+                                />
+                                <div className="flex flex-col items-center gap-2">
+                                  <FileText className="w-8 h-8 text-indigo-500" />
+                                  <div className="text-xs">
+                                    <p className="font-bold text-slate-700 dark:text-slate-200">
+                                      {bulkFeedsFile ? bulkFeedsFile.name : "Select or drag .json feeds file"}
+                                    </p>
+                                    <p className="text-[10px] text-slate-400 mt-1">
+                                      Adheres to custom item 'niche' mappings, or falls back to chosen project above.
+                                    </p>
+                                  </div>
+                                </div>
+                              </div>
+
+                              <div className="bg-slate-50 dark:bg-slate-900/50 p-3 rounded-xl border border-slate-100 dark:border-slate-800 text-[10px] text-slate-500 leading-normal">
+                                <p className="font-bold uppercase tracking-wider text-slate-700 dark:text-slate-400 mb-1">Expected JSON Schema format:</p>
+                                <pre className="font-mono text-[9px] text-[#3F5353] dark:text-[#a5b4fc] overflow-x-auto select-all">
+                                  {`[\n  { "name": "ESPN Sports", "url": "https://espn.com/rss" },\n  { "name": "Sky Travel", "url": "https://sky.com/rss" }\n]`}
+                                </pre>
+                              </div>
+
+                              <div className="flex items-center gap-3 pt-2">
+                                <button
+                                  type="submit"
+                                  disabled={isUploadingBulkFeeds || !bulkFeedsFile}
+                                  className="bg-[#3F5353] dark:bg-[#5F528E] hover:bg-opacity-90 disabled:opacity-50 text-white text-xs font-bold py-2 px-4 rounded-xl shadow-md cursor-pointer transition-all duration-300 flex items-center gap-1.5"
+                                >
+                                  {isUploadingBulkFeeds ? "Uploading..." : "🚀 Upload JSON Catalog"}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setShowAddFeed(false);
+                                    setBulkFeedsFile(null);
+                                    setBulkFeedsError("");
+                                    setBulkUploadResult(null);
+                                  }}
+                                  className="text-slate-500 dark:text-slate-450 text-xs hover:text-[#0D1219] dark:hover:text-white transition-colors cursor-pointer"
+                                >
+                                  Close
+                                </button>
+                              </div>
+                            </form>
+                          )}
+                        </div>
                       ) : activeFeedSubTab === "active" ? (
                         /* Core XML feeds crawler logs list */
-                        <div className="flex-1 overflow-y-auto space-y-3 mt-4 pr-1 max-h-[355px] lg:max-h-[660px]">
-                          {feeds.filter((f) => f.niche === selectedNiche)
-                            .length === 0 ? (
-                            <div className="text-center p-8 bg-slate-950/40 border border-slate-800 border-dashed rounded-xl text-xs text-slate-450 font-sans">
-                              No custom feeds integrated. Sync preset feeds or
-                              add custom URLs above!
-                            </div>
-                          ) : (
-                            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-                            {feeds
-                              .filter((f) => f.niche === selectedNiche)
-                              .map((feed, idx) => {
-                                const isFirstFeed = idx === 0;
-                                return (
-                                  <div
-                                    key={feed.id}
-                                    className={`p-4 rounded-xl border flex flex-col justify-between gap-3 shadow-md transition-all duration-300 ${
-                                      isFirstFeed
-                                        ? "bg-[#3F5353]/10 dark:bg-[#5F528E]/10 border-[#3F5353] dark:border-[#5F528E]"
-                                        : "border-[#E3E5E8] dark:border-slate-800 bg-[#F8F9FA]/40 dark:bg-slate-950/25"
-                                    }`}
-                                  >
-                                    <div className="min-w-0">
-                                      <h5 className="text-xs font-bold text-[#0D1219] dark:text-slate-100 truncate flex items-center gap-1.5">
-                                        {isFirstFeed && (
-                                          <span className="w-1.5 h-1.5 bg-[#3F5353] dark:bg-[#5F528E] rounded-full inline-block shrink-0 animate-pulse" />
-                                        )}
-                                        {feed.name}
-                                      </h5>
-                                      <p className="text-[10px] text-slate-500 dark:text-slate-400 font-mono mt-0.5 truncate">
-                                        {feed.url}
-                                      </p>
-                                      {feed.lastSyncedAt && (
-                                        <div className="text-[9px] font-bold mt-1.5 uppercase font-mono tracking-wide text-[#3F5353] dark:text-[#9A8FCD]">
-                                          Last crawled:{" "}
-                                          {new Date(
-                                            feed.lastSyncedAt,
-                                          ).toLocaleTimeString()}
-                                        </div>
+                        <div className="flex-1 flex flex-col mt-4 overflow-hidden">
+                          {/* Segment filter for Feed Niche scope */}
+                          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between mb-3 px-1.5 text-xs select-none shrink-0 border-b border-slate-100 dark:border-slate-800/50 pb-2 gap-2">
+                            <span className="text-[10px] font-black uppercase text-slate-400 tracking-wider font-mono">
+                              📡 Pipeline Sourcing Scope
+                            </span>
+                            <div className="flex items-center gap-2 w-full sm:w-auto">
+                              <select
+                                value={activeFeedNicheFilter}
+                                onChange={(e) => setActiveFeedNicheFilter(e.target.value)}
+                                className="text-[9.5px] font-bold p-1 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded outline-none w-full sm:w-auto"
+                              >
+                                <option value="all">All Integrated Niches ({feeds.length})</option>
+                                <option value="current">{selectedNiche.toUpperCase()} Workspace</option>
+                                {(() => {
+                                  // Gather currently configured niches
+                                  const configuredNicheIds = new Set(niches.map(n => n.id));
+                                  // Gather unconfigured niche IDs originating from discovery tools
+                                  const unconfiguredNicheIds = Array.from(new Set(feeds.map(f => f.niche))).filter(id => !configuredNicheIds.has(id));
+                                  
+                                  return (
+                                    <>
+                                      {niches.map((n) => (
+                                        <option key={n.id} value={n.id}>{n.name}</option>
+                                      ))}
+                                      {unconfiguredNicheIds.length > 0 && (
+                                        <optgroup label="Discovered Opportunities">
+                                          {unconfiguredNicheIds.map(id => (
+                                            <option key={`unconf-${id}`} value={id}>
+                                              {id.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')} (Pending Workspace)
+                                            </option>
+                                          ))}
+                                        </optgroup>
                                       )}
-                                    </div>
+                                    </>
+                                  );
+                                })()}
+                              </select>
+                            </div>
+                          </div>
 
-                                    <span
-                                      className={`shrink-0 flex items-center gap-1 text-[9px] font-bold px-2 py-0.5 rounded border font-mono shadow-sm ${
-                                        isFirstFeed
-                                          ? "bg-[#3F5353] dark:bg-[#5F528E] text-white border-transparent"
-                                          : "bg-slate-100 dark:bg-slate-900 text-slate-600 dark:text-slate-350 border-slate-200 dark:border-slate-700"
-                                      }`}
-                                    >
-                                      Active Sourcing
-                                    </span>
+                          <div className="flex-1 overflow-y-auto space-y-3 pr-1 max-h-[355px] lg:max-h-[660px]">
+                            {(() => {
+                              const displayedFeeds = activeFeedNicheFilter === "all"
+                                ? feeds
+                                : activeFeedNicheFilter === "current"
+                                  ? feeds.filter((f) => f.niche === selectedNiche)
+                                  : feeds.filter((f) => f.niche === activeFeedNicheFilter);
+
+                              const allSelectedInView = displayedFeeds.length > 0 && selectedFeedIds.length === displayedFeeds.length;
+
+                              if (displayedFeeds.length === 0) {
+                                return (
+                                  <div className="text-center p-8 bg-slate-950/40 border border-slate-800 border-dashed rounded-xl text-xs text-slate-450 font-sans">
+                                    No custom feeds are integrated in this selected scope. Sync preset feeds or
+                                    register your own custom URLs above!
                                   </div>
                                 );
-                              })}
-                            </div>
-                          )}
+                              }
+
+                              return (
+                                <div className="space-y-4">
+                                  <div className="flex items-center justify-between">
+                                    <label className="flex items-center gap-2 text-[10px] font-bold text-slate-600 dark:text-slate-350 select-none cursor-pointer">
+                                      <input
+                                        type="checkbox"
+                                        checked={allSelectedInView}
+                                        onChange={() => {
+                                          if (allSelectedInView) {
+                                            setSelectedFeedIds([]);
+                                          } else {
+                                            setSelectedFeedIds(displayedFeeds.map(f => f.id));
+                                          }
+                                        }}
+                                        className="rounded border-[#E3E5E8] dark:border-slate-805 bg-white dark:bg-slate-950 text-indigo-500 focus:ring-indigo-500 w-3.5 h-3.5 cursor-pointer"
+                                      />
+                                      Toggle All {displayedFeeds.length} Feeds
+                                    </label>
+                                    
+                                    {selectedFeedIds.length > 0 && (
+                                      <div className="flex items-center gap-2">
+                                        <span className="text-[9px] font-bold text-indigo-600 dark:text-indigo-400 font-mono">
+                                          {selectedFeedIds.length} Selected
+                                        </span>
+                                      </div>
+                                    )}
+                                  </div>
+                                  
+                                  <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                                  {displayedFeeds.map((feed, idx) => {
+                                    const isFirstFeed = idx === 0 && activeFeedNicheFilter === "current";
+                                    const isSelected = selectedFeedIds.includes(feed.id);
+                                    
+                                    return (
+                                      <div
+                                        key={feed.id}
+                                        className={`p-4 rounded-xl border flex flex-col justify-between gap-3 shadow-md transition-all duration-300 ${
+                                          isSelected ? "ring-2 ring-indigo-500/50 bg-[#F9F6FF] dark:bg-slate-900/40" : ""
+                                        } ${
+                                          !feed.isActive ? "opacity-50 grayscale border-dashed" : (isFirstFeed
+                                            ? "bg-[#3F5353]/10 dark:bg-[#5F528E]/10 border-[#3F5353] dark:border-[#5F528E]"
+                                            : "border-[#E3E5E8] dark:border-slate-800 bg-[#F8F9FA]/40 dark:bg-slate-950/25")
+                                        }`}
+                                      >
+                                        <div className="min-w-0 flex flex-col gap-1.5">
+                                          <div className="flex items-start gap-2 min-w-0">
+                                            <input
+                                              type="checkbox"
+                                              checked={isSelected}
+                                              onChange={() => {
+                                                if (isSelected) {
+                                                  setSelectedFeedIds(prev => prev.filter(id => id !== feed.id));
+                                                } else {
+                                                  setSelectedFeedIds(prev => [...prev, feed.id]);
+                                                }
+                                              }}
+                                              className="mt-0.5 rounded border-[#E3E5E8] dark:border-slate-805 bg-white dark:bg-slate-950 text-indigo-500 focus:ring-indigo-500 w-3.5 h-3.5 shrink-0 cursor-pointer"
+                                            />
+                                            <div className="flex flex-col min-w-0 gap-1 flex-1">
+                                              <div className="flex items-center justify-between gap-2 min-w-0">
+                                                <h5 className="text-xs font-bold text-[#0D1219] dark:text-slate-100 truncate flex items-center gap-1.5">
+                                                  {isFirstFeed && feed.isActive && (
+                                                    <span className="w-1.5 h-1.5 bg-[#3F5353] dark:bg-[#5F528E] rounded-full inline-block shrink-0 animate-pulse" />
+                                                  )}
+                                                  {feed.name}
+                                                </h5>
+                                                {feed.niche && (
+                                                  <span className="shrink-0 text-[8px] uppercase tracking-wider font-extrabold bg-[#3F5353]/10 dark:bg-slate-800 text-[#3F5353] dark:text-slate-300 px-1.5 py-0.5 rounded border border-[#3F5353]/10 dark:border-slate-700">
+                                                    {feed.niche}
+                                                  </span>
+                                                )}
+                                              </div>
+                                              <p className="text-[10px] text-slate-500 dark:text-slate-400 font-mono truncate">
+                                                {feed.url}
+                                              </p>
+                                            </div>
+                                          </div>
+                                          {feed.lastSyncedAt && (
+                                            <div className="text-[9px] font-bold mt-1 uppercase font-mono tracking-wide text-[#3F5353] dark:text-[#9A8FCD] pl-[22px]">
+                                              Last crawled:{" "}
+                                              {new Date(
+                                                feed.lastSyncedAt,
+                                              ).toLocaleTimeString()}
+                                            </div>
+                                          )}
+                                        </div>
+
+                                        <div className="flex gap-2 border-t border-slate-100 dark:border-slate-800/40 pt-2.5 mt-1 items-center justify-between">
+                                          <button
+                                            type="button"
+                                            onClick={async () => {
+                                              try {
+                                                const res = await fetch(`/api/feeds/${feed.id}`, {
+                                                  method: "PATCH",
+                                                  headers: { "Content-Type": "application/json" },
+                                                  body: JSON.stringify({ isActive: !feed.isActive })
+                                                });
+                                                if (res.ok) {
+                                                  await fetchConfig();
+                                                }
+                                              } catch(err) {
+                                                console.error(err);
+                                              }
+                                            }}
+                                            className={`shrink-0 flex items-center gap-1 text-[9px] font-bold px-2 py-0.5 rounded border font-mono shadow-sm cursor-pointer transition ${
+                                              feed.isActive
+                                                ? "bg-[#3F5353] dark:bg-[#5F528E] text-white border-transparent"
+                                                : "bg-slate-100 dark:bg-slate-900 text-slate-600 dark:text-slate-350 border-slate-200 dark:border-slate-705"
+                                            }`}
+                                          >
+                                            {feed.isActive ? "Active Sourcing" : "Inactive"}
+                                          </button>
+
+                                          <div className="flex items-center gap-2">
+                                            <button
+                                              type="button"
+                                              onClick={() => {
+                                                setEditingFeedId(feed.id);
+                                                setEditingFeedName(feed.name);
+                                                setEditingFeedUrl(feed.url);
+                                                setEditingFeedNiche(feed.niche || selectedNiche);
+                                                setShowEditFeedModal(true);
+                                              }}
+                                              className="text-[10px] font-extrabold text-slate-600 dark:text-indigo-305 hover:text-[#0D1219] dark:hover:text-white transition flex items-center gap-0.5 cursor-pointer"
+                                              title="Edit RSS Feed"
+                                            >
+                                              🔧 Edit
+                                            </button>
+                                            <button
+                                              type="button"
+                                              onClick={() => {
+                                                if (confirmDeleteId === feed.id) {
+                                                  handleDeleteFeed(feed.id, feed.name);
+                                                  setConfirmDeleteId(null);
+                                                } else {
+                                                  setConfirmDeleteId(feed.id);
+                                                  setTimeout(() => setConfirmDeleteId(null), 3000);
+                                                }
+                                              }}
+                                              className="text-[10px] font-extrabold text-rose-500 hover:text-rose-700 transition flex items-center gap-0.5 cursor-pointer"
+                                              title="Delete RSS Feed"
+                                            >
+                                              {confirmDeleteId === feed.id ? "⚠️ Confirm?" : "❌ Delete"}
+                                            </button>
+                                          </div>
+                                        </div>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                                </div>
+                              );
+                            })()}
+                          </div>
                         </div>
                       ) : (
                         /* RSS DISCOVERY CATALOG PRESETS DIRECTORY (20+ FEEDS IN EACH NICHE) */
                         <div className="flex-1 flex flex-col mt-4 overflow-hidden">
-                          {/* Header with bulk action */}
-                          <div className="bg-gradient-to-r from-indigo-50 via-slate-50 to-indigo-50/70 dark:from-indigo-950/40 dark:via-slate-900/50 dark:to-indigo-950/45 p-4 border border-indigo-100 dark:border-violet-500/15 rounded-xl flex items-center justify-between gap-3 mb-4 shrink-0 shadow-sm">
-                            <div>
-                              <h6 className="text-[10.5px] font-bold uppercase tracking-widest text-indigo-700 dark:text-[#a5b4fc] font-mono">
-                                ⚡ Bulk Catalog Onboarding
+                          {/* AI Discovery Web Search Form */}
+                          <div className="p-4 mb-4 border border-violet-100 dark:border-violet-500/15 bg-[#F9F6FF] dark:bg-slate-900/40 rounded-xl shrink-0 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4">
+                            <div className="flex-1">
+                              <h6 className="text-[10.5px] font-black uppercase tracking-widest text-[#5F528E] dark:text-[#c7d2fe] font-mono flex items-center gap-1">
+                                🌐 Global Internet Feed Discovery
                               </h6>
-                              <p className="text-[9.5px] text-slate-600 dark:text-slate-400 leading-relaxed font-sans mt-0.5">
-                                Deploy all top verified 20 resource feeds for{" "}
-                                {selectedNiche.toUpperCase()} in one click.
+                              <p className="text-[9.5px] text-slate-600 dark:text-slate-400 mt-0.5 leading-relaxed font-sans">
+                                Feed the intelligence engine with direct RSS feeds found on the web. Search for <span className="text-violet-600 dark:text-violet-300 font-bold">traveling</span>, <span className="text-violet-600 dark:text-violet-300 font-bold">gardening</span>, or any custom domain niche.
                               </p>
                             </div>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                const nichePresets = RSS_CATALOG.filter(
-                                  (c) => c.niche === selectedNiche,
-                                );
-                                handleBulkAddPresets(nichePresets);
-                              }}
-                              className="bg-indigo-600 hover:bg-indigo-500 text-white text-[10px] font-bold px-3 py-1.5 rounded-lg shadow-md transition-all duration-300 cursor-pointer text-center whitespace-nowrap shrink-0"
-                            >
-                              Deploy List (All 20)
-                            </button>
+                            <form onSubmit={handleSearchOnlineFeeds} className="flex gap-2 shrink-0 w-full md:w-auto">
+                              <input
+                                id="discovery-search-input"
+                                type="text"
+                                placeholder="Enter keyword, e.g. traveling"
+                                value={searchKeyword}
+                                onChange={(e) => setSearchKeyword(e.target.value)}
+                                className="px-3 py-1.5 text-xs bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-800 rounded-lg outline-none focus:ring-1 focus:ring-violet-500 text-slate-900 dark:text-slate-101"
+                              />
+                              <button
+                                id="discovery-search-submit"
+                                type="submit"
+                                disabled={isSearchingFeeds || !searchKeyword.trim()}
+                                className="bg-violet-600 hover:bg-violet-500 text-white font-bold text-[10px] px-3.5 py-1.5 rounded-lg shadow-sm transition-all disabled:opacity-50 select-none cursor-pointer flex items-center gap-1.5"
+                              >
+                                {isSearchingFeeds ? "Searching..." : "Search Feeds"}
+                              </button>
+                            </form>
                           </div>
 
-                          {/* Presets List Scroll Box */}
-                          <div className="flex-1 overflow-y-auto pr-1 max-h-[350px] lg:max-h-[580px] scrollbar-thin grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 pb-4">
-                            {RSS_CATALOG.filter(
-                              (preset) => preset.niche === selectedNiche,
-                            ).map((preset, idx) => {
-                              const isAlreadyIntegrated = feeds.some(
-                                (f) =>
-                                  f.url.toLowerCase() ===
-                                  preset.url.toLowerCase(),
-                              );
-                              return (
-                                <div
-                                  key={idx}
-                                  className="p-3 border border-slate-200 dark:border-slate-805/85 rounded-xl hover:border-indigo-500/35 bg-white dark:bg-slate-950/20 shadow-sm hover:shadow-md flex items-center justify-between gap-3 transition-all duration-300"
-                                >
-                                  <div className="min-w-0 flex-1">
-                                    <div className="flex items-center gap-1.5 font-mono">
-                                      <span className="text-[9px] font-bold text-slate-400 dark:text-slate-550">
-                                        Rank #{idx + 1}
-                                      </span>
-                                      <span className="text-[8.5px] uppercase font-bold px-1.5 rounded bg-indigo-50 dark:bg-indigo-950/30 text-indigo-600 dark:text-indigo-400 border border-indigo-100 dark:border-indigo-500/20">
-                                        Authority
-                                      </span>
-                                    </div>
-                                    <h5 className="text-[11.5px] font-bold text-slate-900 dark:text-slate-105 mt-1 line-clamp-1">
-                                      {preset.name}
-                                    </h5>
-                                    <p className="text-[9.5px] text-slate-500 dark:text-slate-400 font-mono mt-0.5 truncate">
-                                      {preset.url}
+                          {/* Dynamic Header container */}
+                          {(() => {
+                            const rawList = [
+                              ...RSS_CATALOG.map(p => ({ ...p, isCustom: false })),
+                              ...customDiscoveredFeeds.map(p => ({ ...p, isCustom: true }))
+                            ];
+                            const filteredList = rawList
+                              .filter(preset => !deletedDiscoveryUrls.some(u => u.toLowerCase() === preset.url.toLowerCase()))
+                              .filter(preset => preset.niche.toLowerCase() === selectedNiche.toLowerCase() || preset.isCustom);
+
+                            const isAllSelected = filteredList.length > 0 && filteredList.every(p => selectedPresetUrls.includes(p.url));
+                            const selectedPresetsList = filteredList.filter(p => selectedPresetUrls.includes(p.url));
+                            const nichePresetsCount = RSS_CATALOG.filter(c => c.niche === selectedNiche).length;
+
+                            return (
+                              <>
+                                <div className="bg-gradient-to-r from-indigo-50 via-slate-50 to-indigo-50/70 dark:from-indigo-950/40 dark:via-slate-900/50 dark:to-indigo-950/45 p-4 border border-indigo-100 dark:border-violet-500/15 rounded-xl flex flex-col md:flex-row md:items-center justify-between gap-3 mb-4 shrink-0 shadow-sm">
+                                  <div>
+                                    <h6 className="text-[10.5px] font-bold uppercase tracking-widest text-[#3F5353] dark:text-[#a5b4fc] font-mono">
+                                      ⚡ Ready-to-Deploy RSS presets
+                                    </h6>
+                                    <p className="text-[9.5px] text-slate-600 dark:text-slate-400 leading-relaxed font-sans mt-0.5">
+                                      Currently listing <span className="font-extrabold text-[#3F5353] dark:text-indigo-300">{filteredList.length} resource pathways</span> available under {selectedNiche.toUpperCase()}.
                                     </p>
                                   </div>
-
-                                  <div className="shrink-0 font-mono">
-                                    {isAlreadyIntegrated ? (
-                                      <span className="text-[9px] font-bold text-emerald-600 dark:text-emerald-450 bg-emerald-50 dark:bg-emerald-500/10 border border-emerald-200 dark:border-emerald-500/20 rounded px-2.5 py-1 inline-flex items-center select-none shadow-sm">
-                                        ✓ Added
-                                      </span>
-                                    ) : (
-                                      <button
-                                        type="button"
-                                        onClick={() =>
-                                          handleAddPresetFeed(
-                                            preset.name,
-                                            preset.url,
-                                          )
-                                        }
-                                        className="text-[9.5px] font-bold text-indigo-600 dark:text-indigo-400 hover:text-white bg-indigo-50 dark:bg-indigo-950/45 border border-indigo-150 dark:border-indigo-500/30 hover:bg-gradient-to-r hover:from-indigo-600 hover:to-indigo-500 rounded-lg px-2.5 py-1.5 shadow-sm transition-all duration-300 cursor-pointer"
-                                      >
-                                        + Integrate
-                                      </button>
+                                  <div className="flex items-center gap-2 select-none self-end md:self-auto">
+                                    {selectedPresetUrls.length > 0 && (
+                                      <div className="flex items-center gap-2">
+                                        <button
+                                          id="btn-deploy-selected"
+                                          type="button"
+                                          onClick={() => {
+                                            const listToDeploy = selectedPresetsList.map(p => ({
+                                              name: p.name,
+                                              url: p.url,
+                                              niche: p.niche
+                                            }));
+                                            handleDeploySelectedFeeds(listToDeploy);
+                                          }}
+                                          className="bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-bold px-2.5 py-1.5 rounded-lg shadow-sm transition whitespace-nowrap cursor-pointer"
+                                        >
+                                          Deploy Selected ({selectedPresetUrls.length})
+                                        </button>
+                                        <button
+                                          id="btn-delete-selected"
+                                          type="button"
+                                          onClick={() => {
+                                            handleDeleteDiscoveryFeed(selectedPresetUrls);
+                                          }}
+                                          className="border border-red-350 dark:border-red-900 bg-red-50 dark:bg-red-950/20 text-red-650 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-950/50 text-[10px] font-bold px-2.5 py-1.5 rounded-lg shadow-sm transition whitespace-nowrap cursor-pointer"
+                                        >
+                                          Delete Selected
+                                        </button>
+                                      </div>
                                     )}
+                                    <button
+                                      id="btn-deploy-niche-catalog"
+                                      type="button"
+                                      onClick={() => {
+                                        const nichePresets = RSS_CATALOG.filter(
+                                          (c) => c.niche === selectedNiche,
+                                        );
+                                        handleBulkAddPresets(nichePresets);
+                                      }}
+                                      className="bg-[#3F5353] dark:bg-[#5F528E] hover:bg-opacity-90 text-white text-[10px] font-bold px-3 py-1.5 rounded-lg shadow-md transition whitespace-nowrap cursor-pointer"
+                                    >
+                                      Deploy Catalog ({nichePresetsCount})
+                                    </button>
                                   </div>
                                 </div>
+
+                                <div className="flex items-center justify-between mb-2 px-1 text-[10px] select-none text-slate-500 dark:text-slate-400 font-mono">
+                                  <label className="flex items-center gap-2 cursor-pointer font-bold">
+                                    <input
+                                      id="select-all-discovery-checkbox"
+                                      type="checkbox"
+                                      checked={isAllSelected}
+                                      onChange={() => {
+                                        if (isAllSelected) {
+                                          setSelectedPresetUrls([]);
+                                        } else {
+                                          setSelectedPresetUrls(filteredList.map(p => p.url));
+                                        }
+                                      }}
+                                      className="rounded border-slate-300 dark:border-slate-850 accent-indigo-600 cursor-pointer w-3.5 h-3.5"
+                                    />
+                                    <span>Select All {filteredList.length} Presets</span>
+                                  </label>
+                                  {selectedPresetUrls.length > 0 && (
+                                    <span>{selectedPresetUrls.length} selected</span>
+                                  )}
+                                </div>
+
+                                {/* Presets List Scroll Box */}
+                                <div className="flex-1 overflow-y-auto pr-1 max-h-[350px] lg:max-h-[580px] scrollbar-thin grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 pb-4">
+                                  {filteredList.map((preset, idx) => {
+                                    const isAlreadyIntegrated = feeds.some(
+                                      (f) => f.url.toLowerCase() === preset.url.toLowerCase(),
+                                    );
+                                    const isChecked = selectedPresetUrls.includes(preset.url);
+
+                                    return (
+                                      <div
+                                        key={preset.url + idx}
+                                        className={`p-3.5 border rounded-xl relative bg-white dark:bg-slate-950/20 shadow-sm flex flex-col justify-between gap-3.5 transition-all duration-300 ${
+                                          isChecked
+                                            ? "border-indigo-600 dark:border-indigo-500/80 bg-indigo-50/10 dark:bg-indigo-950/10"
+                                            : "border-slate-200 dark:border-slate-805/85 hover:border-slate-305 dark:hover:border-slate-705"
+                                        }`}
+                                      >
+                                        <div className="flex items-start gap-2.5">
+                                          {/* Selection Checkbox */}
+                                          <input
+                                            id={`preset-checkbox-${idx}`}
+                                            type="checkbox"
+                                            checked={isChecked}
+                                            onChange={() => {
+                                              if (isChecked) {
+                                                setSelectedPresetUrls(prev => prev.filter(u => u !== preset.url));
+                                              } else {
+                                                setSelectedPresetUrls(prev => [...prev, preset.url]);
+                                              }
+                                            }}
+                                            className="rounded border-slate-300 dark:border-slate-850 text-indigo-600 accent-indigo-600 cursor-pointer w-4 h-4 mt-0.5 shrink-0"
+                                          />
+
+                                          <div className="min-w-0 flex-1">
+                                            <div className="flex items-center gap-1.5 flex-wrap font-mono">
+                                              <span className="text-[9px] font-bold text-slate-400 dark:text-slate-550">
+                                                Idx #{idx + 1}
+                                              </span>
+                                              {preset.isCustom ? (
+                                                <span className="text-[8.5px] uppercase font-bold px-1.5 rounded bg-violet-100 dark:bg-violet-950/30 text-violet-700 dark:text-[#a5b4fc] border border-violet-200 dark:border-violet-500/20">
+                                                  Discovered: {preset.niche}
+                                                </span>
+                                              ) : (
+                                                <span className="text-[8.5px] uppercase font-bold px-1.5 rounded bg-[#3F5353]/10 dark:bg-[#5F528E]/30 text-[#3F5353] dark:text-[#a5b4fc] border border-[#3F5353]/20 dark:border-[#5F528E]/20">
+                                                  Authority
+                                                </span>
+                                              )}
+                                            </div>
+                                            <h5 className="text-[11.5px] font-bold text-slate-900 dark:text-slate-105 mt-1 line-clamp-1">
+                                              {preset.name}
+                                            </h5>
+                                            <p className="text-[9.5px] text-slate-500 dark:text-slate-450 font-mono mt-0.5 truncate select-all" title={preset.url}>
+                                              {preset.url}
+                                            </p>
+                                            {preset.description && (
+                                              <p className="text-[9.5px] text-slate-500 dark:text-slate-400 mt-1 line-clamp-2 leading-normal">
+                                                {preset.description}
+                                              </p>
+                                            )}
+                                          </div>
+                                        </div>
+
+                                        <div className="flex items-center justify-between shrink-0 pt-2 border-t border-slate-100 dark:border-slate-900 font-mono text-[9px]">
+                                          {/* Individual Delete action */}
+                                          <button
+                                            id={`btn-preset-delete-${idx}`}
+                                            type="button"
+                                            onClick={() => {
+                                              if (confirmDeleteId === preset.url) {
+                                                handleDeleteDiscoveryFeed([preset.url]);
+                                                setConfirmDeleteId(null);
+                                              } else {
+                                                setConfirmDeleteId(preset.url);
+                                                setTimeout(() => setConfirmDeleteId(null), 3000);
+                                              }
+                                            }}
+                                            className="text-slate-400 hover:text-red-500 transition-colors uppercase font-extrabold text-[8.5px] flex items-center gap-1 cursor-pointer select-none"
+                                          >
+                                            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                            </svg>
+                                            <span>{confirmDeleteId === preset.url ? "Confirm?" : "Remove"}</span>
+                                          </button>
+
+                                          <div className="font-bold">
+                                            {isAlreadyIntegrated ? (
+                                              <span className="text-emerald-600 dark:text-emerald-450 bg-emerald-50 dark:bg-emerald-500/10 border border-emerald-200 dark:border-emerald-500/20 rounded-md px-2 py-0.5 inline-flex items-center gap-0.5 select-none font-sans font-black shadow-sm text-[8.5px]">
+                                                ✓ Added to Pathways
+                                              </span>
+                                            ) : (
+                                              <button
+                                                id={`btn-preset-adopt-${idx}`}
+                                                type="button"
+                                                onClick={() => handleAddPresetFeed(preset.name, preset.url)}
+                                                className="text-[9px] font-black text-indigo-600 dark:text-indigo-400 hover:text-white bg-indigo-50 dark:bg-indigo-950/45 border border-indigo-150 dark:border-indigo-500/30 hover:bg-gradient-to-r hover:from-indigo-600 hover:to-indigo-500 rounded-lg px-2 py-1 shadow-sm transition-all duration-300 pointer cursor-pointer"
+                                              >
+                                                Deploy +
+                                              </button>
+                                            )}
+                                          </div>
+                                        </div>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                                </>
                               );
-                            })}
+                            })()}
                           </div>
-                        </div>
-                      )}
-                    </div>
-                  )}
-                  {/* TAB 4: SAAS & INTEGRATION SETTINGS */}
-                  {activeAdminTab === "settings" && (
-                    <div className="flex flex-col h-full overflow-y-auto pr-1 space-y-4 text-xs leading-relaxed max-h-[440px] lg:max-h-[650px]">
-                      <div className="pb-3 border-b border-slate-850 flex items-center justify-between">
-                        <div>
-                          <h4 className="text-xs font-black text-slate-100 uppercase tracking-widest font-mono flex items-center gap-1.5">
-                            ⚙️ Platforms Settings
+                        )}
+                      </div>
+                    )}
+
+                    {/* TAB 4: SAAS & INTEGRATION SETTINGS */}
+                    {activeAdminTab === "settings" && (
+                      <div className="flex flex-col h-full overflow-y-auto pr-1 space-y-6 text-xs leading-relaxed max-h-[500px] lg:max-h-[800px] xl:max-h-[900px]">
+                        {/* Premium Header Banner */}
+                      <div className="bg-gradient-to-r from-indigo-50 via-slate-50 to-indigo-50/70 dark:from-indigo-950/40 dark:via-slate-900/50 dark:to-indigo-950/45 border border-indigo-100 dark:border-violet-500/15 rounded-xl p-5 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4 text-left">
+                        <div className="space-y-1">
+                          <span className="text-[9px] font-black tracking-widest text-[#7c3aed] uppercase font-mono px-2 py-0.5 bg-violet-50 dark:bg-violet-950/70 border border-violet-100 dark:border-violet-850/30 rounded-full inline-block">
+                            CONTROL PORTAL
+                          </span>
+                          <h4 className="text-sm font-black text-slate-800 dark:text-white uppercase tracking-wider font-sans flex items-center gap-1.5">
+                            ⚙️ Autonomous API Engine Configs
                           </h4>
-                          <p className="text-[10px] text-slate-450">
-                            Tune multi-agent models, keys & WP syncing configs
+                          <p className="text-[10.5px] text-slate-600 dark:text-slate-400">
+                            Configure multi-agent decision matrices, secure API gateways, workspace budgets, and WP synchronization controls.
                           </p>
+                        </div>
+                        <div className="flex items-center gap-2 bg-white dark:bg-slate-900 px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-800 self-start md:self-auto select-none">
+                          <span className="relative flex h-2 w-2">
+                            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                            <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                          </span>
+                          <span className="font-mono text-[9px] font-bold text-slate-700 dark:text-slate-300 uppercase">System Active</span>
                         </div>
                       </div>
 
@@ -4299,485 +6628,600 @@ export default function App() {
                           e.preventDefault();
                           handleSaveSaaSSettings(saasConfig);
                         }}
-                        className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-6"
+                        className="space-y-6"
                       >
-                        {/* API Credentials */}
-                        <div className="space-y-3">
-                          <h5 className="font-black text-indigo-400 uppercase tracking-widest text-[9.5px] font-mono flex items-center gap-1">
-                            <span>🔑</span> Model API Credentials
-                          </h5>
+                        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+                          {/* API Credentials: Spans full width (12 cols) with responsive 4-column sub-grid */}
+                          <div className="space-y-3 lg:col-span-12 text-left">
+                            <h5 className="font-black text-indigo-400 uppercase tracking-widest text-[9.5px] font-mono flex items-center gap-1">
+                              <span>🔑</span> Model API Gateways & Credentials
+                            </h5>
+                            
+                            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                              {/* Card A: Gemini */}
+                              <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-4 rounded-xl flex flex-col justify-between space-y-3 hover:border-indigo-500/20 dark:hover:border-slate-750 transition-all shadow-sm">
+                                <div className="space-y-1">
+                                  <div className="flex items-center justify-between">
+                                    <span className="font-bold text-[10.5px] text-slate-800 dark:text-slate-200 font-sans">Google Gemini Portal</span>
+                                    <span className="text-[8px] font-mono uppercase bg-indigo-50 dark:bg-slate-800 px-1.5 py-0.5 rounded text-indigo-650 dark:text-indigo-300 border border-indigo-100 dark:border-slate-700">Native</span>
+                                  </div>
+                                  <p className="text-[9px] text-slate-500 dark:text-slate-400 leading-relaxed font-sans">
+                                    Primary native LLM gateway. Standard preloaded keys take effect if left blank.
+                                  </p>
+                                </div>
+                                <input
+                                  type="password"
+                                  placeholder="••••••••••••••••••••••••"
+                                  value={saasConfig.modelSettings.geminiApiKey || ""}
+                                  onChange={(e) => {
+                                    const val = e.target.value;
+                                    setSaasConfig((prev: any) => ({
+                                      ...prev,
+                                      modelSettings: {
+                                        ...prev.modelSettings,
+                                        geminiApiKey: val,
+                                      },
+                                    }));
+                                  }}
+                                  className="w-full text-xs text-slate-850 dark:text-white bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg p-2 focus:outline-none focus:ring-1 focus:ring-indigo-500 font-sans shadow-inner"
+                                />
+                              </div>
 
-                          <div>
-                            <label className="text-[9px] font-extrabold text-slate-400 block mb-1 uppercase tracking-widest font-mono">
-                              GEMINI_API_KEY
-                            </label>
-                            <input
-                              type="password"
-                              placeholder="••••••••••••••••••••••••"
-                              value={
-                                saasConfig.modelSettings.geminiApiKey || ""
-                              }
-                              onChange={(e) => {
-                                const val = e.target.value;
-                                setSaasConfig((prev: any) => ({
-                                  ...prev,
-                                  modelSettings: {
-                                    ...prev.modelSettings,
-                                    geminiApiKey: val,
-                                  },
-                                }));
-                              }}
-                              className="w-full text-xs text-white bg-slate-955 border border-slate-800 rounded-lg p-2 focus:outline-none focus:ring-1 focus:ring-indigo-500 font-sans"
-                            />
-                            <p className="text-[9px] text-slate-500 mt-0.5">
-                              If blank, standard preloaded key from system
-                              credentials is used.
-                            </p>
+                              {/* Card B: OpenRouter */}
+                              <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-4 rounded-xl flex flex-col justify-between space-y-3 hover:border-indigo-500/20 dark:hover:border-slate-750 transition-all shadow-sm">
+                                <div className="space-y-1">
+                                  <div className="flex items-center justify-between">
+                                    <span className="font-bold text-[10.5px] text-slate-800 dark:text-slate-200 font-sans">OpenRouter Gateway</span>
+                                    <span className="text-[8px] font-mono uppercase bg-emerald-50 dark:bg-emerald-950/40 px-1.5 py-0.5 rounded text-emerald-650 dark:text-emerald-400 border border-emerald-100 dark:border-emerald-950/30">Recommended</span>
+                                  </div>
+                                  <p className="text-[9px] text-slate-550 dark:text-slate-400 leading-relaxed font-sans">
+                                    Powers 3rd-party models (DeepSeek, Llama) & handles automatic 429 quota overrides.
+                                  </p>
+                                </div>
+                                <input
+                                  type="password"
+                                  placeholder="••••••••••••••••••••••••"
+                                  value={saasConfig.modelSettings.openrouterApiKey || ""}
+                                  onChange={(e) => {
+                                    const val = e.target.value;
+                                    setSaasConfig((prev: any) => ({
+                                      ...prev,
+                                      modelSettings: {
+                                        ...prev.modelSettings,
+                                        openrouterApiKey: val,
+                                      },
+                                    }));
+                                  }}
+                                  className="w-full text-xs text-slate-850 dark:text-white bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg p-2 focus:outline-none focus:ring-1 focus:ring-indigo-500 font-sans shadow-inner"
+                                />
+                              </div>
+
+                              {/* Card C: MiniMax */}
+                              <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-4 rounded-xl flex flex-col justify-between space-y-3 hover:border-indigo-500/20 dark:hover:border-slate-750 transition-all shadow-sm">
+                                <div className="space-y-1">
+                                  <div className="flex items-center justify-between">
+                                    <span className="font-bold text-[10.5px] text-slate-800 dark:text-slate-200 font-sans">MiniMax Engine</span>
+                                    <span className="text-[8px] font-mono uppercase bg-rose-50 dark:bg-rose-950/40 px-1.5 py-0.5 rounded text-rose-650 dark:text-rose-400 border border-rose-100 dark:border-rose-950/30">Primary Writer</span>
+                                  </div>
+                                  <p className="text-[9px] text-slate-500 dark:text-slate-400 leading-relaxed font-sans">
+                                    Powers high-performance creative content writing, drafting, and style editing.
+                                  </p>
+                                </div>
+                                <input
+                                  type="password"
+                                  placeholder="••••••••••••••••••••••••"
+                                  value={saasConfig.modelSettings.minimaxApiKey || ""}
+                                  onChange={(e) => {
+                                    const val = e.target.value;
+                                    setSaasConfig((prev: any) => ({
+                                      ...prev,
+                                      modelSettings: {
+                                        ...prev.modelSettings,
+                                        minimaxApiKey: val,
+                                      },
+                                    }));
+                                  }}
+                                  className="w-full text-xs text-slate-850 dark:text-white bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg p-2 focus:outline-none focus:ring-1 focus:ring-indigo-500 font-sans shadow-inner"
+                                />
+                              </div>
+
+                              {/* Card D: OpenAI */}
+                              <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-4 rounded-xl flex flex-col justify-between space-y-3 hover:border-indigo-500/20 dark:hover:border-slate-755 transition-all shadow-sm">
+                                <div className="space-y-1">
+                                  <div className="flex items-center justify-between">
+                                    <span className="font-bold text-[10.5px] text-slate-800 dark:text-slate-200 font-sans">OpenAI Connector</span>
+                                    <span className="text-[8px] font-mono uppercase bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded text-slate-650 dark:text-slate-400 border border-slate-200 dark:border-slate-700">Optional</span>
+                                  </div>
+                                  <p className="text-[9px] text-slate-500 dark:text-slate-400 leading-relaxed font-sans">
+                                    Supplements the pipeline with secondary validation filters & Dall-E 3 visual assets.
+                                  </p>
+                                </div>
+                                <input
+                                  type="password"
+                                  placeholder="••••••••••••••••••••••••"
+                                  value={saasConfig.modelSettings.openaiApiKey || ""}
+                                  onChange={(e) => {
+                                    const val = e.target.value;
+                                    setSaasConfig((prev: any) => ({
+                                      ...prev,
+                                      modelSettings: {
+                                        ...prev.modelSettings,
+                                        openaiApiKey: val,
+                                      },
+                                    }));
+                                  }}
+                                  className="w-full text-xs text-slate-850 dark:text-white bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg p-2 focus:outline-none focus:ring-1 focus:ring-indigo-500 font-sans shadow-inner"
+                                />
+                              </div>
+                            </div>
                           </div>
 
-                          <div>
-                            <label className="text-[9px] font-extrabold text-slate-400 block mb-1 uppercase tracking-widest font-mono">
-                              OPENAI_API_KEY (Optional)
-                            </label>
-                            <input
-                              type="password"
-                              placeholder="••••••••••••••••••••••••"
-                              value={
-                                saasConfig.modelSettings.openaiApiKey || ""
-                              }
-                              onChange={(e) => {
-                                const val = e.target.value;
-                                setSaasConfig((prev: any) => ({
-                                  ...prev,
-                                  modelSettings: {
-                                    ...prev.modelSettings,
-                                    openaiApiKey: val,
-                                  },
-                                }));
-                              }}
-                              className="w-full text-xs text-white bg-slate-955 border border-slate-800 rounded-lg p-2 focus:outline-none focus:ring-1 focus:ring-indigo-500 font-sans"
-                            />
-                          </div>
+                          {/* Model matrix section: Spans 12 full columns for wide, glorious grid */}
+                          <div className="space-y-4 pt-4 border-t border-slate-850 lg:col-span-12 text-left">
+                            <h5 className="font-black text-indigo-400 uppercase tracking-widest text-[9.5px] font-mono flex items-center gap-1">
+                              <span>🔮</span> Digital Council Agent Intelligence Grid
+                            </h5>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-2 2xl:grid-cols-3 gap-3">
+                            <AgentModelSelector
+                               label="Research Agent"
+                               badge="Fact-Checking"
+                               modelKey="researchModel"
+                               customModelKey="researchCustomModel"
+                               fallbackModelKey="researchFallbackModel"
+                               fallbackCustomModelKey="researchFallbackCustomModel"
+                               settings={saasConfig.modelSettings}
+                               onChange={(updates) => setSaasConfig((prev: any) => ({ ...prev, modelSettings: { ...prev.modelSettings, ...updates } }))}
+                             />
 
-                          <div>
-                            <label className="text-[9px] font-extrabold text-indigo-400 block mb-1 uppercase tracking-widest font-mono">
-                              OPENROUTER_API_KEY (Recommended)
-                            </label>
-                            <input
-                              type="password"
-                              placeholder="••••••••••••••••••••••••"
-                              value={
-                                saasConfig.modelSettings.openrouterApiKey || ""
-                              }
-                              onChange={(e) => {
-                                const val = e.target.value;
-                                setSaasConfig((prev: any) => ({
-                                  ...prev,
-                                  modelSettings: {
-                                    ...prev.modelSettings,
-                                    openrouterApiKey: val,
-                                  },
-                                }));
-                              }}
-                              className="w-full text-xs text-white bg-slate-955 border border-slate-800 rounded-lg p-2 focus:outline-none focus:ring-1 focus:ring-indigo-500 font-sans"
-                            />
-                            <p className="text-[9px] text-slate-500 mt-0.5">
-                              Recommended. Automatically runs backup routing if
-                              Gemini hits quota (429), or allows selecting
-                              advanced models below.
-                            </p>
-                          </div>
+                             <AgentModelSelector
+                               label="Drafting Agent"
+                               badge="Creative Writer"
+                               modelKey="draftModel"
+                               customModelKey="draftCustomModel"
+                               fallbackModelKey="draftFallbackModel"
+                               fallbackCustomModelKey="draftFallbackCustomModel"
+                               settings={saasConfig.modelSettings}
+                               onChange={(updates) => setSaasConfig((prev: any) => ({ ...prev, modelSettings: { ...prev.modelSettings, ...updates } }))}
+                             />
 
-                          <div>
-                            <label className="text-[9px] font-extrabold text-indigo-400 block mb-1 uppercase tracking-widest font-mono">
-                              OpenRouter Custom Model ID
-                            </label>
-                            <input
-                              type="text"
-                              placeholder="deepseek/deepseek-chat"
-                              value={
-                                saasConfig.modelSettings
-                                  .openrouterCustomModel || ""
-                              }
-                              onChange={(e) => {
-                                const val = e.target.value;
-                                setSaasConfig((prev: any) => ({
-                                  ...prev,
-                                  modelSettings: {
-                                    ...prev.modelSettings,
-                                    openrouterCustomModel: val,
-                                  },
-                                }));
-                              }}
-                              className="w-full text-xs text-white bg-slate-955 border border-slate-800 rounded-lg p-2 focus:outline-none focus:ring-1 focus:ring-indigo-500 font-sans font-mono"
-                            />
-                            <p className="text-[9px] text-slate-500 mt-0.5">
-                              Enter any valid model slug from
-                              openrouter.ai/models (e.g.{" "}
-                              <code>anthropic/claude-3-haiku</code>,{" "}
-                              <code>meta-llama/llama-3-8b-instruct</code>,{" "}
-                              <code>nousresearch/hermes-3-llama-3.1-405b</code>
-                              ).
-                            </p>
+                             <AgentModelSelector
+                               label="Natural Style Editor"
+                               badge="Linguistic Polish"
+                               modelKey="humanizeModel"
+                               customModelKey="humanizeCustomModel"
+                               fallbackModelKey="humanizeFallbackModel"
+                               fallbackCustomModelKey="humanizeFallbackCustomModel"
+                               settings={saasConfig.modelSettings}
+                               onChange={(updates) => setSaasConfig((prev: any) => ({ ...prev, modelSettings: { ...prev.modelSettings, ...updates } }))}
+                             />
+
+                             <AgentModelSelector
+                               label="Image Agent"
+                               badge="Visual Media Director"
+                               modelKey="imageModel"
+                               customModelKey="imageCustomModel"
+                               fallbackModelKey="imageFallbackModel"
+                               fallbackCustomModelKey="imageFallbackCustomModel"
+                               optionsMode="image"
+                               settings={saasConfig.modelSettings}
+                               onChange={(updates) => setSaasConfig((prev: any) => ({ ...prev, modelSettings: { ...prev.modelSettings, ...updates } }))}
+                             >
+                                <div className="flex items-center gap-2 pt-1 border-t border-slate-900/40">
+                                  <div className="flex flex-col gap-2">
+                                    <div className="flex items-center gap-2">
+                                      <input
+                                        type="checkbox"
+                                        id="aiImagePreferred"
+                                        checked={saasConfig.modelSettings.aiImagePreferred ?? true}
+                                        onChange={(e) => {
+                                          const val = e.target.checked;
+                                          setSaasConfig((prev: any) => ({
+                                            ...prev,
+                                            modelSettings: {
+                                              ...prev.modelSettings,
+                                              aiImagePreferred: val,
+                                            },
+                                          }));
+                                        }}
+                                        className="rounded border-slate-800 bg-slate-900 text-indigo-600 focus:ring-indigo-500 w-3.5 h-3.5 cursor-pointer accent-indigo-650"
+                                      />
+                                      <label htmlFor="aiImagePreferred" className="text-[10px] text-slate-400 font-bold select-none cursor-pointer">
+                                        ✦ Always Generate Original AI Images (Do NOT recycle source URLs)
+                                      </label>
+                                    </div>
+
+                                    <div className="flex flex-col gap-1 mt-1">
+                                      <label htmlFor="inlineImageMode" className="text-[9px] text-[#818cf8] font-bold uppercase tracking-wider">
+                                        Default Article Visual Mode
+                                      </label>
+                                      <select
+                                        id="inlineImageMode"
+                                        value={saasConfig.modelSettings.inlineImageMode || "generate"}
+                                        onChange={(e) => {
+                                          const val = e.target.value;
+                                          setSaasConfig((prev: any) => ({
+                                            ...prev,
+                                            modelSettings: {
+                                              ...prev.modelSettings,
+                                              inlineImageMode: val,
+                                            },
+                                          }));
+                                        }}
+                                        className="w-full bg-slate-950 text-[10px] text-slate-300 font-bold px-2 py-1.5 rounded-lg border border-slate-850 outline-none focus:border-indigo-500 transition-all cursor-pointer"
+                                      >
+                                        <option value="generate">✦ RENDER LIVE IMAGES: Create and insert complete generated images for all slots</option>
+                                        <option value="promptOnly">✦ MANUAL OUTSIDE PROMPTS ONLY: Insert copying cards with prompts for offline tools</option>
+                                        <option value="none">✦ STRIP GRAPHICS: Remove visual hooks inside content body</option>
+                                      </select>
+                                      <p className="text-[8px] text-slate-505 leading-normal">
+                                        Control whether the multi-agent council finishes images immediately or outputs text prompts so you can run the final rendering offline or manually outside.
+                                      </p>
+                                    </div>
+                                  </div>
+                                </div>
+                             </AgentModelSelector>
+
+                             <AgentModelSelector
+                               label="SEO Strategist Agent"
+                               badge="Technical SEO Coach"
+                               modelKey="seoModel"
+                               customModelKey="seoCustomModel"
+                               fallbackModelKey="seoFallbackModel"
+                               fallbackCustomModelKey="seoFallbackCustomModel"
+                               settings={saasConfig.modelSettings}
+                               onChange={(updates) => setSaasConfig((prev: any) => ({ ...prev, modelSettings: { ...prev.modelSettings, ...updates } }))}
+                             />
+
+                             <AgentModelSelector
+                               label="Originality & Readability Validator"
+                               badge="Editorial Guard"
+                               modelKey="originalityModel"
+                               customModelKey="originalityCustomModel"
+                               fallbackModelKey="originalityFallbackModel"
+                               fallbackCustomModelKey="originalityFallbackCustomModel"
+                               settings={saasConfig.modelSettings}
+                               onChange={(updates) => setSaasConfig((prev: any) => ({ ...prev, modelSettings: { ...prev.modelSettings, ...updates } }))}
+                             />
+
+                             <AgentModelSelector
+                               label="Lead Quality & Safety Compliance Inspector"
+                               badge="Safety Auditor"
+                               modelKey="validationModel"
+                               customModelKey="validationCustomModel"
+                               fallbackModelKey="validationFallbackModel"
+                               fallbackCustomModelKey="validationFallbackCustomModel"
+                               settings={saasConfig.modelSettings}
+                               onChange={(updates) => setSaasConfig((prev: any) => ({ ...prev, modelSettings: { ...prev.modelSettings, ...updates } }))}
+                             />
+
+                             <AgentModelSelector
+                               label="Opportunity Scoring Agent"
+                               badge="Content Radar"
+                               modelKey="opportunityScoringModel"
+                               customModelKey="opportunityScoringCustomModel"
+                               fallbackModelKey="opportunityScoringFallbackModel"
+                               fallbackCustomModelKey="opportunityScoringFallbackCustomModel"
+                               settings={saasConfig.modelSettings}
+                               onChange={(updates) => setSaasConfig((prev: any) => ({ ...prev, modelSettings: { ...prev.modelSettings, ...updates } }))}
+                             />
+
+                             <AgentModelSelector
+                               label="Advanced Copilot Synthesis"
+                               badge="Copilot"
+                               modelKey="copilotSynthesisModel"
+                               customModelKey="copilotSynthesisCustomModel"
+                               fallbackModelKey="copilotSynthesisFallbackModel"
+                               fallbackCustomModelKey="copilotSynthesisFallbackCustomModel"
+                               settings={saasConfig.modelSettings}
+                               onChange={(updates) => setSaasConfig((prev: any) => ({ ...prev, modelSettings: { ...prev.modelSettings, ...updates } }))}
+                             />
+
+                             <AgentModelSelector
+                               label="Global Internet Feed Discovery"
+                               badge="Feed Discovery"
+                               modelKey="discoveryModel"
+                               customModelKey="discoveryCustomModel"
+                               fallbackModelKey="discoveryFallbackModel"
+                               fallbackCustomModelKey="discoveryFallbackCustomModel"
+                               settings={saasConfig.modelSettings}
+                               onChange={(updates) => setSaasConfig((prev: any) => ({ ...prev, modelSettings: { ...prev.modelSettings, ...updates } }))}
+                             />
+
+                             <AgentModelSelector
+                               label="Niche Research & Discovery"
+                               badge="Niches"
+                               modelKey="nicheDiscoveryModel"
+                               customModelKey="nicheDiscoveryCustomModel"
+                               fallbackModelKey="nicheDiscoveryFallbackModel"
+                               fallbackCustomModelKey="nicheDiscoveryFallbackCustomModel"
+                               settings={saasConfig.modelSettings}
+                               onChange={(updates) => setSaasConfig((prev: any) => ({ ...prev, modelSettings: { ...prev.modelSettings, ...updates } }))}
+                             />
+
+                             {/* Quota Fallback Configuration */}
+                            <div className="bg-slate-950 p-3 rounded-xl border border-dashed border-slate-800 space-y-3 col-span-1 sm:col-span-2 md:col-span-2 2xl:col-span-3">
+                              <div className="flex items-center justify-between border-b border-slate-850 pb-2">
+                                <div className="flex flex-col">
+                                  <span className="text-[9.5px] font-black text-amber-500 uppercase tracking-widest font-mono">
+                                    ⚠️ Quota Fallover Gateway
+                                  </span>
+                                  <span className="text-[8.5px] text-slate-500 font-sans mt-0.5">
+                                    Reroute to backup models on API quota exceed
+                                  </span>
+                                </div>
+                                <div className="relative inline-flex items-center cursor-pointer select-none">
+                                  <input
+                                    type="checkbox"
+                                    id="fallback-toggle"
+                                    checked={!!saasConfig.modelSettings.fallbackEnabled}
+                                    onChange={(e) => {
+                                      const checked = e.target.checked;
+                                      setSaasConfig((prev: any) => ({
+                                        ...prev,
+                                        modelSettings: {
+                                          ...prev.modelSettings,
+                                          fallbackEnabled: checked,
+                                        },
+                                      }));
+                                    }}
+                                    className="sr-only peer"
+                                  />
+                                  <div className="w-9 h-5 bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-indigo-600"></div>
+                                </div>
+                              </div>
+                              <div className="flex flex-col space-y-2.5">
+                                <label className="text-[8.5px] font-extrabold text-slate-400 block uppercase tracking-widest font-mono">
+                                  Unified Fallback Model ID
+                                </label>
+                                <select
+                                  value={saasConfig.modelSettings.globalFallbackModel || "gemini-2.5-flash"}
+                                  onChange={(e) => {
+                                    const val = e.target.value;
+                                    setSaasConfig((prev: any) => ({
+                                      ...prev,
+                                      modelSettings: {
+                                        ...prev.modelSettings,
+                                        globalFallbackModel: val,
+                                      },
+                                    }));
+                                  }}
+                                  disabled={!saasConfig.modelSettings.fallbackEnabled}
+                                  className="w-full text-xs bg-slate-900 border border-slate-850 rounded-lg p-2 text-slate-200 font-semibold focus:outline-none focus:ring-1 focus:ring-indigo-500 disabled:opacity-55"
+                                >
+                                  <optgroup label="Google Gemini" className="text-indigo-400 font-mono text-[10px]">
+                                    <option value="gemini-3.5-flash">Gemini 3.5 Flash</option>
+                                    <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
+                                    <option value="gemini-3.1-pro-preview">Gemini 3.1 Pro (Preview)</option>
+                                  </optgroup>
+                                  <optgroup label="OpenRouter" className="text-emerald-400 font-mono text-[10px]">
+                                    <option value="custom-openrouter">✦ Custom OpenRouter Model</option>
+                                    <option value="deepseek/deepseek-chat">DeepSeek V3 (Fast)</option>
+                                    <option value="meta-llama/llama-3.3-70b-instruct">Llama 3.3 70B</option>
+                                    <option value="anthropic/claude-3.5-sonnet">Claude 3.5 Sonnet</option>
+                                  </optgroup>
+                                </select>
+                                
+                                {saasConfig.modelSettings.globalFallbackModel === "custom-openrouter" && (
+                                  <div className={`mt-2 p-2.5 bg-indigo-500/10 border border-indigo-500/30 rounded-lg animate-in fade-in zoom-in duration-200 shadow-inner ${!saasConfig.modelSettings.fallbackEnabled ? 'opacity-55 pointer-events-none' : ''}`}>
+                                    <label className="text-[9px] font-extrabold text-indigo-400 block mb-1.5 uppercase tracking-widest font-mono">
+                                        ✨ Custom Model ID
+                                    </label>
+                                    <input
+                                      type="text"
+                                      placeholder="e.g. openrouter/free"
+                                      value={saasConfig.modelSettings.globalFallbackCustomModel || ""}
+                                      onChange={(e) => {
+                                        const val = e.target.value;
+                                        setSaasConfig((prev: any) => ({
+                                          ...prev,
+                                          modelSettings: {
+                                            ...prev.modelSettings,
+                                            globalFallbackCustomModel: val,
+                                          },
+                                        }));
+                                      }}
+                                      className="w-full text-xs text-[#0D1219] dark:text-white bg-white dark:bg-slate-900 border border-indigo-500 rounded-lg p-2 focus:outline-none focus:ring-2 focus:ring-indigo-500 font-mono shadow-sm"
+                                    />
+                                  </div>
+                                )}
+                                
+                                <p className="text-[8px] text-slate-500 leading-normal italic mt-2">
+                                  Strict warning: When enabled, API overloads auto-route to this backup. Silent failover is strictly forbidden if this is toggled OFF.
+                                </p>
+                              </div>
+                            </div>
                           </div>
                         </div>
 
-                        {/* Model matrix */}
-                        <div className="space-y-3 pt-4 border-t lg:pt-0 lg:border-t-0 border-slate-850">
-                          <h5 className="font-black text-indigo-400 uppercase tracking-widest text-[9.5px] font-mono flex items-center gap-1">
-                            <span>🧠</span> Agent Model Matrix
+                        {/* SECTION 3: OPERATIONAL BENCHMARKS, FALLOVER & COST ESTIMATES */}
+                        <div className="space-y-4 lg:col-span-12 text-left pt-4 border-t border-slate-800">
+                          <h5 className="font-mono text-indigo-400 uppercase tracking-widest text-[9.5px] font-black flex items-center gap-1.5">
+                            <span>📊</span> Controls, Quotas & Cost Guardrails
                           </h5>
 
-                          <div className="grid grid-cols-2 gap-2">
+                          <div className="grid grid-cols-1 md:grid-cols-3 gap-5 items-stretch">
+                            {/* Card 1: Performance limits */}
+                            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 flex flex-col justify-between space-y-4 shadow-sm hover:border-indigo-500/20 transition-all duration-200">
+                              <div>
+                                <span className="text-[9.5px] font-black text-indigo-400 uppercase tracking-widest font-mono block mb-1">
+                                  ⚡ Performance Benchmarks
+                                </span>
+                                <span className="text-[9px] text-slate-500 dark:text-slate-400 block leading-normal">
+                                  Manage active operational speed boundaries and brand output standards.
+                                </span>
+                              </div>
+                              <div className="space-y-4">
+                            {/* Max Concurrent Tasks / Agents */}
                             <div>
-                              <label className="text-[9px] font-extrabold text-slate-400 block mb-1 font-mono uppercase tracking-widest">
-                                Research Agent
-                              </label>
-                              <select
-                                value={
-                                  saasConfig.modelSettings.researchModel ||
-                                  "gemini-3.5-flash"
-                                }
+                              <div className="flex items-center justify-between">
+                                <label className="text-[9px] font-extrabold text-slate-700 dark:text-slate-300 uppercase tracking-widest font-mono flex items-center gap-1.5">
+                                  <span>🚀</span> Max Simultaneous Agent Orchestrations:{" "}
+                                  <span className="text-indigo-400 font-black">
+                                    {saasConfig.modelSettings.maxConcurrentAgents || 3}
+                                  </span>
+                                </label>
+                              </div>
+                              <input
+                                type="range"
+                                min="1"
+                                max="10"
+                                value={saasConfig.modelSettings.maxConcurrentAgents || 3}
                                 onChange={(e) => {
-                                  const val = e.target.value;
+                                  const val = parseInt(e.target.value);
                                   setSaasConfig((prev: any) => ({
                                     ...prev,
                                     modelSettings: {
                                       ...prev.modelSettings,
-                                      researchModel: val,
+                                      maxConcurrentAgents: val,
                                     },
                                   }));
                                 }}
-                                className="w-full text-xs bg-slate-950 border border-slate-800 rounded-lg p-2 text-slate-200 font-semibold focus:outline-none focus:ring-1 focus:ring-indigo-500"
-                              >
-                                <optgroup
-                                  label="Google Gemini"
-                                  className="text-indigo-400 font-mono text-[10px]"
-                                >
-                                  <option
-                                    value="gemini-3.5-flash"
-                                    className="bg-slate-950"
-                                  >
-                                    Gemini 3.5 Flash
-                                  </option>
-                                  <option
-                                    value="gemini-2.5-flash"
-                                    className="bg-slate-950"
-                                  >
-                                    Gemini 2.5 Flash
-                                  </option>
-                                  <option
-                                    value="gemini-2.5-pro"
-                                    className="bg-slate-950"
-                                  >
-                                    Gemini 2.5 Pro
-                                  </option>
-                                </optgroup>
-                                <optgroup
-                                  label="OpenRouter (Requires OpenRouter Key)"
-                                  className="text-emerald-400 font-mono text-[10px]"
-                                >
-                                  <option
-                                    value="custom-openrouter"
-                                    className="bg-slate-950 text-indigo-400 font-bold"
-                                  >
-                                    ✦ Custom OpenRouter Model
-                                  </option>
-                                  <option
-                                    value="deepseek/deepseek-chat"
-                                    className="bg-slate-950"
-                                  >
-                                    DeepSeek V3 (Fast)
-                                  </option>
-                                  <option
-                                    value="meta-llama/llama-3.3-70b-instruct"
-                                    className="bg-slate-950"
-                                  >
-                                    Llama 3.3 70B
-                                  </option>
-                                  <option
-                                    value="anthropic/claude-3.5-sonnet"
-                                    className="bg-slate-950"
-                                  >
-                                    Claude 3.5 Sonnet
-                                  </option>
-                                  <option
-                                    value="google/gemini-2.5-flash"
-                                    className="bg-slate-950"
-                                  >
-                                    Gemini 2.5 Flash (OR)
-                                  </option>
-                                  <option
-                                    value="google/gemini-2.5-pro"
-                                    className="bg-slate-950"
-                                  >
-                                    Gemini 2.5 Pro (OR)
-                                  </option>
-                                </optgroup>
-                              </select>
+                                className="w-full accent-indigo-500 mt-1 cursor-pointer"
+                              />
+                              <p className="text-[8.5px] text-slate-500 dark:text-slate-400 italic mt-0.5">
+                                Allows processing up to {saasConfig.modelSettings.maxConcurrentAgents || 3} digital agent councils in parallel for higher-throughput publication runs.
+                              </p>
                             </div>
 
+                            {/* Naturalness score */}
                             <div>
-                              <label className="text-[9px] font-extrabold text-slate-400 block mb-1 font-mono uppercase tracking-widest">
-                                Drafting Agent
-                              </label>
-                              <select
+                              <div className="flex items-center justify-between">
+                                <label className="text-[9px] font-extrabold text-slate-700 dark:text-slate-300 uppercase tracking-widest font-mono">
+                                  Min Editorial Naturalness Score:{" "}
+                                  <span className="text-emerald-400 font-black">
+                                    {saasConfig.modelSettings.minHumanScoreTarget || 95}%
+                                  </span>
+                                </label>
+                              </div>
+                              <input
+                                type="range"
+                                min="75"
+                                max="99"
                                 value={
-                                  saasConfig.modelSettings.draftModel ||
-                                  "gemini-3.5-flash"
+                                  saasConfig.modelSettings.minHumanScoreTarget ||
+                                  95
                                 }
                                 onChange={(e) => {
-                                  const val = e.target.value;
+                                  const val = parseInt(e.target.value);
                                   setSaasConfig((prev: any) => ({
                                     ...prev,
                                     modelSettings: {
                                       ...prev.modelSettings,
-                                      draftModel: val,
+                                      minHumanScoreTarget: val,
                                     },
                                   }));
                                 }}
-                                className="w-full text-xs bg-slate-950 border border-slate-800 rounded-lg p-2 text-slate-200 font-semibold focus:outline-none focus:ring-1 focus:ring-indigo-500"
-                              >
-                                <optgroup
-                                  label="Google Gemini"
-                                  className="text-indigo-400 font-mono text-[10px]"
-                                >
-                                  <option
-                                    value="gemini-3.5-flash"
-                                    className="bg-slate-950"
-                                  >
-                                    Gemini 3.5 Flash
-                                  </option>
-                                  <option
-                                    value="gemini-2.5-flash"
-                                    className="bg-slate-950"
-                                  >
-                                    Gemini 2.5 Flash
-                                  </option>
-                                  <option
-                                    value="gemini-2.5-pro"
-                                    className="bg-slate-950"
-                                  >
-                                    Gemini 2.5 Pro
-                                  </option>
-                                </optgroup>
-                                <optgroup
-                                  label="OpenRouter (Requires OpenRouter Key)"
-                                  className="text-emerald-400 font-mono text-[10px]"
-                                >
-                                  <option
-                                    value="custom-openrouter"
-                                    className="bg-slate-950 text-indigo-400 font-bold"
-                                  >
-                                    ✦ Custom OpenRouter Model
-                                  </option>
-                                  <option
-                                    value="deepseek/deepseek-chat"
-                                    className="bg-slate-950"
-                                  >
-                                    DeepSeek V3 (Fast)
-                                  </option>
-                                  <option
-                                    value="meta-llama/llama-3.3-70b-instruct"
-                                    className="bg-slate-950"
-                                  >
-                                    Llama 3.3 70B
-                                  </option>
-                                  <option
-                                    value="anthropic/claude-3.5-sonnet"
-                                    className="bg-slate-950"
-                                  >
-                                    Claude 3.5 Sonnet
-                                  </option>
-                                  <option
-                                    value="google/gemini-2.5-flash"
-                                    className="bg-slate-950"
-                                  >
-                                    Gemini 2.5 Flash (OR)
-                                  </option>
-                                  <option
-                                    value="google/gemini-2.5-pro"
-                                    className="bg-slate-950"
-                                  >
-                                    Gemini 2.5 Pro (OR)
-                                  </option>
-                                </optgroup>
-                              </select>
+                                className="w-full accent-indigo-500 mt-1 cursor-pointer"
+                              />
                             </div>
+                          </div>
+                        </div>
 
-                            <div>
-                              <label className="text-[9px] font-extrabold text-slate-400 block mb-1 font-mono uppercase tracking-widest">
-                                Natural Style Editor
-                              </label>
-                              <select
-                                value={
-                                  saasConfig.modelSettings.humanizeModel ||
-                                  "gemini-3.5-flash"
-                                }
-                                onChange={(e) => {
-                                  const val = e.target.value;
-                                  setSaasConfig((prev: any) => ({
-                                    ...prev,
-                                    modelSettings: {
-                                      ...prev.modelSettings,
-                                      humanizeModel: val,
-                                    },
-                                  }));
-                                }}
-                                className="w-full text-xs bg-slate-950 border border-slate-800 rounded-lg p-2 text-slate-200 font-semibold focus:outline-none focus:ring-1 focus:ring-indigo-500"
-                              >
-                                <optgroup
-                                  label="Google Gemini"
-                                  className="text-indigo-400 font-mono text-[10px]"
-                                >
-                                  <option
-                                    value="gemini-3.5-flash"
-                                    className="bg-slate-950"
-                                  >
-                                    Gemini 3.5 Flash
-                                  </option>
-                                  <option
-                                    value="gemini-2.5-flash"
-                                    className="bg-slate-950"
-                                  >
-                                    Gemini 2.5 Flash
-                                  </option>
-                                  <option
-                                    value="gemini-2.5-pro"
-                                    className="bg-slate-950"
-                                  >
-                                    Gemini 2.5 Pro
-                                  </option>
-                                </optgroup>
-                                <optgroup
-                                  label="OpenRouter (Requires OpenRouter Key)"
-                                  className="text-emerald-400 font-mono text-[10px]"
-                                >
-                                  <option
-                                    value="custom-openrouter"
-                                    className="bg-slate-950 text-indigo-400 font-bold"
-                                  >
-                                    ✦ Custom OpenRouter Model
-                                  </option>
-                                  <option
-                                    value="deepseek/deepseek-chat"
-                                    className="bg-slate-950"
-                                  >
-                                    DeepSeek V3 (Fast)
-                                  </option>
-                                  <option
-                                    value="meta-llama/llama-3.3-70b-instruct"
-                                    className="bg-slate-950"
-                                  >
-                                    Llama 3.3 70B
-                                  </option>
-                                  <option
-                                    value="anthropic/claude-3.5-sonnet"
-                                    className="bg-slate-950"
-                                  >
-                                    Claude 3.5 Sonnet
-                                  </option>
-                                  <option
-                                    value="google/gemini-2.5-flash"
-                                    className="bg-slate-950"
-                                  >
-                                    Gemini 2.5 Flash (OR)
-                                  </option>
-                                  <option
-                                    value="google/gemini-2.5-pro"
-                                    className="bg-slate-950"
-                                  >
-                                    Gemini 2.5 Pro (OR)
-                                  </option>
-                                </optgroup>
-                              </select>
+                        {/* Card 2: Quota Fallover Gateway */}
+                        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 flex flex-col justify-between space-y-3 shadow-sm hover:border-indigo-500/20 transition-all duration-200">
+                          <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-850 pb-2">
+                            <div className="flex flex-col">
+                              <span className="text-[9.5px] font-black text-amber-500 uppercase tracking-widest font-mono">
+                                ⚠️ Quota Fallover Gateway
+                              </span>
+                              <span className="text-[8px] text-slate-500 dark:text-slate-400 mt-0.5">
+                                Reroute to backup models on API quota exceed
+                              </span>
                             </div>
-
-                            <div>
-                              <label className="text-[9px] font-extrabold text-slate-400 block mb-1 font-mono uppercase tracking-widest">
-                                Image Agent
-                              </label>
-                              <select
-                                value={
-                                  saasConfig.modelSettings.imageModel ||
-                                  "imagen-3"
-                                }
+                            <div className="relative inline-flex items-center cursor-pointer select-none">
+                              <input
+                                type="checkbox"
+                                id="fallback-toggle-bento"
+                                checked={!!saasConfig.modelSettings.fallbackEnabled}
                                 onChange={(e) => {
-                                  const val = e.target.value;
+                                  const checked = e.target.checked;
                                   setSaasConfig((prev: any) => ({
                                     ...prev,
                                     modelSettings: {
                                       ...prev.modelSettings,
-                                      imageModel: val,
+                                      fallbackEnabled: checked,
                                     },
                                   }));
                                 }}
-                                className="w-full text-xs bg-slate-950 border border-slate-800 rounded-lg p-2 text-slate-200 font-semibold focus:outline-none focus:ring-1 focus:ring-indigo-500"
-                              >
-                                <option
-                                  value="imagen-3"
-                                  className="bg-slate-950"
-                                >
-                                  Nano Banana 2 (Pollinations)
-                                </option>
-                                <option
-                                  value="dall-e-3"
-                                  className="bg-slate-950"
-                                >
-                                  ChatGPT Images 2.0 (OpenAI)
-                                </option>
-                              </select>
+                                className="sr-only peer"
+                              />
+                              <div className="w-9 h-5 bg-slate-200 dark:bg-slate-900 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-indigo-600"></div>
                             </div>
                           </div>
 
-                          <div className="mt-3">
-                            <div className="flex items-center justify-between">
-                              <label className="text-[9px] font-extrabold text-slate-300 uppercase tracking-widest font-mono">
-                                Min Editorial Naturalness Score:{" "}
-                                <span className="text-emerald-400 font-black">
-                                  {saasConfig.modelSettings
-                                    .minHumanScoreTarget || 95}
-                                  %
-                                </span>
-                              </label>
-                            </div>
-                            <input
-                              type="range"
-                              min="75"
-                              max="99"
-                              value={
-                                saasConfig.modelSettings.minHumanScoreTarget ||
-                                95
-                              }
+                          <div className="flex-1 flex flex-col justify-center space-y-2 mt-2 text-left">
+                            <label className="text-[8.5px] font-extrabold text-slate-600 dark:text-[#94a3b8] block uppercase tracking-widest font-mono">
+                              Unified Fallback Model ID
+                            </label>
+                            <select
+                              value={saasConfig.modelSettings.globalFallbackModel || "gemini-2.5-flash"}
                               onChange={(e) => {
-                                const val = parseInt(e.target.value);
+                                const val = e.target.value;
                                 setSaasConfig((prev: any) => ({
                                   ...prev,
                                   modelSettings: {
                                     ...prev.modelSettings,
-                                    minHumanScoreTarget: val,
+                                    globalFallbackModel: val,
                                   },
                                 }));
                               }}
-                              className="w-full accent-indigo-500 mt-1 cursor-pointer"
-                            />
+                              disabled={!saasConfig.modelSettings.fallbackEnabled}
+                              className="w-full text-xs bg-slate-900 border border-slate-800 rounded-lg p-2 text-slate-200 font-semibold focus:outline-none focus:ring-1 focus:ring-indigo-500 disabled:opacity-55 cursor-pointer"
+                            >
+                              <optgroup label="Google Gemini" className="text-indigo-400 font-mono text-[10px]">
+                                <option value="gemini-3.5-flash">Gemini 3.5 Flash</option>
+                                <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
+                                <option value="gemini-3.1-pro-preview">Gemini 3.1 Pro (Preview)</option>
+                              </optgroup>
+                              <optgroup label="OpenRouter" className="text-emerald-400 font-mono text-[10px]">
+                                <option value="custom-openrouter">✦ Custom OpenRouter Model</option>
+                                <option value="deepseek/deepseek-chat">DeepSeek V3 (Fast)</option>
+                                <option value="meta-llama/llama-3.3-70b-instruct">Llama 3.3 70B</option>
+                                <option value="anthropic/claude-3.5-sonnet">Claude 3.5 Sonnet</option>
+                              </optgroup>
+                            </select>
+                            
+                            {saasConfig.modelSettings.globalFallbackModel === "custom-openrouter" && (
+                              <div className={`mt-2 p-2 bg-indigo-500/10 border border-indigo-500/30 rounded-lg animate-in fade-in duration-200 ${!saasConfig.modelSettings.fallbackEnabled ? 'opacity-55 pointer-events-none' : ''}`}>
+                                <label className="text-[8px] font-extrabold text-indigo-400 block mb-1 uppercase tracking-widest font-mono">
+                                  Custom Fallback Model ID
+                                </label>
+                                <input
+                                  type="text"
+                                  placeholder="e.g. openrouter/free"
+                                  value={saasConfig.modelSettings.globalFallbackCustomModel || ""}
+                                  onChange={(e) => {
+                                    const val = e.target.value;
+                                    setSaasConfig((prev: any) => ({
+                                      ...prev,
+                                      modelSettings: {
+                                        ...prev.modelSettings,
+                                        globalFallbackCustomModel: val,
+                                      },
+                                    }));
+                                  }}
+                                  className="w-full text-xs text-slate-850 dark:text-white bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-md p-1.5 focus:outline-none focus:ring-1 focus:ring-indigo-500 font-mono shadow-inner"
+                                />
+                              </div>
+                            )}
                           </div>
+                        </div>
 
-                          {/* Interactive Cost Calculator */}
-                          <div className="space-y-3 pt-4 mt-3 lg:pt-0 lg:mt-0 border-t lg:border-t-0 border-slate-850">
+                        {/* Card 3: AI Cost & Budget Estimator */}
+                        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 flex flex-col justify-between space-y-3.5 shadow-sm hover:border-indigo-500/20 transition-all duration-200">
                             <h5 className="font-black text-emerald-400 uppercase tracking-widest text-[9.5px] font-mono flex items-center gap-1">
                               <span>📊</span> AI Cost & Budget Estimator
                             </h5>
-                            <p className="text-[9px] text-slate-400 leading-normal">
+                            <p className="text-[9px] text-slate-500 dark:text-slate-400 leading-normal">
                               Monitor live accumulated multi-agent API
                               consumption billing data alongside projected
                               budgeting forecast instruments.
                             </p>
 
                             {realSaaSStats && (
-                              <div className="bg-slate-950 p-3 rounded-xl border border-slate-900 grid grid-cols-2 gap-2 text-center select-none font-mono">
-                                <div className="col-span-2 border-b border-slate-900 pb-1.5 flex items-center justify-between">
-                                  <span className="text-[8px] font-black text-indigo-400 uppercase tracking-wider flex items-center gap-1">
+                              <div className="bg-slate-50 dark:bg-slate-950 p-3 rounded-xl border border-slate-250/20 dark:border-slate-900 grid grid-cols-2 gap-2 text-center select-none font-mono">
+                                <div className="col-span-2 border-b border-slate-200 dark:border-slate-900 pb-1.5 flex items-center justify-between">
+                                  <span className="text-[8px] font-black text-indigo-500 dark:text-indigo-400 uppercase tracking-wider flex items-center gap-1">
                                     <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
                                     Active Historical SaaS Cost Audit
                                   </span>
@@ -4786,11 +7230,11 @@ export default function App() {
                                   </span>
                                 </div>
 
-                                <div className="border-r border-slate-900">
+                                <div className="border-r border-slate-200 dark:border-slate-900">
                                   <span className="block text-[7px] text-slate-500 font-bold uppercase tracking-wide">
                                     Articles Processed
                                   </span>
-                                  <span className="text-[11px] font-black text-white">
+                                  <span className="text-[11px] font-black text-slate-800 dark:text-white">
                                     {realSaaSStats.totalArticles} articles
                                   </span>
                                 </div>
@@ -4798,25 +7242,25 @@ export default function App() {
                                   <span className="block text-[7px] text-slate-500 font-bold uppercase tracking-wide">
                                     Total Words Syndicated
                                   </span>
-                                  <span className="text-[11px] font-black text-white">
+                                  <span className="text-[11px] font-black text-slate-800 dark:text-white">
                                     {realSaaSStats.totalWords.toLocaleString()}{" "}
                                     words
                                   </span>
                                 </div>
 
-                                <div className="border-t border-r border-slate-900 pt-1.5">
+                                <div className="border-t border-r border-slate-200 dark:border-slate-900 pt-1.5">
                                   <span className="block text-[7px] text-slate-500 font-bold uppercase tracking-wide">
                                     Accumulated API Cost
                                   </span>
-                                  <span className="text-[11px] font-black text-emerald-400">
+                                  <span className="text-[11px] font-black text-emerald-600 dark:text-emerald-400">
                                     ${realSaaSStats.overallCost.toFixed(4)}
                                   </span>
                                 </div>
-                                <div className="border-t border-slate-900 pt-1.5">
+                                <div className="border-t border-slate-200 dark:border-slate-900 pt-1.5">
                                   <span className="block text-[7px] text-slate-500 font-bold uppercase tracking-wide">
                                     Avg Cost / Article
                                   </span>
-                                  <span className="text-[11px] font-black text-emerald-500">
+                                  <span className="text-[11px] font-black text-emerald-600 dark:text-emerald-500">
                                     $
                                     {realSaaSStats.averageCostPerArticle.toFixed(
                                       4,
@@ -4826,12 +7270,12 @@ export default function App() {
                               </div>
                             )}
 
-                            <div className="space-y-2 bg-slate-950 p-3 rounded-xl border border-slate-850">
+                            <div className="space-y-2 bg-slate-50 dark:bg-slate-950 p-3 rounded-xl border border-slate-200 dark:border-slate-850">
                               {/* Daily count slider */}
                               <div>
-                                <div className="flex justify-between text-[9px] font-mono text-slate-400">
+                                <div className="flex justify-between text-[9px] font-mono text-slate-500 dark:text-slate-400">
                                   <span>REWRITES PER DAY</span>
-                                  <span className="text-emerald-400 font-black">
+                                  <span className="text-emerald-600 dark:text-emerald-400 font-black">
                                     {estArticlesPerDay} articles
                                   </span>
                                 </div>
@@ -4851,7 +7295,7 @@ export default function App() {
 
                               {/* Model settings selector */}
                               <div>
-                                <label className="text-[8.5px] font-mono text-slate-400 uppercase block mb-1">
+                                <label className="text-[8.5px] font-mono text-slate-500 dark:text-slate-400 uppercase block mb-1">
                                   selected model tier
                                 </label>
                                 <div className="grid grid-cols-3 gap-1">
@@ -4861,10 +7305,10 @@ export default function App() {
                                         key={tier}
                                         type="button"
                                         onClick={() => setEstModelTier(tier)}
-                                        className={`text-[8px] font-bold uppercase p-1.5 rounded-lg border transition ${
+                                        className={`text-[8px] font-bold uppercase p-1.5 rounded-lg border transition cursor-pointer ${
                                           estModelTier === tier
-                                            ? "bg-emerald-500/15 border-emerald-500 text-emerald-400"
-                                            : "bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-200"
+                                            ? "bg-emerald-50 dark:bg-emerald-500/15 border-emerald-500 text-emerald-600 dark:text-emerald-400"
+                                            : "bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200"
                                         }`}
                                       >
                                         {tier === "flash"
@@ -4879,12 +7323,12 @@ export default function App() {
                               </div>
 
                               {/* Calculations summary row */}
-                              <div className="pt-2 border-t border-slate-900 flex justify-between items-center text-center font-mono select-none">
+                              <div className="pt-2 border-t border-slate-200 dark:border-slate-900 flex justify-between items-center text-center font-mono select-none">
                                 <div>
                                   <span className="block text-[8px] text-slate-500 font-bold uppercase">
                                     DAILY ESTIMATE
                                   </span>
-                                  <span className="text-xs font-black text-slate-100">
+                                  <span className="text-xs font-black text-slate-800 dark:text-slate-100">
                                     $
                                     {(estModelTier === "flash"
                                       ? 0.0005 * estArticlesPerDay
@@ -4892,7 +7336,7 @@ export default function App() {
                                         ? 0.002 * estArticlesPerDay
                                         : 0.05 * estArticlesPerDay
                                     ).toFixed(4)}
-                                    <span className="text-[9px] text-slate-400 font-normal">
+                                    <span className="text-[9px] text-slate-500 dark:text-slate-400 font-normal">
                                       {" "}
                                       to{" "}
                                     </span>
@@ -4905,11 +7349,11 @@ export default function App() {
                                     ).toFixed(4)}
                                   </span>
                                 </div>
-                                <div className="border-l border-slate-900 pl-3 text-right">
+                                <div className="border-l border-slate-200 dark:border-slate-900 pl-3 text-right">
                                   <span className="block text-[8px] text-slate-500 font-bold uppercase">
                                     MONTHLY ESTIMATE (30D)
                                   </span>
-                                  <span className="text-xs font-black text-emerald-450">
+                                  <span className="text-xs font-black text-emerald-600 dark:text-emerald-450">
                                     $
                                     {(estModelTier === "flash"
                                       ? 0.0005 * estArticlesPerDay * 30
@@ -4917,7 +7361,7 @@ export default function App() {
                                         ? 0.002 * estArticlesPerDay * 30
                                         : 0.05 * estArticlesPerDay * 30
                                     ).toFixed(2)}
-                                    <span className="text-[9px] text-slate-400 font-normal">
+                                    <span className="text-[9px] text-slate-500 dark:text-slate-400 font-normal">
                                       {" "}
                                       to{" "}
                                     </span>
@@ -4932,15 +7376,16 @@ export default function App() {
                                 </div>
                               </div>
 
-                              <p className="text-[8px] text-slate-500 font-mono text-center leading-normal mt-1 border-t border-slate-900/60 pt-1.5">
+                              <p className="text-[8px] text-slate-400 dark:text-slate-500 font-mono text-center leading-normal mt-1 border-t border-slate-200 dark:border-slate-900/60 pt-1.5">
                                 Economy fallback routing dynamically optimizes
                                 tokens for high ROI.
                               </p>
                             </div>
-                          </div>
                         </div>
+                      </div>
+                      </div>
 
-                        <div className="pt-4 lg:pt-0 lg:border-t-0 border-t border-slate-850 flex items-center justify-between lg:col-span-2 xl:col-span-3">
+                      <div className="pt-4 border-t border-slate-800/80 flex items-center justify-between lg:col-span-12">
                           <button
                             type="submit"
                             disabled={isSavingSettings}
@@ -4958,338 +7403,1452 @@ export default function App() {
                             )}
                           </button>
                         </div>
+                        </div>
                       </form>
 
                       {/* Reset database partition */}
-                      <div className="pt-4 border-t border-slate-200 dark:border-slate-800/60 mt-4 space-y-2.5">
-                        <h5 className="font-black text-rose-500 uppercase tracking-widest text-[9.5px] font-mono flex items-center gap-1">
-                          <span>⚠️</span> Danger Zone / Wipe Workspace
-                        </h5>
-                        <p className="text-[9.5px] text-slate-500 dark:text-slate-400 leading-normal">
-                          Wipes all local rewritten articles cache from the
-                          server database, allowing you to start completely over
-                          from a clean slate. Custom RSS pathways are preserved.
-                        </p>
-                        {showWipeConfirm ? (
-                          <div className="space-y-2 p-3 bg-rose-500/10 border border-rose-500/20 rounded-xl">
-                            <p className="text-[11px] text-rose-450 font-bold leading-relaxed text-left">
-                              ⚠️ Warning: This action cannot be undone. Are you
-                              absolutely sure you want to delete all generated
-                              articles cache?
-                            </p>
-                            <div className="flex gap-2">
-                              <button
-                                type="button"
-                                onClick={async () => {
-                                  try {
-                                    const res = await fetch(
-                                      "/api/articles/clear",
-                                      { method: "POST" },
-                                    );
-                                    if (res.ok) {
-                                      setArticles([]);
-                                      setShowWipeConfirm(false);
-                                    }
-                                  } catch (err) {
-                                    console.error(
-                                      "Failed to clear database articles:",
-                                      err,
-                                    );
-                                  }
-                                }}
-                                className="flex-1 py-1.5 bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs rounded cursor-pointer"
-                              >
-                                Yes, wipe database
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => setShowWipeConfirm(false)}
-                                className="px-3 py-1.5 bg-slate-200 hover:bg-slate-300 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 font-bold text-xs rounded cursor-pointer"
-                              >
-                                Cancel
-                              </button>
+                      <div className="pt-6 border-t border-slate-200 dark:border-slate-800/60 mt-6 space-y-4">
+                        <div className="bg-rose-50/50 dark:bg-rose-950/15 border border-rose-100 dark:border-rose-900/40 rounded-xl p-4 flex flex-col md:flex-row items-start md:items-center justify-between gap-4 text-left">
+                          <div className="flex gap-3 items-center">
+                            <div className="p-2.5 bg-rose-100 dark:bg-rose-950/60 text-rose-600 dark:text-rose-400 rounded-lg">
+                              <ShieldAlert className="w-5 h-5" />
+                            </div>
+                            <div className="space-y-0.5">
+                              <h5 className="font-extrabold text-xs text-rose-600 dark:text-rose-400 uppercase tracking-wider font-mono flex items-center gap-1.5">
+                                Danger Zone & Workspace Sanitization
+                              </h5>
+                              <p className="text-[10px] text-slate-500 dark:text-slate-400 leading-normal max-w-2xl">
+                                Destructive actions are segmented to avoid workspace interruption. Custom RSS pathways, feed sources, and niche configurations are strictly preserved across all operations.
+                              </p>
                             </div>
                           </div>
-                        ) : (
-                          <button
-                            type="button"
-                            onClick={() => setShowWipeConfirm(true)}
-                            className="w-full py-2 px-3 border border-rose-600 hover:bg-[#ffebeb] dark:hover:bg-rose-950/25 text-rose-600 dark:text-rose-455 hover:text-rose-700 dark:hover:text-rose-400 font-bold rounded-lg text-center transition cursor-pointer select-none"
-                          >
-                            Wipe Database (Start Over)
-                          </button>
-                        )}
+                          <span className="text-[9px] bg-rose-100 dark:bg-rose-950 text-rose-600 dark:text-rose-400 font-bold px-2.5 py-1 rounded-full font-mono uppercase tracking-widest shrink-0 self-start md:self-auto">
+                            SYSTEM LEVEL WIPE
+                          </span>
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                          {/* Option 1: Clean Saved Articles (Except Pushed) */}
+                          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:border-rose-500/20 rounded-xl p-4 flex flex-col justify-between space-y-4 text-left shadow-sm group transition-all duration-200">
+                            <div className="space-y-2">
+                              <div className="flex items-center justify-between">
+                                <span className="p-1.5 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 rounded-lg group-hover:bg-rose-500/10 group-hover:text-rose-500 transition-colors">
+                                  <Trash2 className="w-4 h-4" />
+                                </span>
+                                <span className="text-[8px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest font-mono">
+                                  Level: Moderate
+                                </span>
+                              </div>
+                              <div className="flex flex-col text-left">
+                                <span className="font-extrabold text-xs text-slate-850 dark:text-slate-200 uppercase tracking-wide">
+                                  Clear Non-Pushed
+                                </span>
+                                <span className="text-[9.5px] text-slate-500 dark:text-slate-400 leading-relaxed mt-1 font-sans">
+                                  Delete and purge all locally saved article drafts in the active workspace. This excludes any articles already pushed to WordPress.
+                                </span>
+                              </div>
+                            </div>
+
+                            <div className="pt-2">
+                              {showClearSavedConfirm ? (
+                                <div className="space-y-2 p-2.5 bg-rose-500/10 border border-rose-500/20 rounded-lg text-left">
+                                  <p className="text-[9.5px] text-rose-600 dark:text-rose-400 font-bold leading-normal">
+                                    Are you sure? This will delete all drafts except those marked as synchronized.
+                                  </p>
+                                  <div className="flex gap-2">
+                                    <button
+                                      type="button"
+                                      onClick={async () => {
+                                        try {
+                                          const res = await fetch("/api/articles/clear-except-pushed", { method: "POST" });
+                                          if (res.ok) {
+                                            const data = await res.json();
+                                            setArticles(data.articles || []);
+                                            setShowClearSavedConfirm(false);
+                                          }
+                                        } catch (err) {
+                                          console.error("Failed to clear non-pushed articles:", err);
+                                        }
+                                      }}
+                                      className="flex-1 py-1 px-2.5 bg-rose-600 hover:bg-rose-700 text-white font-bold text-[9.5px] rounded-md cursor-pointer text-center"
+                                    >
+                                      Confirm Delete
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => setShowClearSavedConfirm(false)}
+                                      className="px-2.5 py-1 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-bold text-[9.5px] rounded-md cursor-pointer"
+                                    >
+                                      Cancel
+                                    </button>
+                                  </div>
+                                </div>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() => setShowClearSavedConfirm(true)}
+                                  className="w-full py-1.5 px-3 bg-slate-50 hover:bg-rose-500/10 dark:bg-slate-950/55 hover:dark:bg-rose-950/30 border border-slate-200 dark:border-slate-800 hover:border-rose-500/30 text-slate-700 dark:text-slate-300 hover:text-rose-600 dark:hover:text-rose-400 font-bold rounded-lg text-center text-[10px] transition cursor-pointer select-none"
+                                >
+                                  Purge Draft Caches
+                                </button>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* Option 2: Clean Pushed Articles (Separately) */}
+                          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:border-rose-500/20 rounded-xl p-4 flex flex-col justify-between space-y-4 text-left shadow-sm group transition-all duration-200">
+                            <div className="space-y-2">
+                              <div className="flex items-center justify-between">
+                                <span className="p-1.5 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 rounded-lg group-hover:bg-rose-500/10 group-hover:text-rose-500 transition-colors">
+                                  <Globe className="w-4 h-4" />
+                                </span>
+                                <span className="text-[8px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest font-mono">
+                                  Level: Moderate
+                                </span>
+                              </div>
+                              <div className="flex flex-col text-left">
+                                <span className="font-extrabold text-xs text-slate-850 dark:text-slate-200 uppercase tracking-wide">
+                                  Clear Pushed Rails
+                                </span>
+                                <span className="text-[9.5px] text-slate-500 dark:text-slate-400 leading-relaxed mt-1 font-sans">
+                                  Delete index of articles that have been successfully published on live remote WordPress nodes.
+                                </span>
+                              </div>
+                            </div>
+
+                            <div className="pt-2">
+                              {showClearPushedConfirm ? (
+                                <div className="space-y-2 p-2.5 bg-rose-500/10 border border-rose-500/20 rounded-lg text-left">
+                                  <p className="text-[9.5px] text-rose-600 dark:text-rose-400 font-bold leading-normal">
+                                    Are you sure? This deletes pushed lists from local tracking dashboard.
+                                  </p>
+                                  <div className="flex gap-2">
+                                    <button
+                                      type="button"
+                                      onClick={async () => {
+                                        try {
+                                          const res = await fetch("/api/articles/clear-pushed", { method: "POST" });
+                                          if (res.ok) {
+                                            const data = await res.json();
+                                            setArticles(data.articles || []);
+                                            setShowClearPushedConfirm(false);
+                                          }
+                                        } catch (err) {
+                                          console.error("Failed to clear pushed articles:", err);
+                                        }
+                                      }}
+                                      className="flex-1 py-1 px-2.5 bg-rose-600 hover:bg-rose-700 text-white font-bold text-[9.5px] rounded-md cursor-pointer text-center"
+                                    >
+                                      Confirm Clear
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => setShowClearPushedConfirm(false)}
+                                      className="px-2.5 py-1 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-bold text-[9.5px] rounded-md cursor-pointer"
+                                    >
+                                      Cancel
+                                    </button>
+                                  </div>
+                                </div>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() => setShowClearPushedConfirm(true)}
+                                  className="w-full py-1.5 px-3 bg-slate-50 hover:bg-rose-500/10 dark:bg-slate-950/55 hover:dark:bg-rose-950/30 border border-slate-200 dark:border-slate-800 hover:border-rose-500/30 text-slate-705 dark:text-slate-300 hover:text-rose-600 dark:hover:text-rose-400 font-bold rounded-lg text-center text-[10px] transition cursor-pointer select-none"
+                                >
+                                  Purge Pushed Index
+                                </button>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* Option 3: Wipe All Database (Start Over) */}
+                          <div className="bg-rose-500/5 dark:bg-rose-950/5 border border-rose-200 dark:border-rose-900/40 hover:border-rose-500/40 rounded-xl p-4 flex flex-col justify-between space-y-4 text-left shadow-sm group transition-all duration-200">
+                            <div className="space-y-2">
+                              <div className="flex items-center justify-between">
+                                <span className="p-1.5 bg-rose-100 dark:bg-rose-950 text-rose-600 dark:text-rose-400 rounded-lg group-hover:bg-rose-600 group-hover:text-white transition-colors">
+                                  <Flame className="w-4 h-4" />
+                                </span>
+                                <span className="text-[8px] font-bold text-rose-600 dark:text-rose-400 uppercase tracking-widest font-mono">
+                                  Level: Critical
+                                </span>
+                              </div>
+                              <div className="flex flex-col text-left">
+                                <span className="font-extrabold text-xs text-rose-600 dark:text-rose-400 uppercase tracking-wide">
+                                  Full Operational Reset
+                                </span>
+                                <span className="text-[9.5px] text-slate-500 dark:text-slate-400 leading-relaxed mt-1 font-sans">
+                                  Wipes all operational data (articles, opportunity boards, logs & analytics). <strong className="text-emerald-600 dark:text-emerald-400 font-bold">Niches, Writers, & RSS Feeds are preserved for rapid re-onboarding.</strong>
+                                </span>
+                              </div>
+                            </div>
+
+                            <div className="pt-2">
+                              {showWipeConfirm ? (
+                                <div className="space-y-2 p-2.5 bg-rose-500/15 border border-rose-500/20 rounded-lg text-left">
+                                  <p className="text-[9.5px] text-rose-600 dark:text-rose-400 font-bold leading-normal">
+                                    🔥 Critical Warning! This will reset rewrite logs and articles. Niches, Writers, & RSS Feeds are preserved. It cannot be undone. Enter reset mode?
+                                  </p>
+                                  <div className="flex gap-2">
+                                    <button
+                                      type="button"
+                                      onClick={async () => {
+                                        try {
+                                          const res = await fetch("/api/articles/clear", { method: "POST" });
+                                          if (res.ok) {
+                                            setArticles([]);
+                                            await fetchConfig();
+                                            await fetchNotifications();
+                                            if (typeof fetchRealSaaSStats === "function") {
+                                              await fetchRealSaaSStats();
+                                            }
+                                            setShowWipeConfirm(false);
+                                          }
+                                        } catch (err) {
+                                          console.error("Failed to clear database:", err);
+                                        }
+                                      }}
+                                      className="flex-1 py-1 px-2.5 bg-rose-600 hover:bg-rose-700 text-white font-bold text-[9.5px] rounded-md cursor-pointer text-center"
+                                    >
+                                      Proceed to Reset
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => setShowWipeConfirm(false)}
+                                      className="px-2.5 py-1 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-bold text-[9.5px] rounded-md cursor-pointer"
+                                    >
+                                      Cancel
+                                    </button>
+                                  </div>
+                                </div>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() => setShowWipeConfirm(true)}
+                                  className="w-full py-2 bg-rose-50 hover:bg-rose-100 dark:bg-rose-950/20 dark:hover:bg-rose-950/40 text-rose-600 dark:text-rose-400 font-mono text-[9px] font-extrabold uppercase tracking-widest border border-rose-100 dark:border-rose-900/30 rounded-lg transition-all duration-200 cursor-pointer"
+                                >
+                                  💥 Hard Reset Application
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        </div>
                       </div>
                     </div>
                   )}
 
-                  {/* TAB 5: DEDICATED WORDPRESS SYNC CONFIGURATION */}
-                  {activeAdminTab === "wordpress" && (
-                    <div className="flex flex-col h-full overflow-y-auto pr-1 space-y-4 text-xs leading-relaxed max-h-[440px] lg:max-h-[690px]">
-                      <div className="pb-3 border-b border-slate-850 flex items-center justify-between">
-                        <div>
-                          <h4 className="text-xs font-black text-slate-100 uppercase tracking-widest font-mono flex items-center gap-1.5">
-                            🌐 WordPress API Portals
-                          </h4>
-                          <p className="text-[10px] text-slate-450">
-                            Set up credentials, post statuses & auto-push
-                            thresholds
-                          </p>
+                                          {/* TAB 5: DEDICATED WORDPRESS SYNC CONFIGURATION */}
+                    {activeAdminTab === "wordpress" && (
+                    <div className="flex flex-col h-full space-y-5 text-xs leading-relaxed max-h-[440px] lg:max-h-[695px] font-sans pb-6 overflow-y-auto pr-1">
+                      
+                      {/* Premium Minimally Elevated Header */}
+                      <div className="relative overflow-hidden bg-slate-900 border border-slate-800 rounded-xl p-4 shadow-md text-left flex items-center justify-between">
+                        <div className="absolute top-0 right-0 w-32 h-32 bg-indigo-500/5 rounded-full blur-2xl pointer-events-none"></div>
+                        <div className="z-10 flex items-center gap-2.5">
+                          <div className="p-2 bg-indigo-505/10 text-indigo-400 rounded-lg">
+                            <Globe className="w-5 h-5 animate-pulse" />
+                          </div>
+                          <div>
+                            <h4 className="text-sm font-extrabold uppercase tracking-widest text-slate-100 font-mono">
+                              WordPress Sync Gate
+                            </h4>
+                            <p className="text-[10px] text-slate-400 mt-0.5">
+                              Enforce REST API syndication & fallback nodes
+                            </p>
+                          </div>
                         </div>
                       </div>
 
-                      <form
-                        onSubmit={(e) => {
-                          e.preventDefault();
-                          handleSaveSaaSSettings(saasConfig);
-                        }}
-                        className="space-y-4"
-                      >
-                        <div className="bg-[#ffffff] dark:bg-slate-900 border border-slate-800/80 p-3 rounded-xl text-[10px] text-slate-400 font-mono space-y-1">
-                          <span className="text-indigo-400 uppercase font-black tracking-wider text-[9.5px]">
-                            Niche Context:
-                          </span>
-                          <div className="flex items-center gap-1.5 mt-1">
-                            <span className="w-2 h-2 rounded-full bg-indigo-500 animate-pulse"></span>
-                            <b className="text-[#0D1219] dark:text-slate-100 uppercase font-bold">
-                              {selectedNiche === "hollywood"
-                                ? "🎬 Gossip & Glam"
-                                : selectedNiche === "sports"
-                                  ? "🏀 The Arena"
-                                  : "💻 Alpha Teardown"}
-                            </b>
-                          </div>
-                        </div>
-
-                        <div className="space-y-3 p-3 bg-slate-50 dark:bg-slate-950/40 rounded-xl border border-slate-200 dark:border-slate-800/65 shadow-inner">
-                          <div>
-                            <label className="text-[9px] font-extrabold text-slate-600 dark:text-slate-400 block mb-1 font-mono uppercase tracking-widest">
-                              WordPress Site URL
-                            </label>
-                            <input
-                              type="url"
-                              placeholder="https://gossip-website.com"
-                              value={
-                                saasConfig.wordpress[selectedNiche]?.url || ""
-                              }
-                              onChange={(e) => {
-                                const val = e.target.value;
-                                setSaasConfig((prev: any) => ({
-                                  ...prev,
-                                  wordpress: {
-                                    ...prev.wordpress,
-                                    [selectedNiche]: {
-                                      ...prev.wordpress[selectedNiche],
-                                      url: val,
-                                    },
-                                  },
-                                }));
-                              }}
-                              className="w-full text-xs text-[#0D1219] dark:text-white bg-white dark:bg-slate-950 border border-[#E3E5E8] dark:border-slate-805 rounded-lg p-2 focus:outline-none focus:ring-1 focus:ring-indigo-500 animate-none"
-                              required
-                            />
-                            <p className="text-[8.5px] text-slate-500 mt-1 leading-normal font-mono">
-                              Include http:// or https:// without administrative
-                              trailing subdirectories.
-                            </p>
-                          </div>
-
-                          <div>
-                            <label className="text-[9px] font-extrabold text-slate-600 dark:text-slate-400 block mb-1 font-mono uppercase tracking-widest">
-                              REST API Username
-                            </label>
-                            <input
-                              type="text"
-                              placeholder="wordpress_admin"
-                              value={
-                                saasConfig.wordpress[selectedNiche]?.username ||
-                                ""
-                              }
-                              onChange={(e) => {
-                                const val = e.target.value;
-                                setSaasConfig((prev: any) => ({
-                                  ...prev,
-                                  wordpress: {
-                                    ...prev.wordpress,
-                                    [selectedNiche]: {
-                                      ...prev.wordpress[selectedNiche],
-                                      username: val,
-                                    },
-                                  },
-                                }));
-                              }}
-                              className="w-full text-xs text-[#0D1219] dark:text-white bg-white dark:bg-slate-950 border border-[#E3E5E8] dark:border-slate-805 rounded-lg p-2 focus:outline-none focus:ring-1 focus:ring-indigo-500 animate-none"
-                              required
-                            />
-                          </div>
-
-                          <div>
-                            <label className="text-[9px] font-extrabold text-slate-600 dark:text-slate-400 block mb-1 font-mono uppercase tracking-widest">
-                              Application Password
-                            </label>
-                            <input
-                              type="password"
-                              placeholder="•••• •••• •••• ••••"
-                              value={
-                                saasConfig.wordpress[selectedNiche]
-                                  ?.appPassword || ""
-                              }
-                              onChange={(e) => {
-                                const val = e.target.value;
-                                setSaasConfig((prev: any) => ({
-                                  ...prev,
-                                  wordpress: {
-                                    ...prev.wordpress,
-                                    [selectedNiche]: {
-                                      ...prev.wordpress[selectedNiche],
-                                      appPassword: val,
-                                    },
-                                  },
-                                }));
-                              }}
-                              className="w-full text-xs text-[#0D1219] dark:text-white bg-white dark:bg-slate-950 border border-[#E3E5E8] dark:border-slate-805 rounded-lg p-2 focus:outline-none focus:ring-1 focus:ring-indigo-500 animate-none"
-                              required
-                            />
-                            <p className="text-[8.5px] text-slate-500 mt-1 leading-normal font-mono font-normal">
-                              Generate this inside WordPress Users → Edit
-                              Profile → Application Passwords.
-                            </p>
-                          </div>
-                        </div>
-
-                        {/* HIGH FIDELITY MEDIA/POST INTEGRATION SPECS */}
-                        <div className="space-y-3 p-3 bg-slate-50 dark:bg-slate-950/40 rounded-xl border border-slate-250 dark:border-slate-800/65 shadow-inner font-mono">
-                          <h5 className="font-extrabold text-slate-600 dark:text-slate-400 text-[9px] uppercase tracking-widest block">
-                            Synchronization Specs
-                          </h5>
-
-                          <div className="space-y-2.5 text-[9.5px]">
-                            <div className="flex items-start gap-2">
-                              <input
-                                id="sync-featured-media-check"
-                                type="checkbox"
-                                defaultChecked={true}
-                                className="rounded border-[#E3E5E8] dark:border-slate-805 bg-white dark:bg-slate-950 text-indigo-500 focus:ring-indigo-500 w-3.5 h-3.5 mt-0.5 cursor-pointer"
-                              />
-                              <div>
-                                <label
-                                  htmlFor="sync-featured-media-check"
-                                  className="font-bold text-slate-700 dark:text-slate-350 select-none block cursor-pointer"
-                                >
-                                  Sync Featured Media (Images)
-                                </label>
-                                <span className="text-[8px] text-slate-500 block leading-normal mt-0.5">
-                                  Sinks original generated image to WordPress
-                                  Media Library raw and sets it as the featured
-                                  image post-binding.
-                                </span>
-                              </div>
-                            </div>
-
-                            <div className="flex items-start gap-2 border-t border-[#E3E5E8] dark:border-slate-800/60 pt-2">
-                              <input
-                                id={`wp-check-${selectedNiche}`}
-                                type="checkbox"
-                                checked={
-                                  saasConfig.wordpress[selectedNiche]
-                                    ?.autoPush || false
-                                }
-                                onChange={(e) => {
-                                  const val = e.target.checked;
-                                  setSaasConfig((prev: any) => ({
-                                    ...prev,
-                                    wordpress: {
-                                      ...prev.wordpress,
-                                      [selectedNiche]: {
-                                        ...prev.wordpress[selectedNiche],
-                                        autoPush: val,
-                                      },
-                                    },
-                                  }));
-                                }}
-                                className="rounded border-[#E3E5E8] dark:border-slate-805 bg-white dark:bg-slate-950 text-indigo-500 focus:ring-indigo-500 w-3.5 h-3.5 mt-0.5 cursor-pointer"
-                              />
-                              <div>
-                                <label
-                                  htmlFor={`wp-check-${selectedNiche}`}
-                                  className="font-bold text-slate-700 dark:text-slate-350 select-none block cursor-pointer"
-                                >
-                                  Enable Auto-Push
-                                </label>
-                                <span className="text-[8px] text-slate-500 block leading-normal mt-0.5">
-                                  Automatically publish draft once edited
-                                  content attains specified compliance metrics.
-                                </span>
-                              </div>
-                            </div>
-                          </div>
-                        </div>
-
-                        <div className="flex items-center gap-2 pt-1 font-mono">
+                      {/* Sub-tab Navigation Bar */}
+                      <div className="flex bg-slate-100 dark:bg-slate-950 rounded-lg p-1 text-[9px] font-black select-none border border-slate-205 dark:border-slate-805 gap-1 font-mono">
+                        {(["directory", "register", "queue", "fallback", "patch"] as const).map((tab) => (
                           <button
-                            type="submit"
-                            disabled={isSavingSettings}
-                            className="flex-1 bg-gradient-to-r from-indigo-650 to-violet-650 hover:from-indigo-600 hover:to-violet-600 bg-indigo-600 hover:bg-indigo-500 text-white font-extrabold text-[10.5px] py-2 px-3 rounded-lg shadow-md flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-55 transition"
-                          >
-                            {isSavingSettings
-                              ? "Saving..."
-                              : saveSuccess
-                                ? "✓ Configs Saved"
-                                : "Save WP API Settings"}
-                          </button>
-
-                          <button
+                            key={tab}
                             type="button"
-                            onClick={async () => {
-                              setIsTestingWp((prev) => ({
-                                ...prev,
-                                [selectedNiche]: "testing",
-                              }));
-                              try {
-                                const res = await fetch(
-                                  "/api/saas-settings/test-wp",
-                                  {
-                                    method: "POST",
-                                    headers: {
-                                      "Content-Type": "application/json",
-                                    },
-                                    body: JSON.stringify({
-                                      niche: selectedNiche,
-                                    }),
-                                  },
-                                );
-                                if (res.ok) {
-                                  const data = await res.json();
-                                  setIsTestingWp((prev) => ({
-                                    ...prev,
-                                    [selectedNiche]: "success",
-                                  }));
-                                  alert(data.message);
-                                } else {
-                                  setIsTestingWp((prev) => ({
-                                    ...prev,
-                                    [selectedNiche]: "failed",
-                                  }));
-                                  alert(
-                                    "Failed to connect: API endpoint error",
-                                  );
-                                }
-                              } catch (err: any) {
-                                setIsTestingWp((prev) => ({
-                                  ...prev,
-                                  [selectedNiche]: "failed",
-                                }));
-                                alert("Failed to connect: " + err.message);
-                              }
-                            }}
-                            className="px-2.5 py-2 text-[10px] font-black text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950/40 border border-indigo-200 dark:border-indigo-805 hover:bg-slate-100 dark:hover:bg-slate-900 rounded-lg hover:text-indigo-500 transition whitespace-nowrap cursor-pointer shadow-sm"
+                            onClick={() => setWpLeftTab(tab)}
+                            className={`flex-1 py-1.5 rounded-md transition-all cursor-pointer uppercase text-center ${
+                              wpLeftTab === tab
+                                ? "bg-slate-950 text-slate-850 dark:bg-indigo-650 dark:text-white shadow-sm font-extrabold"
+                                : "text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-250"
+                            }`}
                           >
-                            {isTestingWp[selectedNiche] === "testing"
-                              ? "Connecting..."
-                              : "Test Connection"}
+                            {tab === "directory" ? "📁 Nodes" : tab === "register" ? "➕ Register" : tab === "queue" ? "📋 Queue" : tab === "fallback" ? "🔌 Fallbacks" : "🛠️ Patch"}
                           </button>
+                        ))}
+                      </div>
+
+                      {/* Dynanic Contextual KPIs */}
+                      <div className="grid grid-cols-2 gap-3 text-left">
+                        <div className="bg-slate-50 dark:bg-slate-900/40 p-2.5 rounded-lg border border-slate-200/60 dark:border-slate-800/60 font-mono text-[9.5px]">
+                          <span className="text-slate-404 block text-[8px] uppercase tracking-wider">Gateway State</span>
+                          <span className="font-bold text-slate-700 dark:text-slate-300">
+                            {(saasConfig.wordpressSites || []).length} Custom Tunnels
+                          </span>
                         </div>
-                      </form>
+                        <div className="bg-slate-50 dark:bg-slate-900/40 p-2.5 rounded-lg border border-slate-200/60 dark:border-slate-800/60 font-mono text-[9.5px]">
+                          <span className="text-slate-404 block text-[8px] uppercase tracking-wider">Active Niche Fallback</span>
+                          <span className="font-bold text-indigo-600 dark:text-indigo-400 uppercase">
+                            {selectedNiche}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Dynamic Panel Content - Wrapped Subtab Panels */}
+                      <div className="space-y-4 text-left">
+
+                        {editingWpSite && (
+                          <div id="wp-edit-form" className="space-y-3.5 bg-slate-50 dark:bg-slate-950/40 p-4 border border-indigo-200/50 dark:border-indigo-900/10 rounded-xl">
+                            <div className="border-b border-slate-100 dark:border-slate-800 pb-2 flex items-center justify-between">
+                              <div>
+                                <h5 className="font-extrabold text-amber-600 dark:text-amber-400 text-[10px] uppercase tracking-wider font-mono">
+                                  ✏️ Edit Registered WordPress Node
+                                </h5>
+                                <p className="text-[9px] text-slate-400 mt-0.5 font-sans">Modify connection details for "{editingWpSite.name}"</p>
+                              </div>
+                              <button
+                                type="button"
+                                id="wp-edit-cancel-header"
+                                onClick={() => setEditingWpSite(null)}
+                                className="text-[10px] font-bold text-slate-400 hover:text-slate-600 dark:hover:text-slate-205 cursor-pointer font-sans"
+                              >
+                                ✕ Close
+                              </button>
+                            </div>
+
+                            <div className="space-y-3">
+                              <div className="space-y-1">
+                                <label className="text-[8.5px] font-black tracking-wider uppercase text-slate-450 block font-mono">
+                                  Account Alias Name
+                                </label>
+                                <input
+                                  type="text"
+                                  id="wp-edit-alias"
+                                  value={editName}
+                                  onChange={(e) => setEditName(e.target.value)}
+                                  placeholder="e.g. Gossip Main Portal"
+                                  className="w-full text-xs text-slate-805 dark:text-white bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-850 rounded p-1.5 focus:outline-none transition-all font-sans"
+                                />
+                              </div>
+
+                              <div className="space-y-1">
+                                <label className="text-[8.5px] font-black tracking-wider uppercase text-slate-455 block font-mono">
+                                  WordPress Site URL
+                                </label>
+                                <input
+                                  type="url"
+                                  id="wp-edit-url"
+                                  value={editUrl}
+                                  onChange={(e) => setEditUrl(e.target.value)}
+                                  placeholder="https://gossip-website.com"
+                                  className="w-full text-xs text-slate-805 dark:text-white bg-white dark:bg-slate-955 border border-slate-200 dark:border-slate-850 rounded p-1.5 focus:outline-none transition-all font-sans"
+                                />
+                              </div>
+
+                              <div className="space-y-1">
+                                <label className="text-[8.5px] font-black tracking-wider uppercase text-slate-455 block font-mono">
+                                  REST API Username
+                                </label>
+                                <input
+                                  type="text"
+                                  id="wp-edit-username"
+                                  value={editUsername}
+                                  onChange={(e) => setEditUsername(e.target.value)}
+                                  placeholder="wordpress_admin"
+                                  className="w-full text-xs text-slate-805 dark:text-white bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-855 rounded p-1.5 focus:outline-none transition-all font-sans"
+                                />
+                              </div>
+
+                              <div className="space-y-1">
+                                <label className="text-[8.5px] font-black tracking-wider uppercase text-slate-455 block font-mono">
+                                  Application Password
+                                </label>
+                                <input
+                                  type="password"
+                                  id="wp-edit-password"
+                                  value={editPassword}
+                                  onChange={(e) => setEditPassword(e.target.value)}
+                                  placeholder="•••• •••• •••• ••••"
+                                  className="w-full text-xs text-slate-805 dark:text-white bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-855 rounded p-1.5 focus:outline-none transition-all font-sans"
+                                />
+                              </div>
+
+                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                <div className="space-y-1">
+                                  <label className="text-[8.5px] font-black tracking-wider uppercase text-slate-455 block font-mono">
+                                    Assigned Niche Category
+                                  </label>
+                                  <select
+                                    id="wp-edit-niche"
+                                    value={editNiche}
+                                    onChange={(e) => setEditNiche(e.target.value)}
+                                    className="w-full text-xs text-slate-805 dark:text-white bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-860 rounded p-1.5 focus:outline-none transition-all font-sans cursor-pointer"
+                                  >
+                                    {niches.map((n) => (
+                                      <option key={n.id} value={n.id}>{n.name}</option>
+                                    ))}
+                                    <option value="all">General / Combined</option>
+                                  </select>
+                                </div>
+                                <div className="flex items-center gap-2 pt-5 select-none text-left">
+                                  <input
+                                    type="checkbox"
+                                    checked={editAutoPush}
+                                    onChange={(e) => setEditAutoPush(e.target.checked)}
+                                    id="wp-edit-autopush"
+                                    className="rounded border-slate-300 text-indigo-550 w-4 h-4 cursor-pointer"
+                                  />
+                                  <label htmlFor="wp-edit-autopush" className="text-[10px] font-extrabold uppercase tracking-widest font-mono cursor-pointer text-slate-705 dark:text-slate-305">
+                                    Auto-Push
+                                  </label>
+                                </div>
+                              </div>
+
+                              <div className="flex items-center gap-2 pt-4 border-t border-slate-200 dark:border-slate-800/60 font-mono">
+                                <button
+                                  type="button"
+                                  id="wp-edit-test-btn"
+                                  onClick={async () => {
+                                    if (!editUrl.trim() || !editUsername.trim() || !editPassword.trim()) {
+                                      alert("Please fill Site URL, REST Username, and Application Password first!");
+                                      return;
+                                    }
+                                    try {
+                                      const res = await fetch("/api/saas-settings/test-wp", {
+                                        method: "POST",
+                                        headers: { "Content-Type": "application/json" },
+                                        body: JSON.stringify({
+                                          url: editUrl.trim(),
+                                          username: editUsername.trim(),
+                                          appPassword: editPassword.trim(),
+                                        }),
+                                      });
+                                      if (res.ok) {
+                                        const data = await res.json();
+                                        alert("Test Connection: " + data.message);
+                                      } else {
+                                        alert("Failed credentials verification.");
+                                      }
+                                    } catch (e: any) {
+                                      alert("Error: " + e.message);
+                                    }
+                                  }}
+                                  className="px-3 py-2 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-202 rounded font-mono text-[9px] font-bold cursor-pointer"
+                                >
+                                  ⚡ Test Site
+                                </button>
+                                <button
+                                  type="button"
+                                  id="wp-edit-save-btn"
+                                  onClick={async () => {
+                                    const name = editName.trim() || "WordPress Site";
+                                    const url = editUrl.trim();
+                                    const username = editUsername.trim();
+                                    const appPassword = editPassword.trim();
+                                    const niche = editNiche;
+                                    const autoPush = editAutoPush;
+
+                                    if (!url || !username || !appPassword) {
+                                      alert("Site URL, Username, and Password are required!");
+                                      return;
+                                    }
+
+                                    const updatedSites = (saasConfig.wordpressSites || []).map((s: any) => {
+                                      if (s.id === editingWpSite.id) {
+                                        return {
+                                          ...s,
+                                          name,
+                                          url,
+                                          username,
+                                          appPassword,
+                                          niche,
+                                          autoPush,
+                                        };
+                                      }
+                                      return s;
+                                    });
+
+                                    const updatedConfig = {
+                                      ...saasConfig,
+                                      wordpressSites: updatedSites,
+                                    };
+                                    setSaasConfig(updatedConfig);
+                                    await handleSaveSaaSSettings(updatedConfig);
+                                    setEditingWpSite(null);
+                                    alert(`Successfully updated node: ${name}`);
+                                  }}
+                                  className="flex-1 px-3 py-2 bg-indigo-650 hover:bg-indigo-700 text-white rounded font-mono text-[9px] font-extrabold cursor-pointer text-center"
+                                >
+                                  💾 Save Changes
+                                </button>
+                                <button
+                                  type="button"
+                                  id="wp-edit-cancel-btn"
+                                  onClick={() => setEditingWpSite(null)}
+                                  className="px-3 py-2 bg-slate-200 dark:bg-slate-800 text-slate-705 dark:text-slate-305 hover:bg-slate-300 dark:hover:bg-slate-700 rounded font-mono text-[9px] cursor-pointer"
+                                >
+                                  Cancel
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        )}
+                        
+                        {/* 1. DIRECTORY PANEL */}
+                        {!editingWpSite && wpLeftTab === "directory" && (
+                          <div className="space-y-3.5">
+                            <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-2">
+                              <div>
+                                <h5 className="font-extrabold text-slate-805 dark:text-slate-200 text-[10px] uppercase tracking-wider font-mono">
+                                  🔑 Custom Isolated Sites Registry
+                                </h5>
+                                <p className="text-[9px] text-slate-400">Target sites waiting for editorial routing</p>
+                              </div>
+                            </div>
+
+                            {(saasConfig.wordpressSites || []).length === 0 ? (
+                              <div className="p-6 text-center border border-dashed border-slate-220 dark:border-slate-800 rounded-lg bg-slate-50/50 dark:bg-slate-950/20 space-y-2">
+                                <Globe className="w-6 h-6 mx-auto text-slate-300 dark:text-slate-700 animate-pulse" />
+                                <p className="text-[10px] font-bold text-slate-600 dark:text-slate-400 font-sans">
+                                  No Isolated Sites Configured
+                                </p>
+                                <button
+                                  type="button"
+                                  onClick={() => setWpLeftTab("register")}
+                                  className="text-[9px] font-bold text-indigo-600 dark:text-indigo-400 hover:underline mx-auto mt-1 cursor-pointer font-mono text-center block w-full"
+                                >
+                                  Register a new WP site node →
+                                </button>
+                              </div>
+                            ) : (
+                              <div className="space-y-2.5 max-h-[320px] overflow-y-auto pr-1">
+                                {(saasConfig.wordpressSites || []).map((site: any) => {
+                                  let badgeStyle = "bg-slate-100 text-slate-700 dark:bg-slate-805 dark:text-slate-350";
+                                  if (site.niche === "hollywood") badgeStyle = "bg-pink-105 text-pink-700 dark:bg-pink-950/50 dark:text-pink-400 border border-pink-200/20";
+                                  else if (site.niche === "sports") badgeStyle = "bg-emerald-105 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-400 border border-emerald-200/20";
+                                  else if (site.niche === "tech") badgeStyle = "bg-cyan-105 text-cyan-700 dark:bg-cyan-950/50 dark:text-cyan-400 border border-cyan-200/20";
+                                  
+                                  return (
+                                    <div key={site.id} className="p-3 bg-white dark:bg-slate-955/30 border border-slate-200 dark:border-slate-855 rounded-lg hover:border-slate-350 dark:hover:border-slate-700 transition space-y-2.5 shadow-sm">
+                                      <div className="flex items-start justify-between">
+                                        <div className="min-w-0 flex-1">
+                                          <div className="text-[11px] font-bold text-slate-800 dark:text-slate-205 truncate">
+                                            {site.name}
+                                          </div>
+                                          <a href={site.url} target="_blank" rel="noreferrer" className="text-[9px] text-indigo-505/85 truncate hover:underline block font-mono">
+                                            {site.url}
+                                          </a>
+                                        </div>
+                                        <span className={`text-[7.5px] font-black uppercase tracking-wider font-mono px-1.5 py-0.5 rounded ${badgeStyle}`}>
+                                          {site.niche}
+                                        </span>
+                                      </div>
+
+                                      <div className="grid grid-cols-2 gap-1 text-[8.5px] font-mono border-t border-slate-100 dark:border-slate-805/60 pt-2 text-slate-500">
+                                        <div>
+                                          User: <span className="font-bold text-slate-705 dark:text-slate-300">{site.username}</span>
+                                        </div>
+                                        <div className="flex items-center gap-1">
+                                          Push: {site.autoPush ? (
+                                            <span className="text-emerald-500 font-extrabold flex items-center gap-0.5">
+                                              <span className="w-1 h-1 rounded-full bg-emerald-500 inline-block animate-ping"></span> Live
+                                            </span>
+                                          ) : (
+                                            <span className="text-slate-400 uppercase font-bold">Staging</span>
+                                          )}
+                                        </div>
+                                      </div>
+
+                                      <div className="flex items-center justify-between border-t border-slate-100 dark:border-slate-805/60 pt-2 text-[9px] font-mono gap-1.5">
+                                        <button
+                                          type="button"
+                                          id={`wp-validate-btn-${site.id}`}
+                                          onClick={async () => {
+                                            try {
+                                              const res = await fetch("/api/saas-settings/test-wp", {
+                                                method: "POST",
+                                                headers: { "Content-Type": "application/json" },
+                                                body: JSON.stringify({ siteId: site.id }),
+                                              });
+                                              if (res.ok) {
+                                                const d = await res.json();
+                                                alert(`[${site.name}] ${d.message}`);
+                                              } else {
+                                                alert("Credentials test failed.");
+                                              }
+                                            } catch (err: any) {
+                                              alert("Ping error: " + err.message);
+                                            }
+                                          }}
+                                          className="flex-1 py-1 px-1.5 border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 text-slate-700 dark:text-slate-300 font-bold rounded hover:bg-slate-100 dark:hover:bg-slate-800 transition cursor-pointer text-center text-[8.5px]"
+                                        >
+                                          ⚡ Validate
+                                        </button>
+                                        <button
+                                          type="button"
+                                          id={`wp-edit-btn-${site.id}`}
+                                          onClick={() => {
+                                            setEditingWpSite(site);
+                                            setEditName(site.name || "");
+                                            setEditUrl(site.url || "");
+                                            setEditUsername(site.username || "");
+                                            setEditPassword(site.appPassword || "");
+                                            setEditNiche(site.niche || "hollywood");
+                                            setEditAutoPush(!!site.autoPush);
+                                          }}
+                                          className="flex-1 py-1 px-1.5 border border-amber-200/50 dark:border-amber-900/30 bg-amber-500/10 dark:bg-amber-950/20 text-amber-600 dark:text-amber-400 font-bold rounded hover:bg-amber-500/20 transition cursor-pointer text-center text-[8.5px]"
+                                        >
+                                          ✏️ Edit
+                                        </button>
+                                        <button
+                                          type="button"
+                                          id={`wp-dismount-btn-${site.id}`}
+                                          onClick={() => {
+                                            const updatedSites = (saasConfig.wordpressSites || []).filter((s: any) => s.id !== site.id);
+                                            const updatedConfig = { ...saasConfig, wordpressSites: updatedSites };
+                                            setSaasConfig(updatedConfig);
+                                            handleSaveSaaSSettings(updatedConfig);
+                                          }}
+                                          className="py-1 px-1.5 text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-955/20 border border-transparent rounded transition cursor-pointer font-bold text-[8.5px]"
+                                        >
+                                          ❌ Dismount
+                                        </button>
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            )}
+                          </div>
+                        )}
+
+                        {/* 2. REGISTER PANEL */}
+                        {!editingWpSite && wpLeftTab === "register" && (
+                          <div className="space-y-3.5">
+                            <div className="border-b border-slate-100 dark:border-slate-800 pb-2">
+                              <h5 className="font-extrabold text-slate-800 dark:text-slate-200 text-[10px] uppercase tracking-wider font-mono">
+                                ➕ Register Destination Site Node
+                              </h5>
+                              <p className="text-[9px] text-slate-400 mt-0.5">Scale your private publishing network easily</p>
+                            </div>
+
+                            <div className="space-y-3">
+                              <div className="space-y-1">
+                                <label className="text-[8.5px] font-black tracking-wider uppercase text-slate-450 block font-mono">
+                                  Account Alias Name
+                                </label>
+                                <input
+                                  type="text"
+                                  id="new-wp-alias"
+                                  placeholder="e.g. Gossip Main Portal"
+                                  className="w-full text-xs text-slate-800 dark:text-white bg-slate-50 dark:bg-slate-95 border border-slate-200 dark:border-slate-805 rounded p-1.5 focus:outline-none transition-all font-sans"
+                                />
+                              </div>
+
+                              <div className="space-y-1">
+                                <label className="text-[8.5px] font-black tracking-wider uppercase text-slate-455 block font-mono">
+                                  WordPress Site URL
+                                </label>
+                                <input
+                                  type="url"
+                                  id="new-wp-url"
+                                  placeholder="https://gossip-website.com"
+                                  className="w-full text-xs text-slate-800 dark:text-white bg-slate-50 dark:bg-slate-95 border border-slate-200 dark:border-slate-805 rounded p-1.5 focus:outline-none transition-all font-sans"
+                                />
+                              </div>
+
+                              <div className="space-y-1">
+                                <label className="text-[8.5px] font-black tracking-wider uppercase text-slate-455 block font-mono">
+                                  REST API Username
+                                </label>
+                                <input
+                                  type="text"
+                                  id="new-wp-user-register"
+                                  placeholder="wordpress_admin"
+                                  className="w-full text-xs text-slate-800 dark:text-white bg-slate-50 dark:bg-slate-95 border border-slate-200 dark:border-slate-810 rounded p-1.5 focus:outline-none transition-all font-sans"
+                                />
+                              </div>
+
+                              <div className="space-y-1">
+                                <label className="text-[8.5px] font-black tracking-wider uppercase text-slate-455 block font-mono">
+                                  Application Password
+                                </label>
+                                <input
+                                  type="password"
+                                  id="new-wp-pwd-register"
+                                  placeholder="•••• •••• •••• ••••"
+                                  className="w-full text-xs text-slate-800 dark:text-white bg-slate-50 dark:bg-slate-95 border border-slate-200 dark:border-slate-810 rounded p-1.5 focus:outline-none transition-all font-sans"
+                                />
+                              </div>
+
+                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                <div className="space-y-1">
+                                  <label className="text-[8.5px] font-black tracking-wider uppercase text-slate-455 block font-mono">
+                                    Assigned Niche Category
+                                  </label>
+                                  <select
+                                    id="new-wp-niche-register"
+                                    className="w-full text-xs text-slate-800 dark:text-white bg-slate-50 dark:bg-slate-95 border border-slate-201 dark:border-slate-810 rounded p-1.5 focus:outline-none transition-all font-sans"
+                                  >
+                                    {niches.map((n) => (
+                                      <option key={n.id} value={n.id}>{n.name}</option>
+                                    ))}
+                                    <option value="all">General / Combined</option>
+                                  </select>
+                                </div>
+                                <div className="flex items-center gap-2 pt-5 select-none text-left">
+                                  <input
+                                    type="checkbox"
+                                    id="new-wp-autopush-register"
+                                    className="rounded border-slate-300 text-indigo-505 w-4 h-4 cursor-pointer"
+                                  />
+                                  <label htmlFor="new-wp-autopush-register" className="text-[10px] font-extrabold uppercase tracking-widest font-mono cursor-pointer text-slate-705 dark:text-slate-305">
+                                    Auto-Push
+                                  </label>
+                                </div>
+                              </div>
+
+                              <div className="flex items-center gap-2 pt-3 font-mono">
+                                <button
+                                  type="button"
+                                  onClick={async () => {
+                                     const urlEl = document.getElementById("new-wp-url") as HTMLInputElement;
+                                     const userEl = document.getElementById("new-wp-user-register") as HTMLInputElement;
+                                     const pwdEl = document.getElementById("new-wp-pwd-register") as HTMLInputElement;
+                                     if (!urlEl?.value || !userEl?.value || !pwdEl?.value) {
+                                       alert("Please fill Site URL, REST Username, and Application Password first!");
+                                       return;
+                                     }
+                                     try {
+                                       const res = await fetch("/api/saas-settings/test-wp", {
+                                         method: "POST",
+                                         headers: { "Content-Type": "application/json" },
+                                         body: JSON.stringify({
+                                           url: urlEl.value,
+                                           username: userEl.value,
+                                           appPassword: pwdEl.value,
+                                         }),
+                                       });
+                                       if (res.ok) {
+                                         const data = await res.json();
+                                         alert("Test Connection: " + data.message);
+                                       } else {
+                                         alert("Failed credentials verification.");
+                                       }
+                                     } catch (e: any) {
+                                       alert("Error: " + e.message);
+                                     }
+                                  }}
+                                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 rounded font-mono text-[9px] font-bold cursor-pointer"
+                                >
+                                  ⚡ Test site
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={async () => {
+                                     const aliasEl = document.getElementById("new-wp-alias") as HTMLInputElement;
+                                     const urlEl = document.getElementById("new-wp-url") as HTMLInputElement;
+                                     const userEl = document.getElementById("new-wp-user-register") as HTMLInputElement;
+                                     const pwdEl = document.getElementById("new-wp-pwd-register") as HTMLInputElement;
+                                     const nicheEl = document.getElementById("new-wp-niche-register") as HTMLSelectElement;
+                                     const autoEl = document.getElementById("new-wp-autopush-register") as HTMLInputElement;
+
+                                     const name = aliasEl?.value?.trim() || "WordPress Site";
+                                     const url = urlEl?.value?.trim();
+                                     const username = userEl?.value?.trim();
+                                     const appPassword = pwdEl?.value?.trim();
+                                     const niche = nicheEl?.value || "hollywood";
+                                     const autoPush = autoEl?.checked || false;
+
+                                     if (!url || !username || !appPassword) {
+                                       alert("Site URL, Username, and Password are required!");
+                                       return;
+                                     }
+
+                                     const newAccount = {
+                                       id: "wp-site-" + Date.now().toString(),
+                                       name,
+                                       url,
+                                       username,
+                                       appPassword,
+                                       niche,
+                                       autoPush,
+                                       active: true,
+                                     };
+
+                                     const updatedSites = [...(saasConfig.wordpressSites || []), newAccount];
+                                     const updatedConfig = {
+                                        ...saasConfig,
+                                        wordpressSites: updatedSites,
+                                      };
+                                      setSaasConfig(updatedConfig);
+                                      await handleSaveSaaSSettings(updatedConfig);
+                                      alert(`Successfully registered node: ${name}`);
+                                   }}
+                                   className="flex-1 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded font-mono text-[9px] font-extrabold cursor-pointer text-center"
+                                 >
+                                   ➕ Hook Connection
+                                 </button>
+                               </div>
+                             </div>
+                           </div>
+                         )}
+
+                        {/* 2.5. DURABLE PUBLISHING QUEUE PANEL */}
+                        {!editingWpSite && wpLeftTab === "queue" && (
+                          <div className="space-y-4 font-sans text-left">
+                            <div className="border-b border-slate-100 dark:border-slate-800 pb-2 flex items-center justify-between">
+                              <div>
+                                <h5 className="font-extrabold text-slate-805 dark:text-slate-200 text-[10px] uppercase tracking-wider font-mono">
+                                  📋 Durable Publishing Queue & Worker Control
+                                </h5>
+                                <p className="text-[9px] text-slate-400 mt-0.5">Idempotent Delivery, Bounded Retries, and Ambiguous Outcome Resolution</p>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={handleQueueRunWorker}
+                                disabled={isExecutingQueue || isLoadingQueue}
+                                className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-450 text-white rounded font-mono text-[9px] font-extrabold cursor-pointer flex items-center gap-1"
+                              >
+                                {isExecutingQueue ? "⏳ Worker Executing..." : "⚡ Run Queue Worker"}
+                              </button>
+                            </div>
+
+                            {/* Queue Summary KPIs */}
+                            <div className="grid grid-cols-4 gap-2 text-center">
+                              <div className="bg-slate-50 dark:bg-slate-900/40 p-2 rounded-lg border border-slate-200/60 dark:border-slate-800/60 font-mono text-[9px]">
+                                <span className="text-slate-404 block text-[7.5px] uppercase tracking-wider">Total</span>
+                                <span className="font-bold text-slate-800 dark:text-slate-200">{queueJobs.length}</span>
+                              </div>
+                              <div className="bg-slate-50 dark:bg-slate-900/40 p-2 rounded-lg border border-slate-200/60 dark:border-slate-800/60 font-mono text-[9px]">
+                                <span className="text-slate-404 block text-[7.5px] uppercase tracking-wider">Active</span>
+                                <span className="font-bold text-blue-500">
+                                  {queueJobs.filter(j => {
+                                    const st = (j.status || "").toLowerCase();
+                                    return st === "queued" || st === "leased" || st === "retry_wait" || st === "scheduled";
+                                  }).length}
+                                </span>
+                              </div>
+                              <div className="bg-slate-50 dark:bg-slate-900/40 p-2 rounded-lg border border-slate-200/60 dark:border-slate-800/60 font-mono text-[9px]">
+                                <span className="text-slate-404 block text-[7.5px] uppercase tracking-wider">Published</span>
+                                <span className="font-bold text-emerald-500">
+                                  {queueJobs.filter(j => {
+                                    const st = (j.status || "").toLowerCase();
+                                    return st === "published" || st === "updated";
+                                  }).length}
+                                </span>
+                              </div>
+                              <div className="bg-slate-50 dark:bg-slate-900/40 p-2 rounded-lg border border-slate-200/60 dark:border-slate-800/60 font-mono text-[9px]">
+                                <span className="text-slate-404 block text-[7.5px] uppercase tracking-wider">Failing</span>
+                                <span className="font-bold text-rose-500">
+                                  {queueJobs.filter(j => {
+                                    const st = (j.status || "").toLowerCase();
+                                    return st === "failed" || st === "dead_letter" || st === "aborted" || st === "cancelled" || st === "technical_failure" || st === "manual_intervention_required" || st === "reconciliation_required";
+                                  }).length}
+                                </span>
+                              </div>
+                            </div>
+
+                            {/* Main Jobs Listing */}
+                            {isLoadingQueue && queueJobs.length === 0 ? (
+                              <div className="p-8 text-center text-slate-400 font-mono text-[9.5px]">
+                                Loading queue state from Firestore...
+                              </div>
+                            ) : queueJobs.length === 0 ? (
+                              <div className="p-8 text-center bg-slate-50 dark:bg-slate-950/20 border border-slate-100 dark:border-slate-800/60 rounded-xl space-y-2">
+                                <p className="text-[10px] text-slate-500 leading-normal">
+                                  No publishing jobs have been submitted to the durable queue yet.
+                                </p>
+                                <p className="text-[9px] text-slate-400 max-w-sm mx-auto">
+                                  To add an article, go to your **Articles Board** and click **"Queue Publication"** on any approved draft to enable retry guards and scheduling!
+                                </p>
+                              </div>
+                            ) : (
+                              <div className="space-y-3 max-h-[350px] overflow-y-auto pr-1">
+                                {queueJobs.map((job) => {
+                                  let badgeColor = "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300";
+                                  const st = (job.status || "").toLowerCase();
+                                  if (st === "queued" || st === "scheduled") badgeColor = "bg-indigo-100 text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300";
+                                  if (st === "leased" || st === "executing" || st === "verifying_remote") badgeColor = "bg-amber-100 text-amber-700 dark:bg-amber-950/60 dark:text-amber-300";
+                                  if (st === "published" || st === "updated") badgeColor = "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300";
+                                  if (st === "failed" || st === "technical_failure") badgeColor = "bg-rose-100 text-rose-700 dark:bg-rose-950/60 dark:text-rose-300";
+                                  if (st === "dead_letter") badgeColor = "bg-red-200 text-red-800 dark:bg-red-950/80 dark:text-red-300 font-bold";
+                                  if (st === "aborted" || st === "cancelled") badgeColor = "bg-neutral-200 text-neutral-800 dark:bg-neutral-800 dark:text-neutral-400";
+                                  if (st === "manual_intervention_required" || st === "reconciliation_required") badgeColor = "bg-amber-200 text-amber-900 dark:bg-amber-950/80 dark:text-amber-300 font-bold";
+
+                                  const isExpanded = expandedJobId === job.jobId;
+
+                                  return (
+                                    <div key={job.jobId} className="bg-white dark:bg-slate-900 border border-slate-150 dark:border-slate-800/80 rounded-xl p-3.5 space-y-3 shadow-sm hover:border-slate-300 dark:hover:border-slate-700 transition">
+                                      <div className="flex items-start justify-between gap-2.5">
+                                        <div className="space-y-1">
+                                          <div className="flex items-center gap-2">
+                                            <span className={`px-2 py-0.5 rounded text-[8px] uppercase font-black font-mono tracking-wider ${badgeColor}`}>
+                                              {job.status}
+                                            </span>
+                                            <span className="text-[9px] text-slate-400 font-mono">
+                                              ID: {job.jobId.substring(0, 12)}...
+                                            </span>
+                                          </div>
+                                          <h6 className="font-bold text-slate-800 dark:text-slate-200 text-[10.5px] leading-tight">
+                                            Package: {job.packageId}
+                                          </h6>
+                                          <p className="text-[9px] text-slate-400 font-mono">
+                                            Target Site: <strong className="text-slate-500">{job.targetSiteId}</strong>
+                                          </p>
+                                        </div>
+
+                                        <div className="text-right font-mono text-[9px] space-y-1 text-slate-500">
+                                          <div>Runs: <strong>{job.runCount} / {job.maxRetries}</strong></div>
+                                          <div>Next Run: <strong>{job.nextRunAt ? new Date(job.nextRunAt).toLocaleTimeString() : "N/A"}</strong></div>
+                                          {job.scheduledPublishAt && (
+                                            <div className="text-indigo-500">
+                                              ⏰ Scheduled: <strong>{new Date(job.scheduledPublishAt).toLocaleDateString()}</strong>
+                                            </div>
+                                          )}
+                                        </div>
+                                      </div>
+
+                                      {job.lastError && (
+                                        <div className="p-2 bg-rose-50 dark:bg-rose-950/20 border border-rose-100 dark:border-rose-950/40 rounded-lg text-[8.5px] text-rose-600 dark:text-rose-400 font-mono">
+                                          ⚠️ <strong>Last Error:</strong> {job.lastError}
+                                        </div>
+                                      )}
+
+                                      {/* Row Action Buttons */}
+                                      <div className="flex items-center gap-2 pt-2 border-t border-slate-100 dark:border-slate-800/60 font-mono text-[8px]">
+                                        <button
+                                          type="button"
+                                          onClick={() => setExpandedJobId(isExpanded ? null : job.jobId)}
+                                          className="px-2 py-1 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 rounded cursor-pointer font-bold"
+                                        >
+                                          {isExpanded ? "Hide Logs ✕" : "Audit Events 🔍"}
+                                        </button>
+
+                                        {((job.status || "").toLowerCase() === "failed" || (job.status || "").toLowerCase() === "dead_letter" || (job.status || "").toLowerCase() === "technical_failure") && (
+                                          <button
+                                            type="button"
+                                            onClick={() => handleQueueRetry(job.jobId)}
+                                            className="px-2 py-1 bg-amber-500 hover:bg-amber-600 text-white rounded cursor-pointer font-bold"
+                                          >
+                                            ↻ Force Retry
+                                          </button>
+                                        )}
+
+                                        {(job.status || "").toLowerCase() !== "published" && (job.status || "").toLowerCase() !== "updated" && (job.status || "").toLowerCase() !== "aborted" && (job.status || "").toLowerCase() !== "cancelled" && (
+                                          <>
+                                            <button
+                                              type="button"
+                                              onClick={() => {
+                                                setManualResolveJobId(manualResolveJobId === job.jobId ? null : job.jobId);
+                                                setManualWpPostId("");
+                                                setManualDestUrl("");
+                                              }}
+                                              className="px-2 py-1 bg-teal-600 hover:bg-teal-700 text-white rounded cursor-pointer font-bold"
+                                            >
+                                              ✏️ Manual Resolve
+                                            </button>
+
+                                            <button
+                                              type="button"
+                                              onClick={() => {
+                                                setAbortJobId(abortJobId === job.jobId ? null : job.jobId);
+                                                setAbortReason("");
+                                              }}
+                                              className="px-2 py-1 bg-rose-600 hover:bg-rose-700 text-white rounded cursor-pointer font-bold"
+                                            >
+                                              ✕ Abort Job
+                                            </button>
+                                          </>
+                                        )}
+                                      </div>
+
+                                      {/* Manual Resolve Form */}
+                                      {manualResolveJobId === job.jobId && (
+                                        <div className="p-3 bg-teal-50 dark:bg-teal-950/25 border border-teal-200/50 dark:border-teal-900/30 rounded-xl space-y-2 text-[9px] font-sans">
+                                          <h6 className="font-bold text-teal-800 dark:text-teal-400 font-mono uppercase tracking-wider">
+                                            ✏️ Manually Reconcile with WordPress Remote
+                                          </h6>
+                                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                                            <div>
+                                              <label className="text-slate-500 block font-mono text-[8px] uppercase">WP Post ID</label>
+                                              <input
+                                                type="text"
+                                                placeholder="e.g. 8329"
+                                                value={manualWpPostId}
+                                                onChange={(e) => setManualWpPostId(e.target.value)}
+                                                className="w-full text-xs p-1 border rounded dark:bg-slate-950 dark:border-slate-800 focus:outline-none"
+                                              />
+                                            </div>
+                                            <div>
+                                              <label className="text-slate-500 block font-mono text-[8px] uppercase">Destination Live URL</label>
+                                              <input
+                                                type="text"
+                                                placeholder="https://mysite.com/?p=8329"
+                                                value={manualDestUrl}
+                                                onChange={(e) => setManualDestUrl(e.target.value)}
+                                                className="w-full text-xs p-1 border rounded dark:bg-slate-950 dark:border-slate-800 focus:outline-none"
+                                              />
+                                            </div>
+                                          </div>
+                                          <div className="flex justify-end gap-1 font-mono text-[8px] pt-1">
+                                            <button
+                                              type="button"
+                                              onClick={() => handleQueueResolve(job.jobId)}
+                                              className="px-2 py-1 bg-teal-600 text-white rounded cursor-pointer"
+                                            >
+                                              Confirm Resolution
+                                            </button>
+                                            <button
+                                              type="button"
+                                              onClick={() => setManualResolveJobId(null)}
+                                              className="px-2 py-1 bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300 rounded cursor-pointer"
+                                            >
+                                              Cancel
+                                            </button>
+                                          </div>
+                                        </div>
+                                      )}
+
+                                      {/* Abort Form */}
+                                      {abortJobId === job.jobId && (
+                                        <div className="p-3 bg-rose-50 dark:bg-rose-950/25 border border-rose-200/50 dark:border-rose-900/30 rounded-xl space-y-2 text-[9px] font-sans">
+                                          <h6 className="font-bold text-rose-850 dark:text-rose-405 font-mono uppercase tracking-wider">
+                                            ⚠️ Abort Publishing Job
+                                          </h6>
+                                          <div>
+                                            <label className="text-slate-500 block font-mono text-[8px] uppercase">Reason for Aborting</label>
+                                            <input
+                                              type="text"
+                                              placeholder="e.g. Article outdated, duplicate feed storyline"
+                                              value={abortReason}
+                                              onChange={(e) => setAbortReason(e.target.value)}
+                                              className="w-full text-xs p-1 border rounded dark:bg-slate-950 dark:border-slate-800 focus:outline-none"
+                                            />
+                                          </div>
+                                          <div className="flex justify-end gap-1 font-mono text-[8px] pt-1">
+                                            <button
+                                              type="button"
+                                              onClick={() => handleQueueAbort(job.jobId)}
+                                              className="px-2 py-1 bg-rose-600 text-white rounded cursor-pointer"
+                                            >
+                                              Confirm Abortion
+                                            </button>
+                                            <button
+                                              type="button"
+                                              onClick={() => setAbortJobId(null)}
+                                              className="px-2 py-1 bg-slate-200 dark:bg-slate-800 text-slate-705 dark:text-slate-305 rounded cursor-pointer"
+                                            >
+                                              Cancel
+                                            </button>
+                                          </div>
+                                        </div>
+                                      )}
+
+                                      {/* Expanded Audit Trails Terminal */}
+                                      {isExpanded && (
+                                        <div className="p-2.5 bg-slate-950 rounded-xl border border-slate-800 font-mono text-[8px] text-slate-400 space-y-1 shadow-inner">
+                                          <div className="border-b border-slate-200/10 pb-1 text-[7.5px] uppercase tracking-wider text-slate-500 font-bold flex justify-between">
+                                            <span>📋 Execution Transition Log</span>
+                                            <span>UTC TIMESTAMPS</span>
+                                          </div>
+                                          <div className="space-y-1 divide-y divide-slate-900 max-h-[120px] overflow-y-auto">
+                                            {(job.auditHistory || []).map((ev: any, idx: number) => (
+                                              <div key={idx} className="pt-1 flex flex-col sm:flex-row sm:justify-between items-start gap-1 leading-normal">
+                                                <span className="text-slate-300">
+                                                  [{idx + 1}] <strong className="text-indigo-400">{ev.operator || "worker"}</strong>: {ev.action} (<strong>{ev.previousStatus}</strong> → <strong className="text-indigo-400">{ev.newStatus}</strong>)
+                                                  {ev.message && <span className="block text-[7.5px] text-slate-500 mt-0.5">↳ {ev.message}</span>}
+                                                </span>
+                                                <span className="text-slate-500 text-[7px] whitespace-nowrap self-end sm:self-start">
+                                                  {new Date(ev.timestamp).toISOString()}
+                                                </span>
+                                              </div>
+                                            ))}
+                                            {(job.auditHistory || []).length === 0 && (
+                                              <div className="text-center text-slate-600 py-2 font-mono">No transition logs registered for this job.</div>
+                                            )}
+                                          </div>
+                                        </div>
+                                      )}
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            )}
+                          </div>
+                        )}
+
+
+                        {/* RIGHT COLUMN: Dynamic Niche Fallback configuration */}
+                        <div className="lg:col-span-5 space-y-6">
+                          
+                          {/* 3. Original Legacy Niche Default Fallback Form */}
+                          <form
+                            onSubmit={(e) => {
+                              e.preventDefault();
+                              handleSaveSaaSSettings(saasConfig);
+                            }}
+                            className="space-y-4"
+                          >
+                            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 shadow-sm space-y-4 text-left">
+                              <div className="border-b border-slate-100 dark:border-slate-800 pb-3">
+                                <h5 className="font-extrabold text-[#0d1219] dark:text-slate-100 text-xs uppercase tracking-wider block font-sans">
+                                  🌐 Category Default Gateway Fallbacks
+                                </h5>
+                                <p className="text-[10px] text-slate-400 font-normal leading-normal mt-0.5">
+                                  Default destination used if no custom accounts are assigned above for the active niche.
+                                </p>
+                              </div>
+
+                              {/* Beautifully stylized selected niche accent banner */}
+                              {(() => {
+                                let themeBg = "bg-rose-50/50 dark:bg-rose-950/15 border-rose-100 dark:border-rose-900/30 text-rose-700 dark:text-rose-450";
+                                let titleNiche = "🎬 Gossip & Glamour Default Portal";
+                                if (selectedNiche === "sports") {
+                                  themeBg = "bg-emerald-50/50 dark:bg-emerald-950/15 border-emerald-100 dark:border-emerald-900/30 text-emerald-700 dark:text-emerald-450";
+                                  titleNiche = "🏀 The Arena Sports Default Portal";
+                                } else if (selectedNiche === "tech") {
+                                  themeBg = "bg-cyan-50/50 dark:bg-cyan-950/15 border-cyan-100 dark:border-cyan-900/30 text-cyan-700 dark:text-cyan-450";
+                                  titleNiche = "💻 Alpha Teardown Default Portal";
+                                } else if (selectedNiche === "traveling") {
+                                  themeBg = "bg-teal-50/50 dark:bg-teal-950/15 border-teal-100 dark:border-teal-900/30 text-teal-700 dark:text-teal-450";
+                                  titleNiche = "🧭 Nomad Trails Default Portal";
+                                }
+                                return (
+                                  <div className={`p-4 rounded-xl border ${themeBg} space-y-2`}>
+                                    <div className="flex items-center gap-2">
+                                      <span className="w-2.5 h-2.5 rounded-full bg-indigo-500 inline-block animate-ping"></span>
+                                      <span className="font-extrabold text-[11px] uppercase tracking-wider font-mono">
+                                        {titleNiche}
+                                      </span>
+                                    </div>
+                                    <p className="text-[10px] opacity-90 leading-normal font-sans">
+                                      These credentials act as the default fallback target destination for auto-publish triggers when processing items in the <strong className="uppercase font-mono font-black">{selectedNiche}</strong> space.
+                                    </p>
+                                  </div>
+                                );
+                              })()}
+
+                              {/* Form Inputs Grid */}
+                              <div className="space-y-4 p-4 bg-slate-50 dark:bg-slate-950/40 rounded-xl border border-slate-200 dark:border-slate-850 shadow-inner">
+                                <div className="space-y-1">
+                                  <label className="text-[9px] font-bold text-slate-400 block font-mono uppercase tracking-widest">
+                                    WordPress API Fallback URL
+                                  </label>
+                                  <input
+                                    type="url"
+                                    placeholder="https://gossip-website.com"
+                                    value={
+                                      saasConfig.wordpress[selectedNiche]?.url || ""
+                                    }
+                                    onChange={(e) => {
+                                      const val = e.target.value;
+                                      setSaasConfig((prev: any) => ({
+                                        ...prev,
+                                        wordpress: {
+                                          ...prev.wordpress,
+                                          [selectedNiche]: {
+                                            ...prev.wordpress[selectedNiche],
+                                            url: val,
+                                          },
+                                        },
+                                      }));
+                                    }}
+                                    className="w-full text-xs text-slate-850 dark:text-white bg-white dark:bg-slate-950 border border-slate-205 dark:border-slate-805 rounded-lg p-2.5 focus:outline-none focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 transition-all"
+                                  />
+                                  <p className="text-[8.5px] text-slate-450 leading-normal font-mono text-[8px] pt-0.5 block">
+                                    Example: http://yourdomain.com (exclude trailing admin /wp-admin paths)
+                                  </p>
+                                </div>
+
+                                <div className="space-y-1">
+                                  <label className="text-[9px] font-bold text-slate-400 block font-mono uppercase tracking-widest">
+                                    REST API Username
+                                  </label>
+                                  <input
+                                    type="text"
+                                    placeholder="wordpress_admin"
+                                    value={
+                                      saasConfig.wordpress[selectedNiche]?.username ||
+                                      ""
+                                    }
+                                    onChange={(e) => {
+                                      const val = e.target.value;
+                                      setSaasConfig((prev: any) => ({
+                                        ...prev,
+                                        wordpress: {
+                                          ...prev.wordpress,
+                                          [selectedNiche]: {
+                                            ...prev.wordpress[selectedNiche],
+                                            username: val,
+                                          },
+                                        },
+                                      }));
+                                    }}
+                                    className="w-full text-xs text-slate-850 dark:text-white bg-white dark:bg-slate-950 border border-slate-205 dark:border-slate-805 rounded-lg p-2.5 focus:outline-none focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 transition-all"
+                                  />
+                                </div>
+
+                                <div className="space-y-1">
+                                  <label className="text-[9px] font-bold text-slate-400 block font-mono uppercase tracking-widest">
+                                    Application Password
+                                  </label>
+                                  <input
+                                    type="password"
+                                    placeholder="•••• •••• •••• ••••"
+                                    value={
+                                      saasConfig.wordpress[selectedNiche]
+                                        ?.appPassword || ""
+                                    }
+                                    onChange={(e) => {
+                                      const val = e.target.value;
+                                      setSaasConfig((prev: any) => ({
+                                        ...prev,
+                                        wordpress: {
+                                          ...prev.wordpress,
+                                          [selectedNiche]: {
+                                            ...prev.wordpress[selectedNiche],
+                                            appPassword: val,
+                                          },
+                                        },
+                                      }));
+                                    }}
+                                    className="w-full text-xs text-slate-850 dark:text-white bg-white dark:bg-slate-950 border border-slate-205 dark:border-slate-805 rounded-lg p-2.5 focus:outline-none focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 transition-all"
+                                  />
+                                  <p className="text-[8.5px] text-slate-450 leading-normal font-mono block text-[8px] pt-0.5">
+                                    Provision credentials at WordPress Users → Your Profile → Application Passwords
+                                  </p>
+                                </div>
+                              </div>
+
+                              {/* Toggles Specifications block */}
+                              <div className="space-y-3.5 p-4 bg-slate-50 dark:bg-slate-950/40 rounded-xl border border-slate-200 dark:border-slate-850 shadow-inner text-left font-sans">
+                                <h6 className="font-extrabold text-slate-600 dark:text-slate-400 text-[9px] uppercase tracking-widest block font-mono">
+                                  INTEGRATION OPTIMIZATIONS
+                                </h6>
+
+                                <div className="space-y-3 text-[9.5px]">
+                                  <div className="flex items-start gap-3">
+                                    <input
+                                      id="sync-featured-media-check"
+                                      type="checkbox"
+                                      defaultChecked={true}
+                                      className="rounded border-slate-350 dark:border-slate-800 bg-white dark:bg-slate-950 text-indigo-500 focus:ring-indigo-500 w-4 h-4 mt-0.5 cursor-pointer"
+                                    />
+                                    <div>
+                                      <label
+                                        htmlFor="sync-featured-media-check"
+                                        className="font-bold text-slate-800 dark:text-slate-200 select-none block cursor-pointer"
+                                      >
+                                        Sync Featured Media (Images)
+                                      </label>
+                                      <span className="text-[8.5px] text-slate-450 block leading-tight mt-0.5 font-normal">
+                                        Store generated header images into WordPress Library and set as featured posts metadata.
+                                      </span>
+                                    </div>
+                                  </div>
+
+                                  <div className="flex items-start gap-3 border-t border-slate-200/60 dark:border-slate-800/60 pt-3">
+                                    <input
+                                      id={`wp-check-${selectedNiche}`}
+                                      type="checkbox"
+                                      checked={
+                                        saasConfig.wordpress[selectedNiche]
+                                          ?.autoPush || false
+                                      }
+                                      onChange={(e) => {
+                                        const val = e.target.checked;
+                                        setSaasConfig((prev: any) => ({
+                                          ...prev,
+                                          wordpress: {
+                                            ...prev.wordpress,
+                                            [selectedNiche]: {
+                                              ...prev.wordpress[selectedNiche],
+                                              autoPush: val,
+                                            },
+                                          },
+                                        }));
+                                      }}
+                                      className="rounded border-slate-350 dark:border-slate-800 bg-white dark:bg-slate-950 text-indigo-500 focus:ring-indigo-500 w-4 h-4 mt-0.5 cursor-pointer"
+                                    />
+                                    <div>
+                                      <label
+                                        htmlFor={`wp-check-${selectedNiche}`}
+                                        className="font-bold text-slate-800 dark:text-slate-200 select-none block cursor-pointer"
+                                      >
+                                        Enable Category Fallback Auto-Push
+                                      </label>
+                                      <span className="text-[8.5px] text-slate-450 block leading-tight mt-0.5 font-normal">
+                                        Bypass staging. Automatically submit rewritten drafts to this fallback portal once compliance check succeeds.
+                                      </span>
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
+
+                              {/* Form Buttons */}
+                              <div className="flex flex-col sm:flex-row items-center gap-2 pt-2 border-t border-slate-150/45 dark:border-slate-800/60 pt-4">
+                                <button
+                                  type="submit"
+                                  disabled={isSavingSettings}
+                                  className="w-full sm:flex-1 bg-gradient-to-r from-indigo-600 to-indigo-700 hover:from-indigo-500 hover:to-indigo-650 text-white font-extrabold text-[10.5px] py-2 px-3 rounded-lg shadow-md flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-55 transition"
+                                >
+                                  {isSavingSettings
+                                    ? "Saving..."
+                                    : saveSuccess
+                                      ? "✓ Configs Saved"
+                                      : "Save Fallback Config"}
+                                </button>
+
+                                <button
+                                  type="button"
+                                  onClick={async () => {
+                                    setIsTestingWp((prev) => ({
+                                      ...prev,
+                                      [selectedNiche]: "testing",
+                                    }));
+                                    try {
+                                      const res = await fetch(
+                                        "/api/saas-settings/test-wp",
+                                        {
+                                          method: "POST",
+                                          headers: {
+                                            "Content-Type": "application/json",
+                                          },
+                                          body: JSON.stringify({
+                                            niche: selectedNiche,
+                                          }),
+                                        },
+                                      );
+                                      if (res.ok) {
+                                        const data = await res.json();
+                                        setIsTestingWp((prev) => ({
+                                          ...prev,
+                                          [selectedNiche]: "success",
+                                        }));
+                                        alert(data.message);
+                                      } else {
+                                        setIsTestingWp((prev) => ({
+                                          ...prev,
+                                          [selectedNiche]: "failed",
+                                        }));
+                                        alert(
+                                          "Failed to connect: API endpoint error"
+                                        );
+                                      }
+                                    } catch (err: any) {
+                                      setIsTestingWp((prev) => ({
+                                        ...prev,
+                                        [selectedNiche]: "failed",
+                                      }));
+                                      alert("Failed to connect: " + err.message);
+                                    }
+                                  }}
+                                  className="w-full sm:w-auto px-4 py-2 text-[10px] font-bold text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950/40 border border-indigo-200 dark:border-indigo-900/40 hover:bg-slate-100 dark:hover:bg-slate-900 rounded-lg hover:text-indigo-500 transition whitespace-nowrap cursor-pointer shadow-sm"
+                                >
+                                  {isTestingWp[selectedNiche] === "testing"
+                                    ? "Connecting..."
+                                    : "⚡ Test Portal Fallback"}
+                                </button>
+                              </div>
+                            </div>
+                          </form>
+                        </div>
+                      </div>
+
+                      {/* 4. WordPress SEO Meta Setup Box (Copiable) */}
+                      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-5 rounded-xl space-y-4 shadow-sm text-left">
+                        <div className="flex items-center gap-3">
+                          <div className="p-3 bg-indigo-50 dark:bg-indigo-950 text-indigo-600 dark:text-indigo-400 rounded-xl">
+                            <SlidersHorizontal className="w-5 h-5" />
+                          </div>
+                          <div>
+                            <h5 className="font-extrabold text-slate-850 dark:text-slate-100 text-xs uppercase tracking-wider block font-sans">
+                              WordPress SEO Meta Integration Patch
+                            </h5>
+                            <p className="text-[10px] text-slate-400 mt-0.5 max-w-2xl leading-relaxed">
+                              Some WordPress configurations seal focus keyword fields from the REST API. To authorize safe bidirectional synchronization for RankMath or Yoast variables, copy this helper filter block inside your theme's <code className="font-mono text-indigo-500 bg-indigo-50 dark:bg-indigo-950/40 px-1 py-0.5 rounded text-[9.5px]">functions.php</code>.
+                            </p>
+                          </div>
+                        </div>
+
+                        {/* Interactive IDE Mock Block */}
+                        <div className="rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden bg-slate-950 shadow-inner">
+                          {/* Code header bar */}
+                          <div className="flex items-center justify-between px-4 py-2.5 bg-slate-900/60 border-b border-slate-200/10 text-[9.5px] font-mono text-slate-500 select-none">
+                            <div className="flex items-center gap-1.5">
+                              <span className="w-2.5 h-2.5 rounded-full bg-rose-500"></span>
+                              <span className="w-2.5 h-2.5 rounded-full bg-amber-500"></span>
+                              <span className="w-2.5 h-2.5 rounded-full bg-emerald-500"></span>
+                              <span className="pl-2 text-slate-400">active-theme/functions.php</span>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                navigator.clipboard.writeText(`add_action('init', function() {
+    $meta_keys = [
+        '_rank_math_focus_keyword',
+        '_rank_math_description',
+        '_rank_math_title',
+        '_rank_math_robots',
+        '_rank_math_keywords',
+        '_yoast_wpseo_focuskw',
+        '_yoast_wpseo_metadesc',
+        '_yoast_wpseo_title'
+    ];
+    foreach ($meta_keys as $key) {
+        register_post_meta('post', $key, [
+            'show_in_rest' => true,
+            'single' => true,
+            'type' => 'string',
+            'auth_callback' => function() {
+                return current_user_can('edit_posts');
+            }
+        ]);
+    }
+});`);
+                                alert("PHP code snippet copied to clipboard! Paste it inside your active WordPress theme's functions.php file.");
+                              }}
+                              className="text-xs text-indigo-400 hover:text-indigo-300 bg-slate-900 border border-slate-800 rounded px-2.5 py-1 flex items-center gap-1 cursor-pointer hover:bg-slate-850 duration-200"
+                            >
+                              <Copy className="w-3.5 h-3.5" /> Copy Patch
+                            </button>
+                          </div>
+
+                          {/* Preformatted container */}
+                          <pre className="p-4 text-emerald-450 dark:text-emerald-450 text-[9.5px] font-mono overflow-auto max-h-[185px] leading-relaxed text-slate-200 text-left">
+{`add_action('init', function() {
+    $meta_keys = [
+        '_rank_math_focus_keyword',
+        '_rank_math_description',
+        '_rank_math_title',
+        '_rank_math_robots',
+        '_rank_math_keywords',
+        '_yoast_wpseo_focuskw',
+        '_yoast_wpseo_metadesc',
+        '_yoast_wpseo_title'
+    ];
+    foreach ($meta_keys as $key) {
+        register_post_meta('post', $key, [
+            'show_in_rest' => true,
+            'single' => true,
+            'type' => 'string',
+            'auth_callback' => function() {
+                return current_user_can('edit_posts');
+            }
+        ]);
+    }
+});`}
+                          </pre>
+                        </div>
+                      </div>
+
+                    </div>
+                  )}
+
+                  {/* UNIFIED SYSTEM LOG VIEWER */}
+                  {activeAdminTab === "logs" && (
+                    <div className="flex flex-col h-full overflow-hidden w-full lg:min-h-[820px]">
+                       <SystemLogViewer articles={articles} />
                     </div>
                   )}
 
@@ -5539,16 +9098,56 @@ export default function App() {
             </div>
 
             {/* ADMINISTRATIVE WORKSPACE CONTROL - RIGHT / AGENTIC WORKSPACE (Cols 8 -> 9 on widescreen) */}
-            {!["settings", "feeds", "writers", "contentFactory"].includes(activeAdminTab) && (
+            {!["settings", "feeds", "writers", "contentFactory", "logs"].includes(activeAdminTab) && (
               <div
                 className={`${activeAdminTab === "dashboard" ? "lg:col-span-12" : "lg:col-span-8 xl:col-span-9"} space-y-6 flex flex-col w-full overflow-hidden`}
               >
-                {activeAdminTab === "radar" ? (
+                {activeAdminTab === "dashboard" ? (
+                  <div className="space-y-8 flex flex-col w-full">
+                    <NichePerformanceDashboard
+                      selectedNiche={selectedNiche}
+                      articles={articles}
+                      niches={niches}
+                    />
+
+                    <div className="bg-white dark:bg-[#121620]/60 backdrop-blur-xl shadow-sm rounded-2xl border border-[#E3E5E8] dark:border-slate-850 p-5 overflow-hidden flex flex-col relative w-full">
+                      <div className="flex items-center justify-between select-none mb-4">
+                        <div className="flex items-center gap-1.5 text-xs text-slate-500 font-semibold uppercase tracking-widest font-sans">
+                          <Globe className="w-4 h-4 text-[#3F5353] dark:text-[#5F528E]" />
+                          WordPress Live Layout & Rewritten Articles Visualization Sandbox
+                        </div>
+                        <div className="text-[11px] font-sans font-medium text-slate-400">
+                          Interactive render • Instant sync
+                        </div>
+                      </div>
+                      
+                      <NicheBlogPreview
+                        nicheId={selectedNiche}
+                        articles={articles}
+                        writers={writers}
+                        saasConfig={saasConfig}
+                        onTriggerImageGen={handleTriggerImageGeneration}
+                        isGeneratingImage={isGeneratingImage}
+                        onArticleUpdate={(updated) =>
+                          setArticles((prev) =>
+                            prev.some((a) => a.id === updated.id)
+                              ? prev.map((a) =>
+                                  a.id === updated.id ? updated : a,
+                                )
+                              : [updated, ...prev],
+                          )
+                        }
+                      />
+                    </div>
+                    
+                    {/* Removed Editorial Opportunity Control Center */}
+                  </div>
+                ) : activeAdminTab === "radar" ? (
                   <TrendRadar
                     selectedNiche={selectedNiche}
-                    suggestedSources={suggestedSources}
-                    setSuggestedSources={setSuggestedSources}
                     writers={writers}
+                    niches={niches}
+                    onUpdateConfig={fetchConfig}
                     onDraftSource={(source, writerId) => {
                       setSelectedWriterId(writerId);
                       handleInitiateAgentRewrite(source);
@@ -5583,30 +9182,35 @@ export default function App() {
                           <span className="text-[10px] bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600 dark:text-indigo-400 border border-indigo-200 dark:border-indigo-805 font-bold px-3 py-1.5 rounded-lg font-mono">
                             Active API Gateways:{" "}
                             {
-                              ["hollywood", "sports", "tech"].filter(
-                                (n) => saasConfig.wordpress[n]?.url,
+                              niches.filter(
+                                (n) => saasConfig.wordpress[n.id]?.url,
                               ).length
                             }
-                            /3 Configured
+                            /{niches.length} Configured
                           </span>
                         </div>
                       </div>
 
                       {/* BENTO HEALTH ROW OF NICHES */}
-                      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 my-5 select-none">
-                        {["hollywood", "sports", "tech"].map((n) => {
-                          const cfg = saasConfig.wordpress[n];
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 my-5 select-none text-[10px] font-mono leading-tight">
+                        {niches.map((n) => {
+                          const cfg = saasConfig.wordpress[n.id];
                           const isSet =
                             cfg && cfg.url && cfg.username && cfg.appPassword;
-                          const label =
-                            n === "hollywood"
-                              ? "🎬 Gossip & Glam"
-                              : n === "sports"
-                                ? "🏀 The Arena"
-                                : "💻 Alpha Teardown";
+                          
+                          let icon = "🌐";
+                          if (n.id === "hollywood") icon = "🎬";
+                          else if (n.id === "sports") icon = "🏀";
+                          else if (n.id === "tech") icon = "💻";
+                          else if (n.id === "traveling") icon = "🧭";
+                          else if (n.id.includes("mystery") || n.id.includes("mystirious")) icon = "🕵️‍♂️";
+                          else if (n.id.includes("top-10") || n.id.includes("top10")) icon = "🔟";
+                          else if (n.id.includes("fact") || n.id.includes("facts")) icon = "💡";
+
+                          const label = `${icon} ${n.name}`;
                           return (
                             <div
-                              key={n}
+                              key={n.id}
                               className="bg-slate-50 dark:bg-slate-950/40 border border-[#E3E5E8] dark:border-slate-805 rounded-xl p-4 flex flex-col justify-between shadow-sm relative"
                             >
                               <div className="flex items-center justify-between">
@@ -5775,58 +9379,109 @@ export default function App() {
                                     </div>
 
                                     {/* Options & Action sync Trigger */}
-                                    <div className="shrink-0 flex items-center gap-2 font-mono">
+                                    <div className="shrink-0 flex items-center flex-wrap gap-2 font-mono">
+                                      {/* Push Status / Sync controls */}
                                       {isPushed ? (
                                         <div className="flex items-center gap-2">
-                                          <span className="bg-emerald-550 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 px-2 py-1 rounded text-[9px] font-bold">
-                                            Synced (Post #
-                                            {art.wordpressPush?.postId}) ✓
+                                          <span className="bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 px-2.5 py-1 rounded-lg text-[9px] font-bold">
+                                            Synced (Post #{art.wordpressPush?.postId}) ✓
                                           </span>
                                           {art.wordpressPush?.postUrl && (
                                             <a
                                               href={art.wordpressPush.postUrl}
                                               target="_blank"
                                               rel="noreferrer"
-                                              className="p-1 px-2.5 text-[9.5px] font-extrabold bg-black hover:bg-[#064e5a] hover:text-white text-white rounded transition shadow-sm flex items-center gap-1 cursor-pointer h-7"
+                                              className="p-1 px-2.5 text-[9.5px] font-extrabold bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg transition shadow-sm flex items-center gap-1 cursor-pointer h-7"
                                             >
-                                              Visit WP{" "}
-                                              <ExternalLink className="w-3 h-3" />
+                                              Visit WP <ExternalLink className="w-3 h-3" />
                                             </a>
                                           )}
                                         </div>
                                       ) : isWpPushing ? (
                                         <button
                                           disabled
-                                          className="px-3 py-1.5 bg-slate-200 dark:bg-slate-800 text-slate-500 rounded text-[9.5px] font-bold flex items-center gap-1.5 animate-pulse cursor-not-allowed"
+                                          className="px-3 py-1.5 bg-slate-200 dark:bg-slate-800 text-slate-500 rounded-lg text-[9.5px] font-bold flex items-center gap-1.5 animate-pulse cursor-not-allowed"
                                         >
-                                          Syndicating Media...{" "}
-                                          <RefreshCw className="w-3 h-3 animate-spin text-indigo-500" />
+                                          Syndicating... <RefreshCw className="w-3 h-3 animate-spin text-indigo-500" />
                                         </button>
                                       ) : (
                                         <div className="flex items-center gap-1.5">
                                           {hasWpFailed && (
                                             <span
                                               className="bg-rose-500/15 text-rose-500 border border-rose-500/25 px-1.5 py-0.5 rounded text-[8px] max-w-[120px] truncate block"
-                                              title={
-                                                art.wordpressPush?.error ||
-                                                "Publish error"
-                                              }
+                                              title={art.wordpressPush?.error || "Publish error"}
                                             >
-                                              Failed:{" "}
-                                              {art.wordpressPush?.error ||
-                                                "API connection dropped"}
+                                              Failed: {art.wordpressPush?.error || "API error"}
                                             </span>
                                           )}
                                           <button
-                                            onClick={() =>
-                                              handlePushToWordPress(art.id)
-                                            }
-                                            className="px-3 py-1.5 text-[9.5px] font-extrabold bg-black text-white hover:bg-[#064e5a] hover:text-white rounded transition flex items-center gap-1 shadow-sm h-7 cursor-pointer"
+                                            onClick={() => handlePushToWordPress(art.id)}
+                                            className="px-2.5 py-1.5 text-[9px] font-extrabold bg-blue-600 text-white hover:bg-blue-700 rounded-lg transition flex items-center gap-1 shadow-sm h-7 cursor-pointer"
+                                            title="Push polished draft to selected remote WordPress CMS site instantly"
                                           >
-                                            Push with Media ⚡
+                                            Push Direct ⚡
+                                          </button>
+                                          <button
+                                            onClick={() => {
+                                              const targetSite = prompt("Enter custom Target Site ID (Optional - leave blank to use the default fallbacks):", "");
+                                              if (targetSite === null) return;
+                                              const scheduleVal = prompt("Enter scheduled date/time (Format: YYYY-MM-DD HH:MM) or leave blank for immediate publishing queue:", "");
+                                              if (scheduleVal === null) return;
+                                              let scheduledAt: string | null = null;
+                                              if (scheduleVal.trim()) {
+                                                const d = new Date(scheduleVal.trim());
+                                                if (isNaN(d.getTime())) {
+                                                  alert("Invalid date format! Enqueue cancelled.");
+                                                  return;
+                                                }
+                                                scheduledAt = d.toISOString();
+                                              }
+                                              handleQueueEnqueue(art.id, targetSite.trim() || undefined, scheduledAt);
+                                            }}
+                                            className="px-2.5 py-1.5 text-[9px] font-extrabold bg-indigo-600 text-white hover:bg-indigo-700 rounded-lg transition flex items-center gap-1 shadow-sm h-7 cursor-pointer"
+                                            title="Enqueue this finalized package into the idempotent, durable queue with bounded retries"
+                                          >
+                                            Queue 📋
                                           </button>
                                         </div>
                                       )}
+
+                                      {/* Rewrite Again Controls */}
+                                      <button
+                                        onClick={() => {
+                                          handleInitiateAgentRewrite({
+                                            id: art.sourceId || `source-${Date.now()}`,
+                                            title: art.sourceTitle || art.title,
+                                            url: art.sourceLink || "https://example.com",
+                                            description: art.sourceDescription || "",
+                                            opportunityScore: art.oppScore || 90,
+                                            pipeline: art.pipeline || "balanced",
+                                            processingStatus: "idle",
+                                            manualReview: false
+                                          });
+                                        }}
+                                        className="h-7 px-2.5 text-[9.5px] font-extrabold bg-indigo-55 bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-100 dark:hover:bg-indigo-950/80 rounded-lg transition border border-indigo-200/50 dark:border-indigo-900/30 flex items-center gap-1 cursor-pointer"
+                                        title="Run autonomous multi-agent rewrite cycle again for superior results"
+                                      >
+                                        <RefreshCw className="w-3 h-3 text-indigo-500" /> Rewrite Again
+                                      </button>
+
+                                      {/* Delete Draft Controls */}
+                                      <button
+                                        onClick={() => {
+                                          if (confirmDeleteId === art.id) {
+                                            handleDeleteArticle(art.id, true);
+                                            setConfirmDeleteId(null);
+                                          } else {
+                                            setConfirmDeleteId(art.id);
+                                            setTimeout(() => setConfirmDeleteId(null), 3000);
+                                          }
+                                        }}
+                                        className="h-7 px-2.5 text-[9.5px] font-extrabold bg-rose-50 dark:bg-rose-950/20 text-rose-600 dark:text-rose-400 hover:bg-rose-100 dark:hover:bg-rose-955 rounded-lg border border-rose-200/50 dark:border-rose-900/30 transition flex items-center gap-1 cursor-pointer"
+                                        title="Delete draft from workspace inbox permanently"
+                                      >
+                                        <Trash2 className="w-3 h-3 text-rose-500" /> {confirmDeleteId === art.id ? "Confirm?" : "Delete"}
+                                      </button>
                                     </div>
                                   </div>
                                 );
@@ -5964,7 +9619,7 @@ export default function App() {
                       </div>
 
                       {/* ADAPTIVE MULTI-FACET SEARCH & FILTERS INBOX CONTROLS */}
-                      <div className="grid grid-cols-1 md:grid-cols-4 gap-3 bg-slate-50 dark:bg-[#070b14] p-4 rounded-2xl border border-[#E3E5E8] dark:border-slate-805 mb-5 text-xs font-sans select-none">
+                      <div className="grid grid-cols-1 md:grid-cols-5 gap-3 bg-slate-50 dark:bg-[#070b14] p-4 rounded-2xl border border-[#E3E5E8] dark:border-slate-805 mb-5 text-xs font-sans select-none">
                         <div className="space-y-1">
                           <label className="block text-[9.5px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-widest font-mono">
                             Search
@@ -5987,7 +9642,9 @@ export default function App() {
                           <select
                             value={draftStatusFilter}
                             onChange={(e) =>
-                              setDraftStatusFilter(e.target.value)
+                              setDraftStatusFilter(
+                                e.target.value as "draft" | "published" | "all"
+                              )
                             }
                             className="w-full text-xs text-[#0D1219] dark:text-slate-300 bg-white dark:bg-slate-950 border border-[#E3E5E8] dark:border-slate-800 rounded-lg p-2 outline-none cursor-pointer"
                           >
@@ -6017,6 +9674,24 @@ export default function App() {
                             <option value="premium">Premium</option>
                           </select>
                         </div>
+
+                        <div className="space-y-1">
+                          <label className="block text-[9.5px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-widest font-mono">
+                            📅 Date Created
+                          </label>
+                          <select
+                            value={draftDateFilter}
+                            onChange={(e) => setDraftDateFilter(e.target.value)}
+                            className="w-full text-xs text-[#0D1219] dark:text-slate-300 bg-white dark:bg-slate-950 border border-[#E3E5E8] dark:border-slate-800 rounded-lg p-2 outline-none cursor-pointer"
+                          >
+                            <option value="all">All Time</option>
+                            <option value="today">Today (&lt; 24h)</option>
+                            <option value="yesterday">Yesterday (24h - 48h)</option>
+                            <option value="week">Past 7 Days</option>
+                            <option value="month">Past 30 Days</option>
+                            <option value="older">Older than 30 Days</option>
+                          </select>
+                        </div>
                       </div>
 
                       <div className="mt-4 space-y-4 max-h-[510px] overflow-y-auto pr-1">
@@ -6036,6 +9711,9 @@ export default function App() {
                               a.status !== draftStatusFilter
                             )
                               return false;
+                            if (!matchDateFilter(a.createdAt, draftDateFilter)) {
+                              return false;
+                            }
                             return true;
                           });
 
@@ -6065,12 +9743,12 @@ export default function App() {
                               "https://demo.wordpress.org";
                             const writerObj = writers.find(
                               (w) => w.id === art.authorId,
-                            ) || { name: "Creative AI", avatar: "" };
+                            ) || { name: "Creative AI", avatar: "", voiceStyle: "Creative AI Voice" };
 
                             return (
                               <div
                                 key={art.id}
-                                className="p-4 sm:p-5 bg-white dark:bg-[#070b14]/50 hover:bg-slate-50 dark:hover:bg-[#0c1222]/50 border border-slate-150 dark:border-slate-805 rounded-xl flex flex-col gap-2.5 transition-all duration-350 relative text-left"
+                                className="p-5 bg-white dark:bg-[#070b14]/40 hover:bg-slate-50/50 dark:hover:bg-[#0c1222]/40 border border-slate-150 dark:border-slate-805 rounded-2xl shadow-sm hover:shadow-md hover:-translate-y-0.5 transition-all duration-300 relative text-left"
                               >
                                 {/* Upper Meta Info */}
                                 <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 dark:border-slate-805/40 pb-2 select-none">
@@ -6247,6 +9925,22 @@ export default function App() {
                                   </div>
 
                                   <div className="flex gap-2">
+                                    <button
+                                      onClick={() => {
+                                        handleInitiateAgentRewrite({
+                                          id: art.id || `rewrite-${Date.now()}`,
+                                          title: art.sourceTitle || art.title,
+                                          url: art.sourceLink || "",
+                                          description: `Redrafting iteration...`,
+                                          opportunityScore: art.opportunityScore,
+                                          riskScore: art.riskScore
+                                        });
+                                      }}
+                                      className="text-[10.5px] font-bold px-2.5 py-1.5 rounded-lg bg-orange-50 text-orange-600 hover:bg-orange-100 dark:bg-orange-900/30 dark:text-orange-400 dark:border dark:border-orange-900/30 transition cursor-pointer"
+                                    >
+                                      ↻ rewrite
+                                    </button>
+
                                     <button
                                       onClick={() => {
                                         setEditableTitle(art.title);
@@ -6709,20 +10403,31 @@ export default function App() {
                                         </div>
 
                                         {art.wordpressPush?.status ===
-                                          "success" &&
-                                          art.wordpressPush?.postUrl && (
-                                            <div className="border border-emerald-150 text-slate-700 bg-emerald-50/50 dark:bg-emerald-950/20 dark:text-emerald-400 p-2.5 rounded-lg flex items-center justify-between text-xs font-mono">
-                                              <span>Sync URL Success:</span>
-                                              <a
-                                                href={art.wordpressPush.postUrl}
-                                                target="_blank"
-                                                rel="noopener noreferrer"
-                                                className="text-indigo-505 font-bold hover:underline"
-                                              >
-                                                {art.wordpressPush.postUrl} ↗
-                                              </a>
-                                            </div>
-                                          )}
+                                           "success" &&
+                                           art.wordpressPush?.postUrl && (
+                                             <div className="space-y-2 w-full">
+                                               <div className="border border-emerald-150 text-slate-700 bg-emerald-50/50 dark:bg-emerald-950/20 dark:text-emerald-400 p-2.5 rounded-lg flex items-center justify-between text-xs font-mono">
+                                                 <span>Sync URL Success:</span>
+                                                 <a
+                                                   href={art.wordpressPush.postUrl}
+                                                   target="_blank"
+                                                   rel="noopener noreferrer"
+                                                   className="text-indigo-505 font-bold hover:underline"
+                                                 >
+                                                   {art.wordpressPush.postUrl} ↗
+                                                 </a>
+                                               </div>
+
+                                               {art.wordpressPush?.metaPermissionRequired && (
+                                                 <div className="p-3 bg-amber-50 dark:bg-amber-955/20 border border-amber-200 dark:border-amber-900 text-amber-900 dark:text-amber-400 rounded-lg text-[10px] space-y-1 font-mono text-left w-full">
+                                                   <span className="font-bold flex items-center gap-1 text-amber-700 dark:text-amber-400">⚠️ WordPress Meta Rejection detected!</span>
+                                                   <p className="leading-normal">
+                                                     WordPress accepted the post body successfully but rejected saving the protected RankMath/Yoast SEO fields. To write SEO variables smoothly, copy the initialization PHP snippet from our **WordPress Settings** tab and paste it into your theme's functions.php.
+                                                   </p>
+                                                 </div>
+                                               )}
+                                             </div>
+                                           )}
                                       </div>
                                     )}
 
@@ -6733,29 +10438,71 @@ export default function App() {
                                         <span className="text-[9px] font-mono text-slate-450 uppercase block">
                                           Step-By-Step Workspace Agent Logs
                                         </span>
-                                        <div className="bg-[#05070a] text-slate-300 p-3 sm:p-4 rounded-xl border border-slate-900 overflow-y-auto max-h-[160px] font-mono text-[10px] leading-relaxed text-left space-y-2">
+                                        <div className="bg-[#05070a] text-slate-300 p-3 sm:p-4 rounded-xl border border-slate-900 overflow-y-auto max-h-[350px] font-mono text-[10px] leading-relaxed text-left space-y-3">
                                           {art.workflowLogs &&
                                           art.workflowLogs.length > 0 ? (
                                             art.workflowLogs.map(
                                               (log, lIdx) => (
                                                 <div
                                                   key={lIdx}
-                                                  className="border-b border-white/5 pb-1.5 last:border-b-0"
+                                                  className="border-b border-white/5 pb-2.5 last:border-b-0 space-y-1.5"
                                                 >
-                                                  <div className="flex justify-between text-[8.5px] text-indigo-400 uppercase">
-                                                    <span>
-                                                      [{log.step}] •{" "}
-                                                      {log.agentName}
+                                                  <div className="flex justify-between items-center text-[8.5px] text-indigo-400 uppercase">
+                                                    <span className="font-bold flex items-center gap-1">
+                                                      <span className="w-1.5 h-1.5 bg-indigo-500 rounded-full animate-pulse"></span>
+                                                      [{log.step}] • {log.agentName}
                                                     </span>
-                                                    <span>
-                                                      {new Date(
-                                                        log.timestamp,
-                                                      ).toLocaleTimeString()}
+                                                    <span className="flex items-center gap-1.5 font-sans">
+                                                      <span className="text-[7.5px] bg-slate-900 border border-slate-800 text-indigo-300 px-1 py-0.5 rounded uppercase font-mono">
+                                                        {log.modelActuallyUsed || log.modelRequested || "gemini-2.5-flash"}
+                                                      </span>
+                                                      <span>
+                                                        {new Date(
+                                                          log.timestamp,
+                                                        ).toLocaleTimeString()}
+                                                      </span>
                                                     </span>
                                                   </div>
-                                                  <div className="mt-0.5">
+                                                  <div className="mt-1 text-slate-200">
                                                     {log.output}
                                                   </div>
+                                                  <div className="mt-1.5 pt-1.5 border-t border-white/5 flex items-center justify-between">
+                                                    <button
+                                                      onClick={() => {
+                                                        const traceKey = `${art.id}-${lIdx}`;
+                                                        setExpandedLogId(expandedLogId === traceKey ? null : traceKey);
+                                                      }}
+                                                      className="text-[8px] uppercase select-none px-1.5 py-0.5 bg-slate-900 border border-slate-800 hover:border-indigo-500/50 hover:text-indigo-400 rounded transition cursor-pointer text-slate-400 font-sans font-medium"
+                                                    >
+                                                      {expandedLogId === `${art.id}-${lIdx}` ? "Close System Trace ✕" : "Inspect System Trace 🔍"}
+                                                    </button>
+                                                    {(log.actualCost !== undefined || log.tokensInput !== undefined) && (
+                                                      <span className="text-[7.5px] text-slate-500 uppercase font-mono">
+                                                        Tokens: in {log.tokensInput || 0} / out {log.tokensOutput || 0} • Cost: ${(log.actualCost || 0).toFixed(6)}
+                                                      </span>
+                                                    )}
+                                                  </div>
+                                                  {expandedLogId === `${art.id}-${lIdx}` && (
+                                                    <div className="mt-2 p-2.5 bg-[#000000] border border-slate-850 rounded-lg text-[8.5px] space-y-1.5 font-mono text-left text-slate-450 max-h-[180px] overflow-y-auto">
+                                                      {log.systemPrompt && (
+                                                        <div>
+                                                          <span className="text-emerald-500 block text-[7.5px] uppercase font-bold">[Agent Instructions]</span>
+                                                          <pre className="whitespace-pre-wrap text-slate-350 break-all leading-normal mt-0.5">{log.systemPrompt}</pre>
+                                                        </div>
+                                                      )}
+                                                      {log.userPrompt && (
+                                                        <div className="pt-1.5 border-t border-white/5">
+                                                          <span className="text-sky-450 block text-[7.5px] uppercase font-bold">[Agent Payload Context]</span>
+                                                          <pre className="whitespace-pre-wrap text-slate-350 break-all leading-normal mt-0.5">{log.userPrompt}</pre>
+                                                        </div>
+                                                      )}
+                                                      {log.fallbackModelUsed && (
+                                                        <div className="pt-1 bg-amber-950/20 text-amber-300 p-1.5 rounded font-sans border border-amber-500/20 text-[7px] uppercase mt-1">
+                                                          ⚠️ Primary execution timing failed. Failover engagement stabilized on: "{log.fallbackModelUsed}"
+                                                        </div>
+                                                      )}
+                                                    </div>
+                                                  )}
                                                 </div>
                                               ),
                                             )
@@ -7057,9 +10804,7 @@ export default function App() {
                                       {/* Option Reject */}
                                       <button
                                         onClick={async () => {
-                                          if (
-                                            confirm("Reject opportunities?")
-                                          ) {
+                                          if (confirmDeleteId === "reject-" + art.id) {
                                             try {
                                               const res = await fetch(
                                                 `/api/articles/${art.id}`,
@@ -7067,11 +10812,15 @@ export default function App() {
                                               );
                                               if (res.ok) fetchArticles();
                                             } catch (_) {}
+                                            setConfirmDeleteId(null);
+                                          } else {
+                                            setConfirmDeleteId("reject-" + art.id);
+                                            setTimeout(() => setConfirmDeleteId(null), 3000);
                                           }
                                         }}
                                         className="px-2 py-1.5 font-bold text-rose-500 rounded-lg hover:bg-rose-50 dark:hover:bg-rose-955/20 cursor-pointer ml-auto shrink-0"
                                       >
-                                        Reject Opportunity
+                                        {confirmDeleteId === "reject-" + art.id ? "Confirm Reject?" : "Reject Opportunity"}
                                       </button>
                                     </div>
                                   </div>
@@ -7601,6 +11350,7 @@ export default function App() {
                         nicheId={selectedNiche}
                         articles={articles}
                         writers={writers}
+                        saasConfig={saasConfig}
                         onTriggerImageGen={handleTriggerImageGeneration}
                         isGeneratingImage={isGeneratingImage}
                         onArticleUpdate={(updated) =>
@@ -7657,6 +11407,9 @@ export default function App() {
                       a.status !== draftStatusFilter
                     )
                       return false;
+                    if (!matchDateFilter(a.createdAt, draftDateFilter)) {
+                      return false;
+                    }
                     return true;
                   });
                   const currentIndex = filteredList.findIndex(
@@ -7851,13 +11604,73 @@ export default function App() {
                               )}
 
                               {/* Title Display */}
-                              <h2 className="text-lg font-black text-slate-950 tracking-tight leading-normal border-b pb-2 text-left">
+                              <h2 className="text-xl md:text-2xl font-black text-slate-950 tracking-tight leading-snug border-b border-slate-100 pb-3 text-left">
                                 {activeArt.title}
                               </h2>
 
-                              {/* Story Body Prose */}
-                              <div className="prose prose-sm text-slate-800 leading-relaxed font-sans text-xs whitespace-pre-wrap max-w-none space-y-3 text-left">
-                                {activeArt.content}
+                              {/* Story Body Prose - Gutenberg inspired premium layout */}
+                              <div className="prose prose-slate max-w-none text-left select-text py-4 px-1">
+                                <Markdown
+                                  remarkPlugins={[remarkGfm]}
+                                  components={{
+                                    h1: ({node, ...props}) => (
+                                      <h1 className="text-xl md:text-2xl font-extrabold text-slate-900 tracking-tight mt-7 mb-3 border-b pb-1.5 font-sans" {...props} />
+                                    ),
+                                    h2: ({node, ...props}) => (
+                                      <h2 className="text-lg md:text-xl font-extrabold text-slate-900 tracking-tight mt-8 mb-4 border-l-4 border-indigo-600 pl-4 leading-normal font-sans" {...props} />
+                                    ),
+                                    h3: ({node, ...props}) => (
+                                      <h3 className="text-base md:text-lg font-bold text-slate-955 tracking-tight mt-6 mb-2.5 font-sans" {...props} />
+                                    ),
+                                    p: ({node, children, ...props}) => (
+                                      <p className="text-sm md:text-base text-slate-705 leading-relaxed mb-4 text-left font-sans select-text" {...props}>{children}</p>
+                                    ),
+                                    ul: ({node, ...props}) => (
+                                      <ul className="list-disc pl-5 mb-5 space-y-2 text-sm md:text-base text-slate-700 font-sans" {...props} />
+                                    ),
+                                    ol: ({node, ...props}) => (
+                                      <ol className="list-decimal pl-5 mb-5 space-y-2 text-sm md:text-base text-slate-700 font-sans" {...props} />
+                                    ),
+                                    li: ({node, ...props}) => (
+                                      <li className="leading-relaxed pl-1" {...props} />
+                                    ),
+                                    blockquote: ({node, ...props}) => (
+                                      <blockquote className="my-6 p-4 rounded-r-xl border-l-4 border-indigo-600 bg-slate-50 text-slate-800 font-sans italic shadow-xs" {...props} />
+                                    ),
+                                    hr: ({node, ...props}) => (
+                                      <hr className="my-6 border-t border-slate-200" {...props} />
+                                    ),
+                                    table: ({node, ...props}) => (
+                                      <div className="w-full my-6 overflow-hidden rounded-xl border border-slate-200 shadow-sm">
+                                        <div className="overflow-x-auto w-full max-w-full">
+                                          <table className="w-full text-left border-collapse text-xs md:text-sm font-sans" {...props} />
+                                        </div>
+                                      </div>
+                                    ),
+                                    thead: ({node, ...props}) => (
+                                      <thead className="bg-[#f8fafc] text-[#0f172a] border-b border-[#e2e8f0] font-bold" {...props} />
+                                    ),
+                                    tbody: ({node, ...props}) => (
+                                      <tbody className="divide-y divide-slate-100" {...props} />
+                                    ),
+                                    tr: ({node, ...props}) => (
+                                      <tr className="hover:bg-slate-50/50 transition-all" {...props} />
+                                    ),
+                                    th: ({node, ...props}) => (
+                                      <th className="px-4 py-3 font-bold uppercase tracking-wider text-[11px] md:text-xs text-[#475569]" {...props} />
+                                    ),
+                                    td: ({node, ...props}) => (
+                                      <td className="px-4 py-3 text-slate-605 text-xs md:text-sm" {...props} />
+                                    ),
+                                    img: ({node, ...props}) => (
+                                      <div className="w-full my-6 flex flex-col items-center">
+                                        <img src={props.src} alt={props.alt || "Illustration"} className="rounded-xl border border-slate-200/85 max-h-[360px] object-cover shadow-sm w-full" referrerPolicy="no-referrer" />
+                                      </div>
+                                    )
+                                  }}
+                                >
+                                  {activeArt.content}
+                                </Markdown>
                               </div>
                             </div>
                           ) : (
@@ -7981,6 +11794,45 @@ export default function App() {
                                 </p>
                               </div>
 
+                              {/* Advanced SEO Metadata overrides */}
+                              <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5 bg-sky-50/50 dark:bg-slate-900/40 border border-sky-100/80 dark:border-slate-800 p-3.5 rounded-xl select-text">
+                                <div className="space-y-1.5 text-left">
+                                  <label className="block text-[10px] font-black uppercase text-slate-700 dark:text-slate-300 tracking-wider text-left">
+                                    📝 Meta Description Override
+                                  </label>
+                                  <textarea
+                                    rows={2}
+                                    value={editableMetaDescriptionOverride}
+                                    placeholder="Manual search snippet specification override..."
+                                    onChange={(e) =>
+                                      setEditableMetaDescriptionOverride(e.target.value)
+                                    }
+                                    className="w-full text-xs font-semibold text-slate-900 bg-white border border-slate-250 rounded-lg p-2 focus:outline-none focus:ring-1 focus:ring-sky-500 text-left font-sans"
+                                  />
+                                  <p className="text-[9.5px] text-slate-400 font-sans mt-0.5 leading-normal">
+                                    Manually override the search snippet description (Yoast & RankMath meta limits 155 chars).
+                                  </p>
+                                </div>
+
+                                <div className="space-y-1.5 text-left">
+                                  <label className="block text-[10px] font-black uppercase text-slate-700 dark:text-slate-300 tracking-wider text-left">
+                                    🔗 Canonical URL Override
+                                  </label>
+                                  <input
+                                    type="text"
+                                    value={editableCanonicalUrlOverride}
+                                    placeholder="https://example.com/original-story-url/"
+                                    onChange={(e) =>
+                                      setEditableCanonicalUrlOverride(e.target.value)
+                                    }
+                                    className="w-full text-xs font-semibold text-slate-900 bg-white border border-slate-250 rounded-lg p-2 focus:outline-none focus:ring-1 focus:ring-sky-500 text-left font-mono"
+                                  />
+                                  <p className="text-[9.5px] text-slate-400 font-sans mt-0.5 leading-normal">
+                                    Set standard cross-domain canonical target URL overrides to prevent duplicate indexing.
+                                  </p>
+                                </div>
+                              </div>
+
                               <div className="space-y-1.5 select-text text-left">
                                 <div className="flex items-center justify-between">
                                   <label className="block text-[10px] font-black uppercase text-slate-400 tracking-widest text-left">
@@ -8091,6 +11943,22 @@ export default function App() {
                           </div>
 
                           <div className="flex items-center gap-2 select-none">
+                            <select
+                              value={selectedWpSiteId}
+                              onChange={(e) => setSelectedWpSiteId(e.target.value)}
+                              className="text-xs text-[#0D1219] dark:text-slate-100 bg-[#E3E5E8] dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg py-2 px-2.5 focus:outline-none focus:ring-1 focus:ring-blue-500 font-mono font-black"
+                              disabled={activeArt.wordpressPush?.status === "pushing"}
+                            >
+                              <option value="">🌐 Default Portal</option>
+                              {(saasConfig.wordpressSites || [])
+                                .filter((s: any) => s.niche === activeArt.niche || s.niche === "all")
+                                .map((s: any) => (
+                                  <option key={s.id} value={s.id}>
+                                    🌐 {s.name || s.url}
+                                  </option>
+                                ))}
+                            </select>
+
                             <button
                               type="button"
                               onClick={() =>
@@ -8113,7 +11981,7 @@ export default function App() {
                             <button
                               id="btn-modal-push-wp"
                               onClick={() =>
-                                handlePushToWordPress(activeArt.id)
+                                handlePushToWordPress(activeArt.id, selectedWpSiteId)
                               }
                               className="text-xs font-black px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white cursor-pointer select-none"
                               disabled={
@@ -8122,7 +11990,31 @@ export default function App() {
                             >
                               {activeArt.wordpressPush?.status === "pushing"
                                 ? "Syncing WP..."
-                                : "Push to WordPress"}
+                                : "Push Direct ⚡"}
+                            </button>
+
+                            <button
+                              id="btn-modal-queue-wp"
+                              onClick={() => {
+                                const scheduleVal = prompt("Enter scheduled date/time (Format: YYYY-MM-DD HH:MM) or leave blank for immediate publishing queue:", "");
+                                if (scheduleVal === null) return;
+                                let scheduledAt: string | null = null;
+                                if (scheduleVal.trim()) {
+                                  const d = new Date(scheduleVal.trim());
+                                  if (isNaN(d.getTime())) {
+                                    alert("Invalid date format! Enqueue cancelled.");
+                                    return;
+                                  }
+                                  scheduledAt = d.toISOString();
+                                }
+                                handleQueueEnqueue(activeArt.id, selectedWpSiteId || undefined, scheduledAt);
+                              }}
+                              className="text-xs font-black px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white cursor-pointer select-none"
+                              disabled={
+                                activeArt.wordpressPush?.status === "pushing"
+                              }
+                            >
+                              Queue 📋
                             </button>
                           </div>
                         </div>
@@ -8133,6 +12025,413 @@ export default function App() {
 
         </main>
       </div>
+
+      {showNicheModal && (
+        <div className="fixed inset-0 bg-[#0E1218]/80 backdrop-blur-md flex items-center justify-center z-[9999] p-4 animate-fade-in font-sans">
+          <div className="bg-white dark:bg-[#121620] border border-[#E3E5E8] dark:border-slate-800 rounded-3xl shadow-2xl w-full max-w-xl overflow-hidden relative duration-300">
+            {/* Header */}
+            <div className="p-6 border-b border-[#E3E5E8] dark:border-slate-800 flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 bg-indigo-100 dark:bg-indigo-950/50 text-indigo-600 dark:text-indigo-400 rounded-xl">
+                  <Sparkles className="w-5 h-5 animate-pulse" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-black text-[#0D1219] dark:text-white uppercase tracking-wider">
+                    Add Dynamic Niche Project
+                  </h3>
+                  <p className="text-[10px] text-slate-400 font-medium">
+                    Configure or auto-discover a brand-new publishing playground
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowNicheModal(false);
+                  setDiscoveredNicheResult(null);
+                  setDiscoverySearchKeyword("");
+                }}
+                className="text-slate-400 hover:text-rose-500 hover:bg-slate-50 dark:hover:bg-slate-900 p-1.5 rounded-full transition cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Tab Selection */}
+            <div className="px-6 pt-2 pb-1 border-b border-[#E3E5E8] dark:border-slate-800 flex items-center gap-4 text-xs font-bold text-slate-500 dark:text-slate-400 select-none">
+              <button
+                type="button"
+                onClick={() => { setNicheSetupTab("manual"); setNicheCreationError(""); }}
+                className={`py-2.5 border-b-2 transition ${nicheSetupTab === "manual" ? "border-indigo-650 text-indigo-600 dark:text-indigo-400 font-extrabold" : "border-transparent hover:text-slate-800"}`}
+              >
+                🛠️ Manual Config Mode
+              </button>
+              <button
+                type="button"
+                onClick={() => { setNicheSetupTab("discovery"); setNicheCreationError(""); }}
+                className={`py-2.5 border-b-2 transition ${nicheSetupTab === "discovery" ? "border-indigo-650 text-indigo-600 dark:text-indigo-400 font-extrabold" : "border-transparent hover:text-slate-800"}`}
+              >
+                🌐 AI Internet Discovery
+              </button>
+            </div>
+
+            {/* Error view */}
+            {nicheCreationError && (
+              <div className="mx-6 mt-4 p-3 bg-rose-50 dark:bg-rose-950/20 text-rose-600 dark:text-rose-400 border border-rose-100 dark:border-rose-900/50 rounded-xl text-xs font-bold leading-normal">
+                ⚠️ {nicheCreationError}
+              </div>
+            )}
+
+            {/* Panel Body: Manual */}
+            {nicheSetupTab === "manual" && (
+              <form onSubmit={handleCreateCustomNiche} className="p-6 space-y-4">
+                <div className="space-y-1 text-left">
+                  <label className="block text-[9px] font-black uppercase text-slate-400 tracking-wider">
+                    Niche Name (e.g. Mysterious Topics, Unbelievable Facts)
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={newNicheName}
+                    onChange={(e) => setNewNicheName(e.target.value)}
+                    placeholder="e.g. Mysterious Topics, The Top 10 Things, 10 Facts"
+                    className="w-full text-xs font-semibold text-[#0D1219] dark:text-white bg-slate-50 dark:bg-slate-950 border border-[#E3E5E8] dark:border-slate-800 rounded-xl p-3 focus:outline-none focus:ring-1 focus:ring-indigo-500 focus:bg-white dark:focus:bg-slate-950 transition"
+                  />
+                </div>
+
+                <div className="space-y-1 text-left">
+                  <label className="block text-[9px] font-black uppercase text-slate-400 tracking-wider">
+                    Custom Tagline (Optional)
+                  </label>
+                  <input
+                    type="text"
+                    value={newNicheTagline}
+                    onChange={(e) => setNewNicheTagline(e.target.value)}
+                    placeholder="e.g. Deep investigations of historical mysteries & paranormal lore."
+                    className="w-full text-xs font-semibold text-[#0D1219] dark:text-white bg-slate-50 dark:bg-slate-950 border border-[#E3E5E8] dark:border-slate-800 rounded-xl p-3 focus:outline-none focus:ring-1 focus:ring-indigo-500 focus:bg-white dark:focus:bg-slate-950 transition"
+                  />
+                </div>
+
+                <div className="space-y-1 text-left">
+                  <label className="block text-[9px] font-black uppercase text-slate-400 tracking-wider">
+                    Visual Theme Style
+                  </label>
+                  <select
+                    value={newNicheTheme}
+                    onChange={(e) => setNewNicheTheme(e.target.value)}
+                    className="w-full text-xs font-black text-[#0D1219] dark:text-white bg-slate-50 dark:bg-slate-950 border border-[#E3E5E8] dark:border-slate-800 rounded-xl p-3 focus:outline-none cursor-pointer"
+                  >
+                    <option value="editorial">🪶 Editorial (Clean, centered, spacious typography & focus)</option>
+                    <option value="cyberpunk">⚡ Cyberpunk (High-contrast tech grid, neon accents, mono font)</option>
+                    <option value="brutalist">🧱 Brutalist (Bold, raw, high-contrast, no-nonsense layouts)</option>
+                    <option value="glamour">🎬 Glamour (Elegant displays, rose luxury highlights, gorgeous tone)</option>
+                  </select>
+                </div>
+
+                {/* Action Buttons */}
+                <div className="pt-2 flex items-center justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowNicheModal(false)}
+                    className="px-4 py-2 text-xs font-semibold text-slate-500 hover:text-slate-800 hover:bg-slate-50 dark:hover:bg-slate-900 border border-slate-205 dark:border-slate-800 rounded-xl cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={isCreatingNiche}
+                    className="px-5 py-2 text-xs font-black bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl transition cursor-pointer flex items-center gap-1.5 disabled:opacity-50"
+                  >
+                    {isCreatingNiche ? (
+                      <>
+                        <RefreshCw className="w-4 h-4 animate-spin text-white" />
+                        Provisioning...
+                      </>
+                    ) : (
+                      <>
+                        <span>Provision Niche Project 🚀</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </form>
+            )}
+
+            {/* Panel Body: AI Internet Discovery */}
+            {nicheSetupTab === "discovery" && (
+              <div className="p-6 space-y-4">
+                <form onSubmit={handleDiscoverNicheOnInternet} className="flex gap-2">
+                  <input
+                    type="text"
+                    required
+                    placeholder="Enter keywords, e.g. permaculture gardening, crypto news"
+                    value={discoverySearchKeyword}
+                    onChange={(e) => setDiscoverySearchKeyword(e.target.value)}
+                    className="flex-1 text-xs font-semibold text-[#0D1219] dark:text-white bg-slate-50 dark:bg-slate-950 border border-[#E3E5E8] dark:border-slate-800 rounded-xl p-3 focus:outline-none focus:ring-1 focus:ring-indigo-505 transition"
+                  />
+                  <button
+                    type="submit"
+                    disabled={isSearchingNiche || !discoverySearchKeyword.trim()}
+                    className="bg-indigo-650 hover:bg-indigo-600 text-white font-extrabold text-[10.5px] px-4 py-3 rounded-xl transition disabled:opacity-50 flex items-center gap-1 shrink-0 cursor-pointer"
+                  >
+                    {isSearchingNiche ? "Searching..." : "Search Niches"}
+                  </button>
+                </form>
+
+                {isSearchingNiche && (
+                  <div className="p-10 border border-dashed border-indigo-150 dark:border-slate-800 rounded-2xl flex flex-col items-center justify-center gap-3.5 text-center bg-indigo-50/10">
+                    <RefreshCw className="w-7 h-7 text-indigo-500 animate-spin" />
+                    <div>
+                      <p className="text-xs font-bold text-slate-800 dark:text-slate-200">Crawling the Internet & Deep Grounding</p>
+                      <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-1">Discovering active XML/RSS feeds and tailoring beautiful design profiles...</p>
+                    </div>
+                  </div>
+                )}
+
+                {discoveredNicheResult && guessedNicheLayout(discoveredNicheResult)}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {showEditNicheModal && (
+        <div className="fixed inset-0 bg-[#0E1218]/80 backdrop-blur-md flex items-center justify-center z-[9999] p-4 animate-fade-in font-sans">
+          <div className="bg-white dark:bg-[#121620] border border-[#E3E5E8] dark:border-slate-800 rounded-3xl shadow-2xl w-full max-w-xl overflow-hidden relative duration-300">
+            {/* Header */}
+            <div className="p-6 border-b border-[#E3E5E8] dark:border-slate-800 flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 bg-indigo-100 dark:bg-indigo-950/50 text-indigo-600 dark:text-indigo-400 rounded-xl">
+                  ⚙️
+                </div>
+                <div>
+                  <h3 className="text-sm font-black text-[#0D1219] dark:text-white uppercase tracking-wider">
+                    Configure Niche: "{editingNicheName}"
+                  </h3>
+                  <p className="text-[10px] text-slate-400 font-medium">
+                    Customize colors, layout, name, tagline, and font family settings
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowEditNicheModal(false)}
+                className="text-slate-400 hover:text-rose-500 hover:bg-slate-50 dark:hover:bg-slate-900 p-1.5 rounded-full transition cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Panel Body */}
+            <form onSubmit={handleEditNicheSubmit} className="p-6 space-y-4">
+              <div className="space-y-1 text-left">
+                <label className="block text-[9px] font-black uppercase text-slate-400 tracking-wider">
+                  Niche Display Name
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={editingNicheName}
+                  onChange={(e) => setEditingNicheName(e.target.value)}
+                  className="w-full text-xs font-semibold text-[#0D1219] dark:text-white bg-slate-50 dark:bg-slate-950 border border-[#E3E5E8] dark:border-slate-800 rounded-xl p-3 focus:outline-none focus:ring-1 focus:ring-indigo-500 transition"
+                />
+              </div>
+
+              <div className="space-y-1 text-left">
+                <label className="block text-[9px] font-black uppercase text-slate-400 tracking-wider">
+                  Tagline (Topic descriptor for multi-agent brief scoping)
+                </label>
+                <input
+                  type="text"
+                  value={editingNicheTagline}
+                  onChange={(e) => setEditingNicheTagline(e.target.value)}
+                  className="w-full text-xs font-semibold text-[#0D1219] dark:text-white bg-slate-50 dark:bg-slate-950 border border-[#E3E5E8] dark:border-slate-800 rounded-xl p-3 focus:outline-none focus:ring-1 focus:ring-indigo-505 transition"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-1 text-left">
+                  <label className="block text-[9px] font-black uppercase text-slate-400 tracking-wider">
+                    Font Family Pairing
+                  </label>
+                  <select
+                    value={editingNicheFontFamily}
+                    onChange={(e) => setEditingNicheFontFamily(e.target.value)}
+                    className="w-full text-xs font-bold text-[#0D1219] dark:text-white bg-slate-50 dark:bg-slate-950 border border-[#E3E5E8] dark:border-slate-800 rounded-xl p-3 focus:outline-none cursor-pointer"
+                  >
+                    <option value="Inter">Inter (Sans-Serif Modern)</option>
+                    <option value="Space Grotesk">Space Grotesk (Tech Heading)</option>
+                    <option value="JetBrains Mono">JetBrains Mono (Console Mono)</option>
+                    <option value="Playfair Display">Playfair Display (Editorial Luxury)</option>
+                  </select>
+                </div>
+
+                <div className="space-y-1 text-left">
+                  <label className="block text-[9px] font-black uppercase text-slate-400 tracking-wider">
+                    Aesthetic Visual Style Theme
+                  </label>
+                  <select
+                    value={editingNicheTheme}
+                    onChange={(e) => setEditingNicheTheme(e.target.value)}
+                    className="w-full text-xs font-bold text-[#0D1219] dark:text-white bg-slate-50 dark:bg-slate-950 border border-[#E3E5E8] dark:border-slate-800 rounded-xl p-3 focus:outline-none cursor-pointer"
+                  >
+                    <option value="editorial">🪶 Editorial Layout</option>
+                    <option value="cyberpunk">⚡ Cyberpunk Layout</option>
+                    <option value="brutalist">🧱 Brutalist Layout</option>
+                    <option value="glamour">🎬 Glamour Layout</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-1 text-left">
+                  <label className="block text-[9px] font-black uppercase text-slate-400 tracking-wider">
+                    Primary Banner BG Style
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="e.g. bg-indigo-600 text-white"
+                    value={editingNichePrimaryColor}
+                    onChange={(e) => setEditingNichePrimaryColor(e.target.value)}
+                    className="w-full text-xs font-semibold text-[#0D1219] dark:text-white bg-slate-50 dark:bg-slate-950 border border-[#E3E5E8] dark:border-slate-800 rounded-xl p-3 focus:outline-none focus:ring-1 focus:ring-indigo-505 transition"
+                  />
+                </div>
+
+                <div className="space-y-1 text-left">
+                  <label className="block text-[9px] font-black uppercase text-slate-400 tracking-wider">
+                    Accent Color Theme
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="e.g. indigo-500"
+                    value={editingNicheAccentColor}
+                    onChange={(e) => setEditingNicheAccentColor(e.target.value)}
+                    className="w-full text-xs font-semibold text-[#0D1219] dark:text-white bg-slate-50 dark:bg-slate-950 border border-[#E3E5E8] dark:border-slate-800 rounded-xl p-3 focus:outline-none focus:ring-1 focus:ring-indigo-505 transition"
+                  />
+                </div>
+              </div>
+
+              {/* Action Buttons */}
+              <div className="pt-2 flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowEditNicheModal(false)}
+                  className="px-4 py-2 text-xs font-semibold text-slate-500 hover:text-slate-800 hover:bg-slate-50 dark:hover:bg-slate-900 border border-slate-205 dark:border-slate-800 rounded-xl cursor-pointer"
+                >
+                  Close
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSavingNiche}
+                  className="px-5 py-2 text-xs font-black bg-indigo-650 hover:bg-indigo-700 text-white rounded-xl transition cursor-pointer flex items-center gap-1.5 disabled:opacity-50"
+                >
+                  {isSavingNiche ? "Saving Settings..." : "Save Configuration ✨"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {showEditFeedModal && (
+        <div className="fixed inset-0 bg-[#0E1218]/80 backdrop-blur-md flex items-center justify-center z-[9999] p-4 animate-fade-in font-sans">
+          <div className="bg-white dark:bg-[#121620] border border-[#E3E5E8] dark:border-slate-800 rounded-3xl shadow-2xl w-full max-w-lg overflow-hidden relative duration-300">
+            {/* Header */}
+            <div className="p-6 border-b border-[#E3E5E8] dark:border-slate-800 flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 bg-indigo-100 dark:bg-indigo-950/50 text-indigo-600 dark:text-indigo-400 rounded-xl">
+                  📡
+                </div>
+                <div>
+                  <h3 className="text-sm font-black text-[#0D1219] dark:text-white uppercase tracking-wider">
+                    Edit Link: "{editingFeedName}"
+                  </h3>
+                  <p className="text-[10px] text-slate-400 font-medium">
+                    Modify the RSS name, crawl location URL, or align to a different niche project
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowEditFeedModal(false);
+                  setEditingFeedId(null);
+                }}
+                className="text-slate-400 hover:text-rose-500 hover:bg-slate-50 dark:hover:bg-slate-900 p-1.5 rounded-full transition cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Panel Body */}
+            <form onSubmit={handleEditFeedSubmit} className="p-6 space-y-4">
+              <div className="space-y-1 text-left">
+                <label className="block text-[9px] font-black uppercase text-slate-400 tracking-wider">
+                  RSS Feed Source Name
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={editingFeedName}
+                  onChange={(e) => setEditingFeedName(e.target.value)}
+                  className="w-full text-xs font-semibold text-[#0D1219] dark:text-white bg-slate-50 dark:bg-slate-950 border border-[#E3E5E8] dark:border-slate-800 rounded-xl p-3 focus:outline-none focus:ring-1 focus:ring-indigo-500 transition"
+                />
+              </div>
+
+              <div className="space-y-1 text-left">
+                <label className="block text-[9px] font-black uppercase text-slate-400 tracking-wider">
+                  Secure XML RSS URL
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={editingFeedUrl}
+                  onChange={(e) => setEditingFeedUrl(e.target.value)}
+                  className="w-full text-xs font-semibold text-[#0D1219] dark:text-white bg-slate-50 dark:bg-slate-950 border border-[#E3E5E8] dark:border-slate-800 rounded-xl p-3 focus:outline-none focus:ring-1 focus:ring-indigo-505 transition"
+                />
+              </div>
+
+              <div className="space-y-1 text-left">
+                <label className="block text-[9px] font-black uppercase text-slate-400 tracking-wider">
+                  Associated Niche Project Destination
+                </label>
+                <select
+                  value={editingFeedNiche}
+                  onChange={(e) => setEditingFeedNiche(e.target.value)}
+                  className="w-full text-xs font-bold text-[#0D1219] dark:text-white bg-slate-50 dark:bg-[#121620] border border-[#E3E5E8] dark:border-slate-800 rounded-xl p-3 focus:outline-none cursor-pointer"
+                >
+                  {niches.map((n) => (
+                    <option key={n.id} value={n.id}>
+                      {n.name} ({n.id})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Action Buttons */}
+              <div className="pt-2 flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowEditFeedModal(false);
+                    setEditingFeedId(null);
+                  }}
+                  className="px-4 py-2 text-xs font-semibold text-slate-500 hover:text-slate-800 hover:bg-slate-50 dark:hover:bg-slate-900 border border-slate-205 dark:border-slate-800 rounded-xl cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSavingFeed}
+                  className="px-5 py-2 text-xs font-black bg-indigo-650 hover:bg-indigo-700 text-white rounded-xl transition cursor-pointer flex items-center gap-1.5 disabled:opacity-50"
+                >
+                  {isSavingFeed ? "Saving Changes..." : "Apply Integration Changes 🚀"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
