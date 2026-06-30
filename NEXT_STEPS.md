@@ -28,7 +28,7 @@ Before transferring configurations:
 1.  **Host Machine Provisioning**: Set up a fresh machine with **Ubuntu 24.04 LTS**.
 2.  **Clone Source**:
     ```bash
-    git clone https://github.com/org/editorial-platform.git /opt/editorial-platform/current
+    git clone https://github.com/injo007/omnipub.git /opt/editorial-platform/current
     cd /opt/editorial-platform/current
     ```
 3.  **Execute Platform Install**:

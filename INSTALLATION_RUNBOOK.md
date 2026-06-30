@@ -23,7 +23,7 @@ This document defines installation workflows for operators setting up fresh phys
 
 1.  **Clone code repository or download release artifacts**:
     ```bash
-    git clone https://github.com/org/editorial-platform.git /opt/editorial-platform/current
+    git clone https://github.com/injo007/omnipub.git /opt/editorial-platform/current
     cd /opt/editorial-platform/current
     ```
 

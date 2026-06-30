@@ -18,7 +18,7 @@ Execute the following commands on your server:
 
 ```bash
 # 1. Clone the repository
-git clone https://github.com/org/editorial-platform.git /opt/editorial-platform/current
+git clone https://github.com/injo007/omnipub.git /opt/editorial-platform/current
 cd /opt/editorial-platform/current
 
 # 2. Grant execution permissions to the master installer
