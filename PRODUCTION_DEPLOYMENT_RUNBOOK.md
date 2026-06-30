@@ -11,6 +11,8 @@ Production uses isolated keys stored securely inside `/etc/editorial-platform/pr
 *   **Production Database**: Dedicated production Firebase Project ID and credentials vault.
 *   **Production WordPress**: Dedicated domain and secure Application Password.
 *   **Production Models**: High-throughput dedicated API keys.
+*   **Network Perimeter Isolation**: Containers run within the isolated `editorial-production-internal` and `editorial-production-proxy` bridge networks, with no logical overlap or paths to staging stacks.
+*   **Daemon Resiliency & Concurrency**: Service configurations are run via systemd templates (`/etc/editorial-platform/templates/editorial-platform-production.service.tmpl`) which apply auto-restart limits (`Restart=always`, `RestartSec=10`, `LimitNOFILE=65535`).
 
 ---
 

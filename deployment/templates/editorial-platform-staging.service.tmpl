@@ -1,0 +1,17 @@
+[Unit]
+Description=Autonomous Editorial Intelligence Platform - Staging Stack
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/editorial-platform/current
+ExecStart=/usr/bin/docker compose -f compose.staging.yml up -d --remove-orphans
+ExecStop=/usr/bin/docker compose -f compose.staging.yml down
+Restart=always
+RestartSec=10
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target

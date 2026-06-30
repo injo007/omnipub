@@ -54,7 +54,7 @@ function cleanup_lock() {
 
 # --- Initialization of log and directory layout ---
 function init_layout() {
-    mkdir -p "$ETC_DIR" "$ETC_DIR/secrets" "$ETC_DIR/monitoring" "$ETC_DIR/scripts" "$LOG_DIR" "$LOG_DIR/installer"
+    mkdir -p "$ETC_DIR" "$ETC_DIR/secrets" "$ETC_DIR/monitoring" "$ETC_DIR/scripts" "$ETC_DIR/templates" "$LOG_DIR" "$LOG_DIR/installer"
     mkdir -p "$BASE_DIR" "$BASE_DIR/current" "$BASE_DIR/releases" "$BASE_DIR/shared" "$BASE_DIR/backups" "$BASE_DIR/scripts" "$BASE_DIR/metadata"
     touch -a "$LOG_FILE"
     chmod 600 "$LOG_FILE"
@@ -744,6 +744,49 @@ echo "[RESTIC] Verifying backup data integrity..."
 restic check
 EOF
     chmod 700 "${ETC_DIR}/scripts/restic-backup.sh"
+
+    # 8. Embedded Systemd Service Templates (Handles failure recovery and file descriptor limits)
+    cat <<EOF > "${ETC_DIR}/templates/editorial-platform-production.service.tmpl"
+[Unit]
+Description=Autonomous Editorial Intelligence Platform - Production Stack
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=${BASE_DIR}
+ExecStart=/usr/bin/docker compose -f compose.production.yml up -d --remove-orphans
+ExecStop=/usr/bin/docker compose -f compose.production.yml down
+Restart=always
+RestartSec=10
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    chmod 644 "${ETC_DIR}/templates/editorial-platform-production.service.tmpl"
+
+    cat <<EOF > "${ETC_DIR}/templates/editorial-platform-staging.service.tmpl"
+[Unit]
+Description=Autonomous Editorial Intelligence Platform - Staging Stack
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=${BASE_DIR}
+ExecStart=/usr/bin/docker compose -f compose.staging.yml up -d --remove-orphans
+ExecStop=/usr/bin/docker compose -f compose.staging.yml down
+Restart=always
+RestartSec=10
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    chmod 644 "${ETC_DIR}/templates/editorial-platform-staging.service.tmpl"
 }
 
 # --- Host Hardening ---
