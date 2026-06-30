@@ -83,6 +83,20 @@ export function redactSecrets(obj: any, seen = new WeakSet()): any {
   return redacted;
 }
 
+export const serverLogs: any[] = [];
+const MAX_SERVER_LOGS = 1000;
+
+export function pushToLogBuffer(log: any) {
+  serverLogs.push(log);
+  if (serverLogs.length > MAX_SERVER_LOGS) {
+    serverLogs.shift();
+  }
+}
+
+const originalConsoleLog = console.log;
+const originalConsoleWarn = console.warn;
+const originalConsoleError = console.error;
+
 export function writeStructuredLog(
   severity: LogSeverity,
   message: string,
@@ -110,6 +124,58 @@ export function writeStructuredLog(
   // Structured console log
   console.log(JSON.stringify(logPayload));
 }
+
+// Intercept other console logging calls to store them in the buffer
+console.log = (...args: any[]) => {
+  originalConsoleLog(...args);
+  try {
+    const msg = args.map(a => typeof a === "object" ? JSON.stringify(a) : String(a)).join(" ");
+    if (msg.trim().startsWith("{") && msg.trim().endsWith("}")) {
+      try {
+        const parsed = JSON.parse(msg);
+        if (parsed.timestamp && parsed.severity && parsed.message) {
+          pushToLogBuffer(parsed);
+          return;
+        }
+      } catch (e) {}
+    }
+    pushToLogBuffer({
+      timestamp: new Date().toISOString(),
+      severity: "INFO",
+      message: msg,
+      environment: process.env.NODE_ENV || "local",
+      service: "editorial-intelligence-platform"
+    });
+  } catch (e) {}
+};
+
+console.warn = (...args: any[]) => {
+  originalConsoleWarn(...args);
+  try {
+    const msg = args.map(a => typeof a === "object" ? JSON.stringify(a) : String(a)).join(" ");
+    pushToLogBuffer({
+      timestamp: new Date().toISOString(),
+      severity: "WARN",
+      message: msg,
+      environment: process.env.NODE_ENV || "local",
+      service: "editorial-intelligence-platform"
+    });
+  } catch (e) {}
+};
+
+console.error = (...args: any[]) => {
+  originalConsoleError(...args);
+  try {
+    const msg = args.map(a => typeof a === "object" ? JSON.stringify(a) : String(a)).join(" ");
+    pushToLogBuffer({
+      timestamp: new Date().toISOString(),
+      severity: "ERROR",
+      message: msg,
+      environment: process.env.NODE_ENV || "local",
+      service: "editorial-intelligence-platform"
+    });
+  } catch (e) {}
+};
 
 // 2. Metrics Accumulation & Guarding Against High Cardinality
 export interface AlertConfig {

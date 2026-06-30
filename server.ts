@@ -984,7 +984,7 @@ const PORT = 3000;
 
 // Import Phase F enterprise governance, environment, and observability modules
 import { validateEnvironment } from "./server/editorial/environmentService";
-import { writeStructuredLog, Metrics, secureAndTrackError } from "./server/editorial/observabilityService";
+import { writeStructuredLog, Metrics, secureAndTrackError, serverLogs } from "./server/editorial/observabilityService";
 import { 
   checkFeatureFlag, 
   isSiteKilled, 
@@ -7429,6 +7429,20 @@ appRouter.post("/api/publishing-queue/worker/run", async (req, res) => {
   } catch (err: any) {
     console.error("Worker run error:", err);
     res.status(500).json({ error: err.message || "Worker run failed" });
+  }
+});
+
+appRouter.get("/api/logs", (req, res) => {
+  try {
+    const { severity, limit } = req.query;
+    let filtered = [...serverLogs];
+    if (severity && severity !== "all") {
+      filtered = filtered.filter(l => String(l.severity).toUpperCase() === String(severity).toUpperCase());
+    }
+    const lim = limit ? parseInt(limit as string, 10) : 300;
+    res.json(filtered.slice(-lim));
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || "Failed to fetch logs" });
   }
 });
 

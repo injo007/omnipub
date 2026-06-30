@@ -54,6 +54,7 @@ import {
 import NicheBlogPreview from "./components/NicheBlogPreview";
 import AgentFlowVisualizer from "./components/AgentFlowVisualizer";
 import { SystemLogViewer } from "./components/SystemLogViewer";
+import { LiveServerLogViewer } from "./components/LiveServerLogViewer";
 import { NichePerformanceDashboard } from "./components/NichePerformanceDashboard";
 import { RSS_CATALOG } from "./data/rssCatalog";
 import { generateSaaSMarketingSyndicate } from "./utils/promoGenerator";
@@ -134,6 +135,7 @@ const matchDateFilter = (createdAtStr?: string, filter?: string) => {
 };
 
 export default function App() {
+  const [isLiveLogsOpen, setIsLiveLogsOpen] = useState(false);
   const [theme, setTheme] = useState<"light" | "dark">(() => {
     return (
       (localStorage.getItem("omnipublisher-theme") as "light" | "dark") ||
@@ -3362,6 +3364,25 @@ export default function App() {
                   </div>
                 )}
               </div>
+
+              {/* Live Terminal Logs */}
+              <button
+                onClick={() => setIsLiveLogsOpen(true)}
+                className={`flex items-center gap-1.5 px-3 py-2 rounded-xl transition border cursor-pointer active:scale-95 ${
+                  theme === "light"
+                    ? "bg-white text-[#3F5353] border-[#E3E5E8] hover:bg-slate-50"
+                    : "bg-slate-900 border-slate-800 text-indigo-400 hover:bg-slate-800 shadow-sm"
+                }`}
+                title="View Live Container Terminal Logs"
+                id="live-terminal-logs-btn"
+              >
+                <Terminal className="w-4 h-4" />
+                <span className="text-[10px] font-black uppercase tracking-wider font-mono">Terminal Logs</span>
+                <span className="relative flex h-1.5 w-1.5">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-emerald-500"></span>
+                </span>
+              </button>
 
               {/* Theme toggler */}
               <button
@@ -12025,6 +12046,10 @@ export default function App() {
 
         </main>
       </div>
+
+      {isLiveLogsOpen && (
+        <LiveServerLogViewer onClose={() => setIsLiveLogsOpen(false)} />
+      )}
 
       {showNicheModal && (
         <div className="fixed inset-0 bg-[#0E1218]/80 backdrop-blur-md flex items-center justify-center z-[9999] p-4 animate-fade-in font-sans">
