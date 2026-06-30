@@ -79,6 +79,115 @@ export function classifyFailure(error: any): { failureClass: FailureClass; isRet
 }
 
 export class PublishingQueueService {
+  private isDraining: boolean = false;
+  private defaultLeaseDurationMs: number;
+  private leaseRenewalIntervals: Map<string, NodeJS.Timeout> = new Map();
+
+  constructor(leaseDurationMs?: number) {
+    this.defaultLeaseDurationMs = leaseDurationMs || Number(process.env.DEFAULT_LEASE_DURATION_MS) || 5 * 60 * 1000;
+  }
+
+  setDraining(draining: boolean) {
+    this.isDraining = draining;
+  }
+
+  getDraining(): boolean {
+    return this.isDraining;
+  }
+
+  getRenewalIntervalsCount(): number {
+    return this.leaseRenewalIntervals.size;
+  }
+
+  async renewLease(jobId: string, leaseToken: string, durationMs: number = 300000): Promise<boolean> {
+    const docRef = this.db.collection("publishing_queue").doc(jobId);
+    try {
+      return await this.db.runTransaction(async (transaction) => {
+        const snap = await transaction.get(docRef);
+        if (!snap.exists) return false;
+        const job = snap.data() as PublishingJob;
+        if (job.status !== "LEASED" && job.status !== "EXECUTING") return false;
+        if (job.leaseToken !== leaseToken) return false;
+        
+        const nextExpires = new Date(Date.now() + durationMs).toISOString();
+        transaction.update(docRef, {
+          leaseExpiresAt: nextExpires
+        });
+        return true;
+      });
+    } catch (err) {
+      console.error(`[LEASE] Transaction failed renewing lease for job ${jobId}:`, err);
+      return false;
+    }
+  }
+
+  startLeaseRenewal(jobId: string, leaseToken: string, intervalMs: number = 30000) {
+    if (this.leaseRenewalIntervals.has(jobId)) {
+      clearInterval(this.leaseRenewalIntervals.get(jobId)!);
+    }
+    const interval = setInterval(async () => {
+      try {
+        const renewed = await this.renewLease(jobId, leaseToken, this.defaultLeaseDurationMs);
+        if (!renewed) {
+          console.error(`[LEASE] Periodic renewal failed for job ${jobId}. Stopping interval.`);
+          this.stopLeaseRenewal(jobId);
+        } else {
+          console.log(`[LEASE] Periodically renewed lease for job ${jobId}.`);
+        }
+      } catch (err: any) {
+        console.error(`[LEASE] Error in renewal interval for job ${jobId}:`, err.message);
+      }
+    }, intervalMs);
+
+    if (typeof interval.unref === "function") {
+      interval.unref();
+    }
+    this.leaseRenewalIntervals.set(jobId, interval);
+  }
+
+  stopLeaseRenewal(jobId: string) {
+    const interval = this.leaseRenewalIntervals.get(jobId);
+    if (interval) {
+      clearInterval(interval);
+      this.leaseRenewalIntervals.delete(jobId);
+    }
+  }
+
+  private async safeUpdateJobState(
+    jobId: string,
+    leaseToken: string,
+    newStatus: JobStatus,
+    action: string,
+    message: string,
+    updateFields: Partial<PublishingJob>
+  ): Promise<PublishingJob> {
+    const docRef = this.db.collection("publishing_queue").doc(jobId);
+    return await this.db.runTransaction(async (transaction) => {
+      const snap = await transaction.get(docRef);
+      if (!snap.exists) throw new Error(`Job ${jobId} not found.`);
+      const job = snap.data() as PublishingJob;
+
+      if (job.leaseToken !== leaseToken) {
+        throw new Error(`[LEASE_ERROR] Stale or unowned lease. Attempted status update: ${newStatus}. Active leaseToken: ${job.leaseToken}, Received: ${leaseToken}`);
+      }
+
+      const updatedJobPayload: PublishingJob = {
+        ...job,
+        ...updateFields
+      };
+
+      return await this.appendAuditEvent(
+        transaction,
+        docRef,
+        updatedJobPayload,
+        newStatus,
+        action,
+        message,
+        job.leaseOwnerId || "worker"
+      );
+    });
+  }
+
   private get db() {
     if (!getApps().length) {
       throw new Error("Firebase Admin not initialized.");
@@ -250,6 +359,11 @@ export class PublishingQueueService {
    * Fetch and lease pending jobs for the worker using Firestore transactions
    */
   async leaseNextJobs(limit: number = 5, workerId: string = `worker_${uuidv4().substring(0, 8)}`): Promise<PublishingJob[]> {
+    if (this.isDraining) {
+      console.log("[QUEUE] Worker is draining. Rejecting new lease acquisition.");
+      return [];
+    }
+
     const nowStr = new Date().toISOString();
     const leasedJobs: PublishingJob[] = [];
 
@@ -276,7 +390,7 @@ export class PublishingQueueService {
     for (const cand of activeCandidates) {
       const docRef = this.db.collection("publishing_queue").doc(cand.jobId);
       const leaseToken = uuidv4();
-      const leaseExpiresAt = new Date(Date.now() + 5 * 60 * 1000).toISOString(); // 5 minutes
+      const leaseExpiresAt = new Date(Date.now() + this.defaultLeaseDurationMs).toISOString();
 
       try {
         const resultJob = await this.db.runTransaction(async (transaction) => {
@@ -426,17 +540,20 @@ export class PublishingQueueService {
 
     let job = leaseCheck;
 
+    // Start lease renewal loop (e.g. every 10 seconds for safety and quick tests)
+    this.startLeaseRenewal(job.jobId, leaseToken, 10000);
+
     // 1. Fetch package details
     const pkgSnap = await this.db.collection("phase_d_packages").doc(job.packageId).get();
     if (!pkgSnap.exists) {
-      return await this.appendAuditEvent(
-        null,
-        jobDocRef,
-        { ...job, lastError: "FinalArticlePackage record missing on disk." },
+      this.stopLeaseRenewal(job.jobId);
+      return await this.safeUpdateJobState(
+        job.jobId,
+        leaseToken,
         "TECHNICAL_FAILURE",
         "EXECUTION_FAILED",
         "Associated FinalArticlePackage missing on disk.",
-        job.leaseOwnerId || "worker"
+        { lastError: "FinalArticlePackage record missing on disk." }
       );
     }
     const pkg = pkgSnap.data() as FinalArticlePackage;
@@ -465,45 +582,45 @@ export class PublishingQueueService {
       
       if (reconciliation.outcome === "MATCHED") {
         console.log(`[QUEUE] [RECONCILIATION] Duplicate remote post discovered. Local reference repaired.`);
-        
+        this.stopLeaseRenewal(job.jobId);
+
         await this.db.collection("phase_d_packages").doc(job.packageId).update({
           "publishingTarget.permalinkPreview": reconciliation.postUrl
         });
 
-        return await this.appendAuditEvent(
-          null,
-          jobDocRef,
+        return await this.safeUpdateJobState(
+          job.jobId,
+          leaseToken,
+          "PUBLISHED",
+          "LOCAL_REFERENCE_REPAIRED",
+          `Post was found on WordPress. Repaired references. ID: ${reconciliation.postId}, URL: ${reconciliation.postUrl}`,
           {
-            ...updatedJobState,
+            runCount,
             wordpressPostId: reconciliation.postId!,
             destinationUrl: reconciliation.postUrl!,
             leaseToken: null,
             leaseOwnerId: null,
             leaseExpiresAt: null,
             lastError: null
-          },
-          "PUBLISHED",
-          "LOCAL_REFERENCE_REPAIRED",
-          `Post was found on WordPress. Repaired references. ID: ${reconciliation.postId}, URL: ${reconciliation.postUrl}`,
-          job.leaseOwnerId || "worker"
+          }
         );
       }
 
       if (["MULTIPLE_MATCHES", "CONTENT_DRIFT"].includes(reconciliation.outcome)) {
-        return await this.appendAuditEvent(
-          null,
-          jobDocRef,
+        this.stopLeaseRenewal(job.jobId);
+        return await this.safeUpdateJobState(
+          job.jobId,
+          leaseToken,
+          "MANUAL_INTERVENTION_REQUIRED",
+          "RECONCILIATION_FAILED",
+          `Conflict: ${reconciliation.outcome}. Error: ${reconciliation.error}`,
           {
-            ...updatedJobState,
+            runCount,
             leaseToken: null,
             leaseOwnerId: null,
             leaseExpiresAt: null,
             lastError: reconciliation.error || "Reconciliation mismatch detected"
-          },
-          "MANUAL_INTERVENTION_REQUIRED",
-          "RECONCILIATION_FAILED",
-          `Conflict: ${reconciliation.outcome}. Error: ${reconciliation.error}`,
-          job.leaseOwnerId || "worker"
+          }
         );
       }
 
@@ -527,6 +644,8 @@ export class PublishingQueueService {
 
       const result = await pushToWpAdapter(articlePayloadForAdapter, wpConfig);
 
+      this.stopLeaseRenewal(job.jobId);
+
       if (result && result.status === "success" && (result.postId || result.id)) {
         const wpPostId = result.postId || result.id;
         const postUrl = result.postUrl || result.link;
@@ -535,28 +654,28 @@ export class PublishingQueueService {
           "publishingTarget.permalinkPreview": postUrl
         });
 
-        return await this.appendAuditEvent(
-          null,
-          jobDocRef,
+        return await this.safeUpdateJobState(
+          job.jobId,
+          leaseToken,
+          "PUBLISHED",
+          "PUBLISHED_TO_WORDPRESS",
+          `Draft successfully published to WordPress. ID: ${wpPostId}. URL: ${postUrl}`,
           {
-            ...updatedJobState,
+            runCount,
             wordpressPostId: wpPostId,
             destinationUrl: postUrl,
             leaseToken: null,
             leaseOwnerId: null,
             leaseExpiresAt: null,
             lastError: null
-          },
-          "PUBLISHED",
-          "PUBLISHED_TO_WORDPRESS",
-          `Draft successfully published to WordPress. ID: ${wpPostId}. URL: ${postUrl}`,
-          job.leaseOwnerId || "worker"
+          }
         );
       } else {
         throw new Error(result?.error || "WordPress integration rejected payload.");
       }
 
     } catch (dispatchError: any) {
+      this.stopLeaseRenewal(job.jobId);
       console.error(`[QUEUE] Execution caught exception for job ${jobId}:`, dispatchError.message);
 
       // POST-PUBLICATION AUTOMATIC RECONCILIATION (Double check before rescheduling)
@@ -566,22 +685,21 @@ export class PublishingQueueService {
           "publishingTarget.permalinkPreview": postRecovery.postUrl
         });
 
-        return await this.appendAuditEvent(
-          null,
-          jobDocRef,
+        return await this.safeUpdateJobState(
+          job.jobId,
+          leaseToken,
+          "PUBLISHED",
+          "RECONCILIATION_RECOVERY_SUCCESS",
+          `Ambiguous failure successfully recovered. Verified Post ID: ${postRecovery.postId}, URL: ${postRecovery.postUrl}`,
           {
-            ...updatedJobState,
+            runCount,
             wordpressPostId: postRecovery.postId!,
             destinationUrl: postRecovery.postUrl!,
             leaseToken: null,
             leaseOwnerId: null,
             leaseExpiresAt: null,
             lastError: null
-          },
-          "PUBLISHED",
-          "RECONCILIATION_RECOVERY_SUCCESS",
-          `Ambiguous failure successfully recovered. Verified Post ID: ${postRecovery.postId}, URL: ${postRecovery.postUrl}`,
-          job.leaseOwnerId || "worker"
+          }
         );
       }
 
@@ -595,41 +713,39 @@ export class PublishingQueueService {
         const delaySeconds = Math.min(3600, backoffBase * Math.pow(2, runCount - 1)) + Math.random() * 10;
         const nextRunAt = new Date(Date.now() + delaySeconds * 1000).toISOString();
 
-        return await this.appendAuditEvent(
-          null,
-          jobDocRef,
+        return await this.safeUpdateJobState(
+          job.jobId,
+          leaseToken,
+          "RETRY_WAIT",
+          "RETRY_SCHEDULED",
+          `Transient failure classified (${classification.failureClass}). Scheduling retry #${runCount + 1} for ${nextRunAt}`,
           {
-            ...updatedJobState,
+            runCount,
             leaseToken: null,
             leaseOwnerId: null,
             leaseExpiresAt: null,
             nextRunAt,
             lastError: dispatchError.message
-          },
-          "RETRY_WAIT",
-          "RETRY_SCHEDULED",
-          `Transient failure classified (${classification.failureClass}). Scheduling retry #${runCount + 1} for ${nextRunAt}`,
-          job.leaseOwnerId || "worker"
+          }
         );
       } else {
         // Exhausted or non-retryable fatal error
         const terminalState: JobStatus = classification.isRetryable ? "DEAD_LETTER" : "MANUAL_INTERVENTION_REQUIRED";
         const actionType = classification.isRetryable ? "TRANSITION_TO_DEAD_LETTER" : "FATAL_CLASSIFICATION";
 
-        return await this.appendAuditEvent(
-          null,
-          jobDocRef,
+        return await this.safeUpdateJobState(
+          job.jobId,
+          leaseToken,
+          terminalState,
+          actionType,
+          `Continuous failure or fatal error classified (${classification.failureClass}). Sent to terminal status: ${terminalState}`,
           {
-            ...updatedJobState,
+            runCount,
             leaseToken: null,
             leaseOwnerId: null,
             leaseExpiresAt: null,
             lastError: dispatchError.message
-          },
-          terminalState,
-          actionType,
-          `Continuous failure or fatal error classified (${classification.failureClass}). Sent to terminal status: ${terminalState}`,
-          job.leaseOwnerId || "worker"
+          }
         );
       }
     }
@@ -784,6 +900,10 @@ export class PublishingQueueService {
    * Run the worker processor against leased jobs
    */
   async runWorkerCycle(limit: number = 3): Promise<{ leasedCount: number; results: string[] }> {
+    if (this.isDraining) {
+      console.log("[QUEUE] Worker is draining. Rejecting worker cycle execution.");
+      return { leasedCount: 0, results: [] };
+    }
     console.log("[QUEUE] Worker cycle invoked. Acquiring leases...");
     const workerId = `worker_${uuidv4().substring(0, 8)}`;
     const leased = await this.leaseNextJobs(limit, workerId);

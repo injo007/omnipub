@@ -1,0 +1,31 @@
+name: Promote to Production
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+jobs:
+  promote-production:
+    runs-on: ubuntu-24.04
+    environment: production-approval # Requires manual approval gate in GitHub UI
+    steps:
+      - name: Checkout Code Repository
+        uses: actions/checkout@v4
+
+      - name: Deploy via SSH to Production Server
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.PRODUCTION_SERVER_IP }}
+          username: deploy-operator
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          script: |
+            cd /opt/editorial-platform/current || exit 1
+            git pull origin main
+            # Upgrade production to immutable tag
+            sudo ./deployment/install-editorial-platform.sh update --version ${{ github.ref_name }} --non-interactive
+            # Verify production deployment
+            sudo ./deployment/install-editorial-platform.sh verify --non-interactive
+            # Run diagnostics check and log results
+            sudo ./deployment/install-editorial-platform.sh diagnostics --non-interactive

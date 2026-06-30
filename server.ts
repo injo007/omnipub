@@ -11436,6 +11436,24 @@ async function startServer() {
           });
         }
 
+        // 1. Mark worker as draining & wait for active tasks
+        if (queueService) {
+          queueService.setDraining(true);
+          writeStructuredLog("INFO", "Marked publishing worker as draining. No new leases will be acquired.");
+          
+          const waitStart = Date.now();
+          const waitLimitMs = Math.max(1000, (graceTimerSec - 2) * 1000); // Leave at least 1s/2s for client cleanups
+          while (queueService.getRenewalIntervalsCount() > 0 && (Date.now() - waitStart) < waitLimitMs) {
+            writeStructuredLog("INFO", `Waiting for ${queueService.getRenewalIntervalsCount()} active task(s) to complete...`);
+            await new Promise((resolve) => setTimeout(resolve, 500));
+          }
+          if (queueService.getRenewalIntervalsCount() > 0) {
+            writeStructuredLog("WARN", `Shutdown grace period limit approaching. ${queueService.getRenewalIntervalsCount()} tasks are still running.`);
+          } else {
+            writeStructuredLog("INFO", "All active tasks completed cleanly.");
+          }
+        }
+
         try {
           if (isFirebaseAdminInitialized) {
             const adminAny = admin as any;

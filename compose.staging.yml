@@ -1,0 +1,62 @@
+name: editorial-staging
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: editorial-platform:staging
+    restart: always
+    environment:
+      - NODE_ENV=staging
+      - PORT=3000
+    env_file:
+      - /etc/editorial-platform/staging.env
+    expose:
+      - "3000"
+    volumes:
+      - app-staging-data:/app/data
+    networks:
+      - editorial-staging-internal
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1024M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"
+        max-file: "3"
+
+  proxy:
+    image: caddy:2-alpine
+    restart: always
+    ports:
+      - "8080:80"
+      - "8443:443"
+    volumes:
+      - /etc/editorial-platform/Caddyfile.staging:/etc/caddy/Caddyfile:ro
+      - caddy-staging-data:/data
+      - caddy-staging-config:/config
+    networks:
+      - editorial-staging-internal
+      - editorial-staging-proxy
+    depends_on:
+      - app
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"
+        max-file: "3"
+
+networks:
+  editorial-staging-internal:
+    driver: bridge
+  editorial-staging-proxy:
+    driver: bridge
+
+volumes:
+  app-staging-data:
+  caddy-staging-data:
+  caddy-staging-config:

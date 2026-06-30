@@ -333,4 +333,27 @@ describe("Phase F: Production Readiness & Governance Unit Tests", () => {
     const isDuplicated = !!existingWpPostId;
     expect(isDuplicated).toBe(true);
   });
+
+  // 31. Worker enters draining state on shutdown and resolves active renewal intervals before termination
+  it("should mark worker as draining, allow existing lease renewals to run, and wait for intervals to clear on shutdown", async () => {
+    const { PublishingQueueService } = await import("../publishingQueueService");
+    const service = new PublishingQueueService(1000);
+    expect(service.getDraining()).toBe(false);
+
+    // Simulate starting a lease renewal (active task)
+    service.startLeaseRenewal("job_active", "token_xyz", 500);
+    expect(service.getRenewalIntervalsCount()).toBe(1);
+
+    // Enter draining mode
+    service.setDraining(true);
+    expect(service.getDraining()).toBe(true);
+
+    // No new leases should be allowed under draining state
+    const leased = await service.leaseNextJobs(1, "worker_new");
+    expect(leased).toEqual([]);
+
+    // Finish the job and stop lease renewal
+    service.stopLeaseRenewal("job_active");
+    expect(service.getRenewalIntervalsCount()).toBe(0);
+  });
 });

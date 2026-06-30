@@ -55,62 +55,52 @@ service cloud.firestore {
     // Match patterns
     match /writers/{writerId} {
       allow read: if true;
-      allow create, update: if isValidId(writerId) && isValidWriter(incoming());
-      allow delete: if isValidId(writerId);
+      allow write: if false;
     }
 
     match /feeds/{feedId} {
       allow read: if true;
-      allow create, update: if isValidId(feedId) && isValidFeed(incoming());
-      allow delete: if isValidId(feedId);
+      allow write: if false;
     }
 
     match /articles/{articleId} {
       allow read: if true;
-      allow create: if isValidId(articleId) && isValidArticle(incoming());
-      allow update: if isValidId(articleId) && isValidArticle(incoming())
-        && (!incoming().keys().hasAny(['createdAt']) || incoming().createdAt == existing().createdAt);
-      allow delete: if isValidId(articleId);
+      allow write: if false;
     }
 
     match /settings/{docId} {
       allow read: if true;
-      allow write: if isValidId(docId);
+      allow write: if false;
     }
 
     match /notifications/{notifId} {
       allow read: if true;
-      allow create, update: if isValidId(notifId) && isValidNotification(incoming());
-      allow delete: if isValidId(notifId);
+      allow write: if false;
     }
 
     match /suggestedSources/{sourceId} {
       allow read: if true;
-      allow create, update: if isValidId(sourceId) && isValidSuggestedSource(incoming());
-      allow delete: if isValidId(sourceId);
+      allow write: if false;
     }
 
     match /candidates/{candidateId} {
       allow read: if true;
-      allow create, update: if isValidId(candidateId) && isValidCandidate(incoming());
-      allow delete: if isValidId(candidateId);
+      allow write: if false;
     }
 
     match /skills/{skillId} {
       allow read: if true;
-      allow create, update: if isValidId(skillId) && isValidSkill(incoming());
-      allow delete: if isValidId(skillId);
+      allow write: if false;
     }
 
     match /niches/{nicheId} {
       allow read: if true;
-      allow create, update: if isValidId(nicheId) && isValidNiche(incoming());
-      allow delete: if isValidId(nicheId);
+      allow write: if false;
     }
 
     match /phase_d_packages/{packageId} {
       allow read: if true;
-      allow write: if isValidId(packageId);
+      allow write: if false;
     }
 
     match /phase_d_audits/{auditId} {

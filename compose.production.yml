@@ -1,0 +1,65 @@
+name: editorial-production
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: editorial-platform:production
+    restart: always
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+    env_file:
+      - /etc/editorial-platform/production.env
+    expose:
+      - "3000"
+    volumes:
+      - app-data:/app/data
+    networks:
+      - editorial-production-internal
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2048M
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  proxy:
+    image: caddy:2-alpine
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /etc/editorial-platform/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    networks:
+      - editorial-production-internal
+      - editorial-production-proxy
+    depends_on:
+      - app
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+networks:
+  editorial-production-internal:
+    driver: bridge
+  editorial-production-proxy:
+    driver: bridge
+
+volumes:
+  app-data:
+  caddy-data:
+  caddy-config:

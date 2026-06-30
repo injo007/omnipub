@@ -259,6 +259,181 @@ describe('Phase E - PublishingQueueService', () => {
 
       await expect(service.executeJob('job_expired', 'token_A')).rejects.toThrow('LEASE_ERROR');
     });
+
+    it('an actively renewed lease is never reclaimed and extends expiration', async () => {
+      let updatedExpiry: string | null = null;
+      mockDocGet.mockImplementation((id) => {
+        if (id === 'job_renew') {
+          return {
+            exists: true,
+            data: () => ({
+              jobId: 'job_renew',
+              status: 'LEASED',
+              leaseToken: 'token_A',
+              leaseExpiresAt: new Date(Date.now() + 100000).toISOString(),
+              auditHistory: []
+            })
+          };
+        }
+        return { exists: false };
+      });
+
+      mockDocUpdate.mockImplementation((id, data) => {
+        if (id === 'job_renew') {
+          updatedExpiry = data.leaseExpiresAt;
+        }
+      });
+
+      const success = await service.renewLease('job_renew', 'token_A', 300000);
+      expect(success).toBe(true);
+      expect(updatedExpiry).toBeDefined();
+      expect(new Date(updatedExpiry!).getTime()).toBeGreaterThan(Date.now() + 200000);
+    });
+
+    it('an expired abandoned lease is reclaimed by leaseNextJobs', async () => {
+      // Setup candidate queries returning a job with an expired lease
+      mockQueryGet.mockResolvedValue({
+        forEach: (cb: any) => {
+          cb({
+            data: () => ({
+              jobId: 'job_reclaim',
+              packageId: 'pkg_1',
+              targetSiteId: 'siteA',
+              status: 'LEASED',
+              leaseToken: 'token_expired',
+              leaseExpiresAt: new Date(Date.now() - 5000).toISOString(), // expired
+              nextRunAt: new Date(Date.now() - 1000).toISOString(),
+              runCount: 0,
+              maxRetries: 3,
+              auditHistory: []
+            })
+          });
+        }
+      });
+
+      mockDocGet.mockImplementation((id) => {
+        if (id === 'job_reclaim') {
+          return {
+            exists: true,
+            data: () => ({
+              jobId: 'job_reclaim',
+              packageId: 'pkg_1',
+              targetSiteId: 'siteA',
+              status: 'LEASED',
+              leaseToken: 'token_expired',
+              leaseExpiresAt: new Date(Date.now() - 5000).toISOString(),
+              nextRunAt: new Date(Date.now() - 1000).toISOString(),
+              runCount: 0,
+              maxRetries: 3,
+              auditHistory: []
+            })
+          };
+        }
+        return { exists: false };
+      });
+
+      const leasedJobs = await service.leaseNextJobs(1, 'new_worker');
+      expect(leasedJobs.length).toBe(1);
+      expect(leasedJobs[0].jobId).toBe('job_reclaim');
+      expect(leasedJobs[0].status).toBe('LEASED');
+      expect(leasedJobs[0].leaseOwnerId).toBe('new_worker');
+    });
+
+    it('a previous lease owner cannot complete a job after reassignment (conditional completion)', async () => {
+      mockDocGet.mockImplementation((id) => {
+        if (id === 'job_stale') {
+          return {
+            exists: true,
+            data: () => ({
+              jobId: 'job_stale',
+              packageId: 'pkg_1',
+              targetSiteId: 'siteA',
+              status: 'LEASED', // Status must be LEASED to start executeJob, but token doesn't match
+              leaseToken: 'token_new_owner_assigned', // Reassigned to a new owner
+              leaseOwnerId: 'worker_new',
+              leaseExpiresAt: new Date(Date.now() + 100000).toISOString(),
+              auditHistory: []
+            })
+          };
+        }
+        return { exists: false };
+      });
+
+      // Try executing or completing under the old token 'token_old'
+      await expect(
+        service.executeJob('job_stale', 'token_old')
+      ).rejects.toThrow('LEASE_ERROR');
+    });
+
+    it('shutdown / draining state does not permit new lease acquisition or worker cycles', async () => {
+      service.setDraining(true);
+      expect(service.getDraining()).toBe(true);
+
+      const leasedJobs = await service.leaseNextJobs(5, 'some_worker');
+      expect(leasedJobs).toEqual([]);
+
+      const cycleResult = await service.runWorkerCycle(5);
+      expect(cycleResult.leasedCount).toBe(0);
+      expect(cycleResult.results).toEqual([]);
+      
+      // Reset draining for other tests
+      service.setDraining(false);
+    });
+
+    it('uncertain WordPress responses do not create duplicate posts due to automatic reconciliation', async () => {
+      // Mock package details and saas config
+      mockDocGet.mockImplementation((id) => {
+        if (id === 'saas') {
+          return {
+            exists: true,
+            data: () => ({
+              wordpressSites: [{ id: 'siteA', url: 'https://site.com', username: 'user', appPassword: 'pw' }]
+            })
+          };
+        }
+        if (id === 'pkg_recon_test') {
+          return {
+            exists: true,
+            data: () => ({
+              packageId: 'pkg_recon_test',
+              packageVersion: 1,
+              editorialContent: { title: 'Dup Title', slug: 'dup-slug' },
+              publishingTarget: {}
+            })
+          };
+        }
+        if (id === 'job_recon') {
+          return {
+            exists: true,
+            data: () => ({
+              jobId: 'job_recon',
+              packageId: 'pkg_recon_test',
+              targetSiteId: 'siteA',
+              status: 'LEASED',
+              leaseToken: 'token_recon',
+              leaseExpiresAt: new Date(Date.now() + 100000).toISOString(),
+              runCount: 0,
+              maxRetries: 3,
+              auditHistory: []
+            })
+          };
+        }
+        return { exists: false };
+      });
+
+      // Mock remote matching post (reconciliation succeeds)
+      const mockFetch = vi.fn().mockResolvedValue({
+        status: 200,
+        ok: true,
+        json: async () => [{ id: 777, link: 'https://site.com/dup', title: { rendered: 'Dup Title' } }]
+      });
+      global.fetch = mockFetch;
+
+      const completedJob = await service.executeJob('job_recon', 'token_recon');
+      expect(completedJob.status).toBe('PUBLISHED');
+      expect(completedJob.wordpressPostId).toBe(777);
+      expect(completedJob.destinationUrl).toBe('https://site.com/dup');
+    });
   });
 
   describe('Automatic WordPress Reconciliation', () => {

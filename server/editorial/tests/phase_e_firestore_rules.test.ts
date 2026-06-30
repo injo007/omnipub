@@ -37,15 +37,12 @@ describe('Phase E - Firebase Rules Simulation Tests', () => {
       }
     }
 
-    if (collection === 'writers') {
+    if (collection === 'writers' || collection === 'feeds' || collection === 'articles' || collection === 'settings' || collection === 'phase_d_packages' || collection === 'niches' || collection === 'skills' || collection === 'candidates' || collection === 'suggestedSources' || collection === 'notifications') {
       if (action === 'read') return true;
-      if (action === 'create' || action === 'update') {
-        const data = params.incomingData;
-        const validId = params.documentId && params.documentId.length <= 128 && /^[a-zA-Z0-9_\-]+$/.test(params.documentId);
-        const validWriter = data && typeof data.id === 'string' && typeof data.name === 'string';
-        return !!(validId && validWriter);
+      if (action === 'write' || action === 'create' || action === 'update' || action === 'delete') {
+        // allow write: if false;
+        return false;
       }
-      return false;
     }
 
     return false;
@@ -129,5 +126,49 @@ describe('Phase E - Firebase Rules Simulation Tests', () => {
     // or cross-article modification attempts on the publishing_queue directly are blocked at the rule level.
     const browserDirectEscalation = false;
     expect(browserDirectEscalation).toBe(false);
+  });
+
+  it('7. Browser clients are blocked from mutating Phase C validation results (articles)', () => {
+    const writeAllowed = simulateRuleCheck({
+      collection: 'articles',
+      action: 'write',
+      auth: { uid: 'usr_malicious' },
+      documentId: 'art_123',
+      incomingData: { title: 'Hacked', validationStage: 'EDITORIAL_QUALITY', terminalState: 'PASSED' }
+    });
+    expect(writeAllowed).toBe(false);
+  });
+
+  it('8. Browser clients are blocked from mutating Phase D packages (phase_d_packages)', () => {
+    const writeAllowed = simulateRuleCheck({
+      collection: 'phase_d_packages',
+      action: 'write',
+      auth: { uid: 'usr_malicious' },
+      documentId: 'pkg_123',
+      incomingData: { articleId: 'art_123', status: 'ready' }
+    });
+    expect(writeAllowed).toBe(false);
+  });
+
+  it('9. Browser clients are blocked from mutating budgets and configurations (settings)', () => {
+    const writeAllowed = simulateRuleCheck({
+      collection: 'settings',
+      action: 'write',
+      auth: { uid: 'usr_malicious' },
+      documentId: 'saas',
+      incomingData: { monthlyBudgetUsd: 10000.00 }
+    });
+    expect(writeAllowed).toBe(false);
+  });
+
+  it('10. Browser clients are blocked from mutating audit logs (phase_d_audits)', () => {
+    const writeAllowed = simulateRuleCheck({
+      collection: 'phase_d_audits',
+      action: 'write',
+      auth: null,
+      documentId: 'audit_123',
+      incomingData: { severity: 'INFO', message: 'Faked' }
+    });
+    expect(writeAllowed).toBe(false);
   });
 });

@@ -1,0 +1,22 @@
+name: Emergency Production Rollback
+
+on:
+  workflow_dispatch:
+
+jobs:
+  rollback:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Deploy Rollback Command via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.PRODUCTION_SERVER_IP }}
+          username: deploy-operator
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          script: |
+            cd /opt/editorial-platform/current || exit 1
+            # Execute master installer rollback procedure
+            sudo ./deployment/install-editorial-platform.sh rollback --non-interactive
+            # Verify status
+            sudo ./deployment/install-editorial-platform.sh status --non-interactive

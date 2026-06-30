@@ -1,0 +1,32 @@
+name: Deploy to Staging Environment
+
+on:
+  workflow_run:
+    workflows: ["Build & Release Immutable Artifact"]
+    types:
+      - completed
+  workflow_dispatch:
+
+jobs:
+  deploy-staging:
+    runs-on: ubuntu-24.04
+    if: ${{ github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch' }}
+    steps:
+      - name: Checkout Code Repository
+        uses: actions/checkout@v4
+
+      - name: Deploy via SSH to Staging Server
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.STAGING_SERVER_IP }}
+          username: deploy-operator
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          script: |
+            cd /opt/editorial-platform/current || exit 1
+            # Fetch latest repository or pull installer
+            git pull origin main
+            # Run installer update non-interactively using the target commit SHA
+            sudo ./deployment/install-editorial-platform.sh update --digest sha256:${{ github.sha }} --non-interactive
+            # Run verification suite
+            sudo ./deployment/install-editorial-platform.sh verify --non-interactive

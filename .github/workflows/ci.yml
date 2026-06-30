@@ -1,0 +1,42 @@
+name: Continuous Integration
+
+on:
+  push:
+    branches: [ main, dev ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout Code Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js Environment
+        uses: actions/setup-node@v4
+        with:
+          node-cache: 'npm'
+          node-version: 20
+
+      - name: Locked Dependency Installation
+        run: npm ci
+
+      - name: TypeScript Type Safety Checks
+        run: npx tsc --noEmit
+
+      - name: ESLint Code Quality Verification
+        run: npm run lint
+
+      - name: Run ShellCheck on Installer Script
+        uses: ludeeus/action-shellcheck@master
+        with:
+          scandir: 'deployment'
+          severity: warning
+
+      - name: Run Complete Test Suite
+        run: npx vitest run
+        env:
+          NODE_ENV: test
+          VITEST: true
+          CREDENTIALS_VAULT_KEY: fb3ac64b732d4e7f9188a3b50c6d9bc5

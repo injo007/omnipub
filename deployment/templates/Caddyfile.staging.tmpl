@@ -1,0 +1,22 @@
+{
+    email {$ADMIN_EMAIL}
+}
+
+{$STAGING_DOMAIN} {
+    reverse_proxy app:3000 {
+        header_up Host {upstream_host}
+        header_up X-Real-IP {remote_host}
+    }
+
+    # Security Headers
+    header {
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        Referrer-Policy "strict-origin-when-cross-origin"
+        Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://apis.google.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: blob: https://* http://*; connect-src 'self' https://* http://* wss://* ws://*;"
+    }
+
+    request_body {
+        max_size 10MB
+    }
+}
