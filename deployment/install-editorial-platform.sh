@@ -520,8 +520,8 @@ services:
     image: caddy:2-alpine
     restart: always
     ports:
-      - "8080:80"
-      - "8443:443"
+      - "127.0.0.1:8080:80"
+      - "127.0.0.1:8443:443"
     volumes:
       - /etc/editorial-platform/Caddyfile.staging:/etc/caddy/Caddyfile:ro
       - caddy-staging-data:/data
@@ -893,7 +893,7 @@ function verify_installation() {
     # 2. Check public listener leaks
     if command -v ss &>/dev/null; then
         local public_listeners
-        public_listeners=$(ss -tuln | grep -E ':(3000|8080|8443) ' || true)
+        public_listeners=$(ss -tuln | grep -E '(0\.0\.0\.0|\[::\]|\*):(3000|8080|8443)\b' || true)
         if [[ -n "$public_listeners" ]]; then
             log "ERROR" "Security Leak: Non-essential ports are publicly accessible! Listeners:\n$public_listeners"
             passed=false
