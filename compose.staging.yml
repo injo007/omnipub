@@ -2,6 +2,7 @@ name: editorial-staging
 
 services:
   app:
+    container_name: editorial-staging-app
     build:
       context: .
       dockerfile: Dockerfile

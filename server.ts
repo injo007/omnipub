@@ -45,6 +45,33 @@ import {
 
 dotenv.config();
 
+// Define a self-healing, container-aware database path
+export const DB_PATH = (() => {
+  const defaultPath = path.join(process.cwd(), "db.json");
+  const dataDir = path.join(process.cwd(), "data");
+  if (fs.existsSync(dataDir)) {
+    try {
+      fs.accessSync(dataDir, fs.constants.W_OK);
+      const containerDbPath = path.join(dataDir, "db.json");
+      if (!fs.existsSync(containerDbPath) && fs.existsSync(defaultPath)) {
+        try {
+          const stats = fs.statSync(defaultPath);
+          if (stats.size > 100) {
+            fs.copyFileSync(defaultPath, containerDbPath);
+            console.log(`[INIT] Seeded volume DB path at ${containerDbPath} from ${defaultPath}`);
+          }
+        } catch (copyErr) {
+          console.error(`[INIT] Failed to seed volume DB path:`, copyErr);
+        }
+      }
+      return containerDbPath;
+    } catch (e) {
+      // not writable, fallback to defaultPath
+    }
+  }
+  return defaultPath;
+})();
+
 export interface AppProviders { llmCompletion?: (params: any) => Promise<any>; generateImage?: (prompt: string, niche: string, overrideModel?: string) => Promise<{ imageUrl: string; source: string; isFallback?: boolean; errorLogs?: string[] }>; pushToWordPress?: (article: any, wpConfig: any) => Promise<any>; }
 
 export const appContext = new AsyncLocalStorage<AppProviders>();
@@ -1600,7 +1627,7 @@ appRouter.get("/api/health/readiness", async (req, res) => {
 
   // 1. Check localDB storage file availability
   try {
-    const dbPath = path.join(process.cwd(), "db.json");
+    const dbPath = DB_PATH;
     diagnostics.localDb = {
       available: fs.existsSync(dbPath),
       writable: false
@@ -1659,7 +1686,7 @@ appRouter.get("/api/health/dependencies", async (req, res) => {
 
   // localDB details
   try {
-    const dbPath = path.join(process.cwd(), "db.json");
+    const dbPath = DB_PATH;
     diagnostics.localDb = {
       exists: fs.existsSync(dbPath),
       size: fs.existsSync(dbPath) ? fs.statSync(dbPath).size : 0
@@ -2007,7 +2034,6 @@ async function removeFromFirestore(col: string, docId: string) {
 // -------------------------------------------------------------
 // Database Setup (db.json for reliable local state persistence)
 // -------------------------------------------------------------
-const DB_PATH = path.join(process.cwd(), "db.json");
 
 interface LocalDB {
   writers: any[];
@@ -3331,11 +3357,14 @@ const ENCRYPTION_KEY = process.env.CREDENTIALS_VAULT_KEY || "fb3ac64b732d4e7f918
 const IV_LENGTH = 16;
 
 function getEncryptionKey(): Buffer {
-  const buf = Buffer.from(ENCRYPTION_KEY);
+  // Always clean the key of literal surrounding quotes and outer spaces
+  const cleanedKey = (ENCRYPTION_KEY || "").replace(/['"]/g, "").trim();
+  const finalKey = cleanedKey || "fb3ac64b732d4e7f9188a3b50c6d9bc5";
+  const buf = Buffer.from(finalKey);
   if (buf.length === 32) {
     return buf;
   }
-  return crypto.createHash("sha256").update(ENCRYPTION_KEY).digest();
+  return crypto.createHash("sha256").update(finalKey).digest();
 }
 
 function encrypt(text: string): string {

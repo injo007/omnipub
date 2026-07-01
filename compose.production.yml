@@ -2,6 +2,7 @@ name: editorial-production
 
 services:
   app:
+    container_name: editorial-production-app
     build:
       context: .
       dockerfile: Dockerfile
