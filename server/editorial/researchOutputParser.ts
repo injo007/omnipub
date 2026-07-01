@@ -3,7 +3,17 @@ import { ResearchOutput } from "./types";
 
 export function parseAndValidateResearchOutput(jsonString: string): { success: boolean; data?: ResearchOutput; error?: any } {
   try {
-    const rawData = JSON.parse(jsonString);
+    let cleanString = jsonString;
+    if (typeof cleanString === "string") {
+      cleanString = cleanString.replace(/<think>[\s\S]*?<\/think>/gi, "");
+      cleanString = cleanString.replace(/<think>[\s\S]*/gi, "");
+      cleanString = cleanString.trim();
+      if (cleanString.startsWith("```")) {
+        cleanString = cleanString.replace(/^```[a-zA-Z]*\n?([\s\S]*?)\n?```$/g, "$1");
+      }
+      cleanString = cleanString.trim();
+    }
+    const rawData = JSON.parse(cleanString);
     
     // Auto-populate evidenceLedger entries if they are missing required identifiers
     if (rawData && Array.isArray(rawData.evidenceLedger)) {

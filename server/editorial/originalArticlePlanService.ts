@@ -77,7 +77,17 @@ Return a JSON object conforming precisely to this schema:
       responseFormat: "json_object"
     });
     
-    const parsed = typeof response.text === "string" ? JSON.parse(response.text) : response;
+    let textToParse = typeof response.text === "string" ? response.text : JSON.stringify(response);
+    if (typeof textToParse === "string") {
+      textToParse = textToParse.replace(/<think>[\s\S]*?<\/think>/gi, "");
+      textToParse = textToParse.replace(/<think>[\s\S]*/gi, "");
+      textToParse = textToParse.trim();
+      if (textToParse.startsWith("```")) {
+        textToParse = textToParse.replace(/^```[a-zA-Z]*\n?([\s\S]*?)\n?```$/g, "$1");
+      }
+      textToParse = textToParse.trim();
+    }
+    const parsed = JSON.parse(textToParse);
     
     // Ensure trace id is correct
     parsed.articleTraceId = articleTraceId;
@@ -86,6 +96,6 @@ Return a JSON object conforming precisely to this schema:
     return parsed as OriginalArticlePlan;
   } catch (e: any) {
     console.error("Failed to generate plan:", e);
-    throw new Error("Unable to create valid OriginalArticlePlan");
+    throw new Error(`Unable to create valid OriginalArticlePlan. Original Error: ${e?.message || e?.toString()}`);
   }
 }

@@ -81,7 +81,17 @@ Return a valid JSON object matching this structure:
       responseFormat: "json_object"
     });
 
-    const parsed = typeof response.text === "string" ? JSON.parse(response.text) : response;
+    let textToParse = typeof response.text === "string" ? response.text : JSON.stringify(response);
+    if (typeof textToParse === "string") {
+      textToParse = textToParse.replace(/<think>[\s\S]*?<\/think>/gi, "");
+      textToParse = textToParse.replace(/<think>[\s\S]*/gi, "");
+      textToParse = textToParse.trim();
+      if (textToParse.startsWith("```")) {
+        textToParse = textToParse.replace(/^```[a-zA-Z]*\n?([\s\S]*?)\n?```$/g, "$1");
+      }
+      textToParse = textToParse.trim();
+    }
+    const parsed = JSON.parse(textToParse);
     
     return {
       sourceId: uuidv4(),

@@ -187,9 +187,25 @@
         "nextRunAt": { "type": "string" }
       },
       "required": ["jobId", "packageId", "targetSiteId", "status", "runCount", "maxRetries", "nextRunAt"]
+    },
+    "AuditLog": {
+      "title": "System Audit Log",
+      "description": "Historical audit log record for security, errors, and system activity",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique log record ID" },
+        "timestamp": { "type": "string", "description": "ISO timestamp of the event" },
+        "type": { "type": "string", "description": "Category/type of log event" },
+        "details": { "type": "object", "description": "Arbitrary details or payload of the event" }
+      },
+      "required": ["id", "timestamp", "type", "details"]
     }
   },
   "firestore": {
+    "auditLogs/{logId}": {
+      "schema": "AuditLog",
+      "description": "System audit and security event logs"
+    },
     "writers/{writerId}": {
       "schema": "Writer",
       "description": "Guild of persistent human writing profiles for agent orchestration"

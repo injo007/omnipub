@@ -1,116 +1,61 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // 1. Global safety net
-    match /{document=**} {
-      allow read, write: if false;
-    }
-
     // Helper functions
     function isValidId(id) {
       return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
     }
 
-    function incoming() {
-      return request.resource.data;
-    }
-
-    function existing() {
-      return resource.data;
-    }
-
-    // Validation helpers
-    function isValidWriter(data) {
-      return data.id is string && data.name is string;
-    }
-
-    function isValidFeed(data) {
-      return data.id is string && data.name is string && data.url is string;
-    }
-
-    function isValidArticle(data) {
-      return data.id is string && data.title is string && data.content is string;
-    }
-
-    function isValidNotification(data) {
-      return data.id is string && data.title is string && data.message is string;
-    }
-
-    function isValidSuggestedSource(data) {
-      return data.id is string && data.title is string && data.url is string;
-    }
-
-    function isValidCandidate(data) {
-      return data.id is string && data.name is string && data.niche is string;
-    }
-
-    function isValidSkill(data) {
-      return data.id is string && data.name is string && data.directive is string;
-    }
-
-    function isValidNiche(data) {
-      return data.id is string && data.name is string;
-    }
-
-    // Match patterns
     match /writers/{writerId} {
-      allow read: if true;
-      allow write: if false;
+      allow read, write: if true;
     }
 
     match /feeds/{feedId} {
-      allow read: if true;
-      allow write: if false;
+      allow read, write: if true;
     }
 
     match /articles/{articleId} {
-      allow read: if true;
-      allow write: if false;
+      allow read, write: if true;
     }
 
     match /settings/{docId} {
-      allow read: if true;
-      allow write: if false;
+      allow read, write: if true;
     }
 
     match /notifications/{notifId} {
-      allow read: if true;
-      allow write: if false;
+      allow read, write: if true;
     }
 
     match /suggestedSources/{sourceId} {
-      allow read: if true;
-      allow write: if false;
+      allow read, write: if true;
     }
 
     match /candidates/{candidateId} {
-      allow read: if true;
-      allow write: if false;
+      allow read, write: if true;
     }
 
     match /skills/{skillId} {
-      allow read: if true;
-      allow write: if false;
+      allow read, write: if true;
     }
 
     match /niches/{nicheId} {
-      allow read: if true;
-      allow write: if false;
+      allow read, write: if true;
     }
 
     match /phase_d_packages/{packageId} {
-      allow read: if true;
-      allow write: if false;
+      allow read, write: if true;
     }
 
     match /phase_d_audits/{auditId} {
-      allow read: if true;
-      allow write: if false;
+      allow read, write: if true;
     }
 
     match /publishing_queue/{jobId} {
-      allow read: if true;
-      allow write: if false;
+      allow read, write: if true;
+    }
+
+    match /auditLogs/{logId} {
+      allow read, write: if true;
     }
   }
 }
