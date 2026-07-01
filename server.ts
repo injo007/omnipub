@@ -3125,8 +3125,8 @@ async function syncFromFirestore(): Promise<any> {
         
         const articlesSnap = await safeGetDocs(collection(firestoreDb, "articles"));
         const firestoreArticles: any[] = [];
-        articlesSnap.forEach((doc: any) => {
-          const a = doc.data();
+        articlesSnap.forEach((docSnap: any) => {
+          const a = docSnap.data();
           if (validNiches.has(a.niche)) {
             firestoreArticles.push(a);
           } else {
@@ -3160,8 +3160,8 @@ async function syncFromFirestore(): Promise<any> {
 
         const sourcesSnap = await safeGetDocs(collection(firestoreDb, "suggestedSources"));
         const firestoreSources: any[] = [];
-        sourcesSnap.forEach((doc: any) => {
-          const s = doc.data();
+        sourcesSnap.forEach((docSnap: any) => {
+          const s = docSnap.data();
           if (validNiches.has(s.niche)) {
             firestoreSources.push(s);
           } else {
@@ -3330,12 +3330,21 @@ async function syncFromFirestore(): Promise<any> {
 const ENCRYPTION_KEY = process.env.CREDENTIALS_VAULT_KEY || "fb3ac64b732d4e7f9188a3b50c6d9bc5"; // Must be exactly 32 characters
 const IV_LENGTH = 16;
 
+function getEncryptionKey(): Buffer {
+  const buf = Buffer.from(ENCRYPTION_KEY);
+  if (buf.length === 32) {
+    return buf;
+  }
+  return crypto.createHash("sha256").update(ENCRYPTION_KEY).digest();
+}
+
 function encrypt(text: string): string {
   if (!text) return "";
   if (text.startsWith("enc:")) return text; // Already encrypted
   try {
     const iv = crypto.randomBytes(IV_LENGTH);
-    const cipher = crypto.createCipheriv("aes-256-cbc", Buffer.from(ENCRYPTION_KEY), iv);
+    const keyBuf = getEncryptionKey();
+    const cipher = crypto.createCipheriv("aes-256-cbc", keyBuf, iv);
     let encrypted = cipher.update(text);
     encrypted = Buffer.concat([encrypted, cipher.final()]);
     return "enc:" + iv.toString("hex") + ":" + encrypted.toString("hex");
@@ -3352,7 +3361,8 @@ function decrypt(text: string): string {
     const parts = text.split(":");
     const iv = Buffer.from(parts[1], "hex");
     const encryptedText = Buffer.from(parts[2], "hex");
-    const decipher = crypto.createDecipheriv("aes-256-cbc", Buffer.from(ENCRYPTION_KEY), iv);
+    const keyBuf = getEncryptionKey();
+    const decipher = crypto.createDecipheriv("aes-256-cbc", keyBuf, iv);
     let decrypted = decipher.update(encryptedText);
     decrypted = Buffer.concat([decrypted, decipher.final()]);
     return decrypted.toString();
