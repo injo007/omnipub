@@ -1,6 +1,29 @@
 name: editorial-production
 
 services:
+  db:
+    image: postgres:16-alpine
+    container_name: editorial-production-db
+    restart: always
+    environment:
+      POSTGRES_USER: ${PG_USER:-postgres}
+      POSTGRES_PASSWORD: ${PG_PASSWORD}
+      POSTGRES_DB: ${PG_DATABASE:-editorial_db}
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    networks:
+      - editorial-production-internal
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "5"
+
   app:
     container_name: editorial-production-app
     build:
@@ -8,6 +31,8 @@ services:
       dockerfile: Dockerfile
     image: editorial-platform:production
     restart: always
+    depends_on:
+      - db
     environment:
       - NODE_ENV=production
       - PORT=3000
@@ -62,5 +87,6 @@ networks:
 
 volumes:
   app-data:
+  pg-data:
   caddy-data:
   caddy-config:

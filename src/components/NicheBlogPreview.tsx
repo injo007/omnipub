@@ -148,6 +148,15 @@ const decodeHtmlEntities = (str: string): string => {
 const convertMarkdownToHTML = (markdown: string, title?: string): string => {
   if (!markdown) return "";
   
+  // If the content is already highly-structured HTML or contains HTML paragraph tags, return it directly!
+  const hasHtml = (markdown.includes("<p") || markdown.includes("<h2") || markdown.includes("<div") || markdown.includes("<!-- wp:") || markdown.includes("<h3") || markdown.includes("<ul") || markdown.includes("<ol"));
+  if (hasHtml) {
+    if (title && !markdown.includes(`<h1>${title}</h1>`) && !markdown.includes(`<h1>${title}`) && !markdown.includes(`# ${title}`)) {
+      return `<h1 style="font-size: 2.5rem; font-weight: 800; margin-bottom: 1.5rem; color: #1e293b;">${title}</h1>\n\n` + markdown;
+    }
+    return markdown;
+  }
+  
   // Basic markdown to clean HTML parser
   let html = markdown;
   

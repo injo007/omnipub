@@ -231,6 +231,12 @@ function collect_config() {
     local gemini_key="${GEMINI_API_KEY:-}"
     local vault_key="${CREDENTIALS_VAULT_KEY:-fb3ac64b732d4e7f9188a3b50c6d9bc5}"
     
+    local pg_user="${PGUSER:-postgres}"
+    local pg_password="${PGPASSWORD:-}"
+    local pg_database="${PGDATABASE:-editorial_db}"
+    local pg_host="${PGHOST:-db}"
+    local pg_port="${PGPORT:-5432}"
+
     local restic_repo="${RESTIC_REPOSITORY:-s3:https://s3.amazonaws.com/editorial-backups}"
     local restic_pass="${RESTIC_PASSWORD:-super-secure-restic-vault-pass-123}"
     local aws_id="${AWS_ACCESS_KEY_ID:-}"
@@ -266,6 +272,28 @@ function collect_config() {
             CREDENTIALS_VAULT_KEY="$vault_key"
         fi
 
+        echo -e "${YELLOW}--- Self-Hosted PostgreSQL Configuration ---${NC}"
+        read -r -p "Enter PostgreSQL Username [$pg_user]: " input
+        PGUSER="${input:-$pg_user}"
+
+        echo -n "Enter PostgreSQL Password (hidden): "
+        read -r -s input_pg_pass
+        echo ""
+        if [[ -n "$input_pg_pass" ]]; then
+            PGPASSWORD="$input_pg_pass"
+        else
+            PGPASSWORD="$pg_password"
+        fi
+
+        read -r -p "Enter PostgreSQL Database Name [$pg_database]: " input
+        PGDATABASE="${input:-$pg_database}"
+
+        read -r -p "Enter PostgreSQL Host (use 'db' for internal container connection) [$pg_host]: " input
+        PGHOST="${input:-$pg_host}"
+
+        read -r -p "Enter PostgreSQL Port [$pg_port]: " input
+        PGPORT="${input:-$pg_port}"
+
         echo -e "${YELLOW}--- Remote Encrypted Cloud Backup Setup ---${NC}"
         read -r -p "Enter Restic Repository Target [$restic_repo]: " input
         RESTIC_REPOSITORY="${input:-$restic_repo}"
@@ -297,6 +325,11 @@ function collect_config() {
         ADMIN_EMAIL="$admin_email"
         GEMINI_API_KEY="$gemini_key"
         CREDENTIALS_VAULT_KEY="$vault_key"
+        PGUSER="$pg_user"
+        PGPASSWORD="$pg_password"
+        PGDATABASE="$pg_database"
+        PGHOST="$pg_host"
+        PGPORT="$pg_port"
         RESTIC_REPOSITORY="$restic_repo"
         RESTIC_PASSWORD="$restic_pass"
         AWS_ACCESS_KEY_ID="$aws_id"
@@ -313,6 +346,11 @@ function collect_config() {
 STAGING_DOMAIN="${STAGING_DOMAIN}"
 PRODUCTION_DOMAIN="${PRODUCTION_DOMAIN}"
 ADMIN_EMAIL="${ADMIN_EMAIL}"
+PGUSER="${PGUSER}"
+PGPASSWORD="${PGPASSWORD}"
+PGDATABASE="${PGDATABASE}"
+PGHOST="${PGHOST}"
+PGPORT="${PGPORT}"
 EOF
     chmod 600 "$INSTALLER_CONF"
 
@@ -326,6 +364,11 @@ APP_URL="https://${PRODUCTION_DOMAIN}"
 WORKER_CONCURRENCY=5
 WORKER_LEASE_DURATION_SEC=60
 MAX_PUBLISHING_RETRIES=5
+PGHOST="${PGHOST}"
+PGPORT="${PGPORT}"
+PGDATABASE="${PGDATABASE}"
+PGUSER="${PGUSER}"
+PGPASSWORD="${PGPASSWORD}"
 EOF
     chmod 600 "${ETC_DIR}/production.env"
 
@@ -338,6 +381,11 @@ APP_URL="https://${STAGING_DOMAIN}"
 WORKER_CONCURRENCY=5
 WORKER_LEASE_DURATION_SEC=60
 MAX_PUBLISHING_RETRIES=5
+PGHOST="${PGHOST}"
+PGPORT="${PGPORT}"
+PGDATABASE="${PGDATABASE}"
+PGUSER="${PGUSER}"
+PGPASSWORD="${PGPASSWORD}"
 EOF
     chmod 600 "${ETC_DIR}/staging.env"
 

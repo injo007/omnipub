@@ -47,14 +47,19 @@ This document defines installation workflows for operators setting up fresh phys
 
 ## 4. Production-Ready System Integrations
 
-### A. Network Isolation Model
+### A. Database Isolation Model (Self-Hosted PostgreSQL)
+The platform replaces external Firestore cloud dependence with a local, self-contained PostgreSQL instance running alongside the application.
+-   **Auto-Migration & Schema Setup**: On the very first boot of the application service, the app's internal database initialization engine connects to PostgreSQL, creates all standard relational tables (such as `articles`, `writers`, `feeds`, etc.), and migrates any existing local cache (`db.json`) completely and automatically.
+-   **Security Configuration**: PGPASSWORD and other credentials are encrypted at rest using the standard AES-256-CBC engine with the `CREDENTIALS_VAULT_KEY` parameter.
+
+### B. Network Isolation Model
 The master installer configures four isolated Docker bridge networks to guarantee staging and production container environments never cross-talk or share routes:
 -   **`editorial-production-internal`**: Dedicated to the production application and production database connections.
 -   **`editorial-production-proxy`**: Bridges the production front-facing Caddy edge server and external internet endpoints.
 -   **`editorial-staging-internal`**: Sandbox-only internal app network.
 -   **`editorial-staging-proxy`**: Front-facing Caddy routing for staging endpoints.
 
-### B. Systemd Daemon Integration
+### C. Systemd Daemon Integration
 To ensure absolute service persistence, self-healing, and concurrency limits across worker processes, the platform installs Systemd service templates under `/etc/editorial-platform/templates/` utilizing these parameters:
 -   `Restart=always`: Automates instant service recovery upon container or engine crash.
 -   `RestartSec=10`: Spreading engine restarts safely to prevent crash-loops.

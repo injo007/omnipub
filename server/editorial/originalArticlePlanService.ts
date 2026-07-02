@@ -80,7 +80,15 @@ Return a JSON object conforming precisely to this schema:
     let textToParse = typeof response.text === "string" ? response.text : JSON.stringify(response);
     if (typeof textToParse === "string") {
       textToParse = textToParse.replace(/<think>[\s\S]*?<\/think>/gi, "");
-      textToParse = textToParse.replace(/<think>[\s\S]*/gi, "");
+      if (textToParse.includes("<think>")) {
+        const jsonStart = textToParse.indexOf("{");
+        const thinkStart = textToParse.indexOf("<think>");
+        if (jsonStart !== -1 && jsonStart > thinkStart) {
+          textToParse = textToParse.substring(jsonStart);
+        } else {
+          textToParse = textToParse.replace(/<think>[\s\S]*/gi, "");
+        }
+      }
       textToParse = textToParse.trim();
       if (textToParse.startsWith("```")) {
         textToParse = textToParse.replace(/^```[a-zA-Z]*\n?([\s\S]*?)\n?```$/g, "$1");

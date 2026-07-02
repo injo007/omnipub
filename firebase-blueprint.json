@@ -199,12 +199,31 @@
         "details": { "type": "object", "description": "Arbitrary details or payload of the event" }
       },
       "required": ["id", "timestamp", "type", "details"]
+    },
+    "CustomDiscoveredFeed": {
+      "title": "Custom Discovered RSS Feed",
+      "description": "A customized feed item discovered dynamically using keyword targeting",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique feed ID" },
+        "name": { "type": "string", "description": "Display name of the discovered feed" },
+        "url": { "type": "string", "format": "uri", "description": "Discovered feed URL" },
+        "description": { "type": "string", "description": "Feed description" },
+        "niche": { "type": "string", "description": "Associated niche slug ID" },
+        "rank": { "type": "number", "description": "Search discovery relevance rank" },
+        "isCustom": { "type": "boolean", "description": "Explicit custom discovery status flag" }
+      },
+      "required": ["id", "name", "url", "niche", "isCustom"]
     }
   },
   "firestore": {
     "auditLogs/{logId}": {
       "schema": "AuditLog",
       "description": "System audit and security event logs"
+    },
+    "customDiscoveredFeeds/{feedId}": {
+      "schema": "CustomDiscoveredFeed",
+      "description": "Dynamically discovered high-opportunity RSS feeds"
     },
     "writers/{writerId}": {
       "schema": "Writer",
