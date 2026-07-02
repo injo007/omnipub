@@ -11135,7 +11135,7 @@ appRouter.post("/api/articles/clear", async (req, res) => {
     await forceResetQuotaState();
     const db = readDB();
 
-    // 1. Articles Clear (both local and Firestore) - query Firestore directly to bypass any local array sync issue
+    // 1. Articles Clear (both local and Firestore/PostgreSQL)
     if (firestoreDb) {
       try {
         const snap = await safeGetDocs(collection(firestoreDb, "articles"));
@@ -11148,9 +11148,17 @@ appRouter.post("/api/articles/clear", async (req, res) => {
         console.warn("⚠️ Failed to wipe Firestore articles collection directly:", err.message);
       }
     }
+    const pgPool = getPgPool();
+    if (pgPool) {
+      try {
+        await pgPool.query("DELETE FROM articles");
+      } catch (err: any) {
+        console.warn("⚠️ Failed to wipe PostgreSQL articles table directly:", err.message);
+      }
+    }
     db.articles = [];
 
-    // 2. Suggested Sources Clear (both local and Firestore)
+    // 2. Suggested Sources Clear
     if (firestoreDb) {
       try {
         const snap = await safeGetDocs(collection(firestoreDb, "suggestedSources"));
@@ -11163,9 +11171,16 @@ appRouter.post("/api/articles/clear", async (req, res) => {
         console.warn("⚠️ Failed to wipe Firestore suggestedSources collection directly:", err.message);
       }
     }
+    if (pgPool) {
+      try {
+        await pgPool.query("DELETE FROM suggested_sources");
+      } catch (err: any) {
+        console.warn("⚠️ Failed to wipe PostgreSQL suggested_sources table directly:", err.message);
+      }
+    }
     db.suggestedSources = [];
 
-    // 3. Editorial Board Candidates Clear (both local and Firestore)
+    // 3. Editorial Board Candidates Clear
     if (firestoreDb) {
       try {
         const snap = await safeGetDocs(collection(firestoreDb, "candidates"));
@@ -11178,9 +11193,16 @@ appRouter.post("/api/articles/clear", async (req, res) => {
         console.warn("⚠️ Failed to wipe Firestore candidates collection directly:", err.message);
       }
     }
+    if (pgPool) {
+      try {
+        await pgPool.query("DELETE FROM candidates");
+      } catch (err: any) {
+        console.warn("⚠️ Failed to wipe PostgreSQL candidates table directly:", err.message);
+      }
+    }
     db.candidates = [];
 
-    // 4. Notifications Clear (both local and Firestore)
+    // 4. Notifications Clear
     if (firestoreDb) {
       try {
         const snap = await safeGetDocs(collection(firestoreDb, "notifications"));
@@ -11193,13 +11215,20 @@ appRouter.post("/api/articles/clear", async (req, res) => {
         console.warn("⚠️ Failed to wipe Firestore notifications collection directly:", err.message);
       }
     }
+    if (pgPool) {
+      try {
+        await pgPool.query("DELETE FROM notifications");
+      } catch (err: any) {
+        console.warn("⚠️ Failed to wipe PostgreSQL notifications table directly:", err.message);
+      }
+    }
     db.notifications = [];
 
     // 5. EXCLUDE ENTIRELY: writers (editorial profiles), niches (categories), feeds (RSS sources), settings, and users
     // Writers, niches, and RSS feeds must be fully excluded and preserved per user specification.
     // We leave db.writers, db.feeds, db.niches, db.settings, and db.users intact.
 
-    // 6. Custom Skills Clear (Reset skills back to DEFAULT_SKILLS and clean custom skill ids from Firestore)
+    // 6. Custom Skills Clear (Reset skills back to DEFAULT_SKILLS and clean custom skill ids from Firestore/PostgreSQL)
     const defaultSkillIds = new Set(DEFAULT_SKILLS.map(s => s.id));
     if (firestoreDb) {
       try {
@@ -11215,15 +11244,37 @@ appRouter.post("/api/articles/clear", async (req, res) => {
         console.warn("⚠️ Failed to wipe Firestore custom skills collection directly:", err.message);
       }
     }
+    if (pgPool) {
+      try {
+        await pgPool.query("DELETE FROM skills");
+        for (const skill of DEFAULT_SKILLS) {
+          await persistToPostgres("skills", skill.id, skill);
+        }
+      } catch (err: any) {
+        console.warn("⚠️ Failed to wipe PostgreSQL custom skills directly:", err.message);
+      }
+    }
     db.skills = JSON.parse(JSON.stringify(DEFAULT_SKILLS));
 
     // 7. General Discovery Cache Clear
     db.customDiscoveredFeeds = [];
     db.deletedDiscoveryUrls = [];
+    if (pgPool) {
+      try {
+        await pgPool.query("DELETE FROM custom_discovered_feeds");
+        await pgPool.query("DELETE FROM deleted_discovery_urls");
+      } catch (e) {}
+    }
 
     // 8. Telemetry Logs Clear
     db.auditLogs = [];
     db.usageLogs = {};
+    if (pgPool) {
+      try {
+        await pgPool.query("DELETE FROM audit_logs");
+        await pgPool.query("DELETE FROM usage_logs");
+      } catch (e) {}
+    }
 
     writeDB(db);
     res.json({ success: true, articles: [], writers: db.writers, suggestedSources: [], candidates: [], skills: db.skills });
@@ -11262,6 +11313,21 @@ appRouter.post("/api/articles/clear-except-pushed", async (req, res) => {
       }
     }
 
+    const pgPool = getPgPool();
+    if (pgPool) {
+      try {
+        const resPg = await pgPool.query("SELECT id, data FROM articles");
+        for (const row of resPg.rows) {
+          const a = typeof row.data === "string" ? JSON.parse(row.data) : row.data;
+          if (a && !isPushedToWP(a)) {
+            await pgPool.query("DELETE FROM articles WHERE id = $1", [row.id]);
+          }
+        }
+      } catch (err: any) {
+        console.warn("⚠️ Failed to clear non-pushed articles from PostgreSQL:", err.message);
+      }
+    }
+
     // 2. Also clear non-pushed articles from local state to maintain consistency
     db.articles = (db.articles || []).filter(a => isPushedToWP(a));
     writeDB(db);
@@ -11294,6 +11360,21 @@ appRouter.post("/api/articles/clear-pushed", async (req, res) => {
       }
     }
 
+    const pgPool = getPgPool();
+    if (pgPool) {
+      try {
+        const resPg = await pgPool.query("SELECT id, data FROM articles");
+        for (const row of resPg.rows) {
+          const a = typeof row.data === "string" ? JSON.parse(row.data) : row.data;
+          if (a && isPushedToWP(a)) {
+            await pgPool.query("DELETE FROM articles WHERE id = $1", [row.id]);
+          }
+        }
+      } catch (err: any) {
+        console.warn("⚠️ Failed to clear pushed articles from PostgreSQL:", err.message);
+      }
+    }
+
     // 2. Also clear pushed articles from local state
     db.articles = (db.articles || []).filter(a => !isPushedToWP(a));
     writeDB(db);
@@ -11301,6 +11382,166 @@ appRouter.post("/api/articles/clear-pushed", async (req, res) => {
   } catch (err: any) {
     console.error("Failed to clear pushed articles:", err);
     res.status(500).json({ error: err.message || "Failed to clear articles" });
+  }
+});
+
+appRouter.post("/api/articles/clear-all", async (req, res) => {
+  try {
+    await forceResetQuotaState();
+
+    // 1. Clear Firestore collections (if active)
+    if (firestoreDb) {
+      const collectionsToWipe = [
+        "articles", "suggestedSources", "candidates", "notifications",
+        "skills", "customDiscoveredFeeds", "deletedDiscoveryUrls",
+        "auditLogs", "usageLogs", "niches", "writers", "feeds", "settings", "users"
+      ];
+      for (const col of collectionsToWipe) {
+        try {
+          const snap = await safeGetDocs(collection(firestoreDb, col));
+          const deletePromises: Promise<any>[] = [];
+          snap.forEach((doc: any) => {
+            deletePromises.push(removeFromFirestore(col, doc.id));
+          });
+          await Promise.all(deletePromises);
+        } catch (err: any) {
+          console.warn(`⚠️ Failed to wipe Firestore collection ${col}:`, err.message);
+        }
+      }
+    }
+
+    // 2. Clear PostgreSQL tables (if active)
+    const pgPool = getPgPool();
+    if (pgPool) {
+      const tablesToWipe = [
+        "articles", "suggested_sources", "candidates", "notifications",
+        "custom_discovered_feeds", "deleted_discovery_urls", "usage_logs",
+        "audit_logs", "skills", "niches", "writers", "feeds", "settings", "users"
+      ];
+      for (const table of tablesToWipe) {
+        try {
+          await pgPool.query(`DELETE FROM ${table}`);
+        } catch (err: any) {
+          console.warn(`⚠️ Failed to wipe PostgreSQL table ${table}:`, err.message);
+        }
+      }
+    }
+
+    // 3. Reconstruct the pristine LocalDB
+    const pristineDB: LocalDB = {
+      writers: JSON.parse(JSON.stringify(DEFAULT_WRITERS)),
+      feeds: JSON.parse(JSON.stringify(DEFAULT_FEEDS)),
+      articles: JSON.parse(JSON.stringify(INITIAL_ARTICLES)),
+      settings: JSON.parse(JSON.stringify(DEFAULT_SETTINGS)),
+      suggestedSources: classifyAndScheduleArticles(PRELOADED_FALLBACK_FEED_ITEMS),
+      skills: JSON.parse(JSON.stringify(DEFAULT_SKILLS)),
+      niches: [],
+      users: [],
+      customDiscoveredFeeds: [],
+      deletedDiscoveryUrls: [],
+      auditLogs: [],
+      usageLogs: {},
+      notifications: []
+    };
+
+    // 4. Persist the pristine state to Firestore or PostgreSQL
+    if (firestoreDb) {
+      try {
+        await safeSetDoc(doc(firestoreDb, "settings", "saas"), pristineDB.settings);
+        for (const w of pristineDB.writers) {
+          await safeSetDoc(doc(firestoreDb, "writers", w.id), cleanUndefined(w));
+        }
+        for (const f of pristineDB.feeds) {
+          await safeSetDoc(doc(firestoreDb, "feeds", f.id), cleanUndefined(f));
+        }
+        for (const s of pristineDB.skills) {
+          await safeSetDoc(doc(firestoreDb, "skills", s.id), cleanUndefined(s));
+        }
+        for (const src of pristineDB.suggestedSources || []) {
+          await safeSetDoc(doc(firestoreDb, "suggestedSources", src.id), cleanUndefined(src));
+        }
+        for (const a of pristineDB.articles) {
+          await safeSetDoc(doc(firestoreDb, "articles", a.id), cleanUndefined(a));
+        }
+      } catch (err: any) {
+        console.error("Failed to seed Firestore with pristine state:", err.message);
+      }
+    }
+
+    if (pgPool) {
+      try {
+        // Settings
+        await pgPool.query(`
+          INSERT INTO settings (id, data, updated_at)
+          VALUES ('saas', $1, CURRENT_TIMESTAMP)
+          ON CONFLICT (id) DO UPDATE SET data = $1, updated_at = CURRENT_TIMESTAMP
+        `, [JSON.stringify(pristineDB.settings)]);
+
+        // Writers
+        for (const w of pristineDB.writers) {
+          await pgPool.query(`
+            INSERT INTO writers (id, data, updated_at)
+            VALUES ($1, $2, CURRENT_TIMESTAMP)
+            ON CONFLICT (id) DO UPDATE SET data = $2, updated_at = CURRENT_TIMESTAMP
+          `, [w.id, JSON.stringify(w)]);
+        }
+
+        // Feeds
+        for (const f of pristineDB.feeds) {
+          await pgPool.query(`
+            INSERT INTO feeds (id, data, updated_at)
+            VALUES ($1, $2, CURRENT_TIMESTAMP)
+            ON CONFLICT (id) DO UPDATE SET data = $2, updated_at = CURRENT_TIMESTAMP
+          `, [f.id, JSON.stringify(f)]);
+        }
+
+        // Skills
+        for (const s of pristineDB.skills) {
+          await pgPool.query(`
+            INSERT INTO skills (id, data, updated_at)
+            VALUES ($1, $2, CURRENT_TIMESTAMP)
+            ON CONFLICT (id) DO UPDATE SET data = $2, updated_at = CURRENT_TIMESTAMP
+          `, [s.id, JSON.stringify(s)]);
+        }
+
+        // Suggested Sources
+        for (const src of pristineDB.suggestedSources || []) {
+          await pgPool.query(`
+            INSERT INTO suggested_sources (id, data, updated_at)
+            VALUES ($1, $2, CURRENT_TIMESTAMP)
+            ON CONFLICT (id) DO UPDATE SET data = $2, updated_at = CURRENT_TIMESTAMP
+          `, [src.id, JSON.stringify(src)]);
+        }
+
+        // Articles
+        for (const a of pristineDB.articles) {
+          await pgPool.query(`
+            INSERT INTO articles (id, data, updated_at)
+            VALUES ($1, $2, CURRENT_TIMESTAMP)
+            ON CONFLICT (id) DO UPDATE SET data = $2, updated_at = CURRENT_TIMESTAMP
+          `, [a.id, JSON.stringify(a)]);
+        }
+      } catch (err: any) {
+        console.error("Failed to seed PostgreSQL with pristine state:", err.message);
+      }
+    }
+
+    // 5. Write to local file DB
+    writeDB(pristineDB);
+
+    res.json({
+      success: true,
+      articles: pristineDB.articles,
+      writers: pristineDB.writers,
+      feeds: pristineDB.feeds,
+      niches: pristineDB.niches,
+      suggestedSources: pristineDB.suggestedSources,
+      skills: pristineDB.skills,
+      settings: pristineDB.settings
+    });
+  } catch (err: any) {
+    console.error("Failed to perform Full Database Factory Reset:", err);
+    res.status(500).json({ error: err.message || "Failed to perform database factory reset." });
   }
 });
 

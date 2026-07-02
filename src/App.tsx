@@ -964,6 +964,7 @@ export default function App() {
   const [showWipeConfirm, setShowWipeConfirm] = useState<boolean>(false);
   const [showClearSavedConfirm, setShowClearSavedConfirm] = useState<boolean>(false);
   const [showClearPushedConfirm, setShowClearPushedConfirm] = useState<boolean>(false);
+  const [showFactoryResetConfirm, setShowFactoryResetConfirm] = useState<boolean>(false);
 
   // Filter & Search States
   const [draftSearchQuery, setDraftSearchQuery] = useState<string>("");
@@ -7456,7 +7457,7 @@ export default function App() {
                           </span>
                         </div>
 
-                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
                           {/* Option 1: Clean Saved Articles (Except Pushed) */}
                           <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:border-rose-500/20 rounded-xl p-4 flex flex-col justify-between space-y-4 text-left shadow-sm group transition-all duration-200">
                             <div className="space-y-2">
@@ -7657,6 +7658,77 @@ export default function App() {
                                   className="w-full py-2 bg-rose-50 hover:bg-rose-100 dark:bg-rose-950/20 dark:hover:bg-rose-950/40 text-rose-600 dark:text-rose-400 font-mono text-[9px] font-extrabold uppercase tracking-widest border border-rose-100 dark:border-rose-900/30 rounded-lg transition-all duration-200 cursor-pointer"
                                 >
                                   💥 Hard Reset Application
+                                </button>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* Option 4: Factory Hard Reset (Nuclear option to restore default preloads & blank slates) */}
+                          <div className="bg-rose-950/10 dark:bg-rose-950/20 border-2 border-dashed border-rose-500/30 hover:border-rose-500/60 rounded-xl p-4 flex flex-col justify-between space-y-4 text-left shadow-sm group transition-all duration-200">
+                            <div className="space-y-2">
+                              <div className="flex items-center justify-between">
+                                <span className="p-1.5 bg-rose-600 text-white rounded-lg group-hover:scale-105 transition-transform">
+                                  <ShieldAlert className="w-4 h-4 text-white" />
+                                </span>
+                                <span className="text-[8px] font-bold text-rose-500 uppercase tracking-widest font-mono">
+                                  Level: Nuclear
+                                </span>
+                              </div>
+                              <div className="flex flex-col text-left">
+                                <span className="font-extrabold text-xs text-rose-500 uppercase tracking-wide">
+                                  💥 Factory Hard Reset
+                                </span>
+                                <span className="text-[9.5px] text-slate-500 dark:text-slate-400 leading-relaxed mt-1 font-sans">
+                                  Purges absolutely everything (articles, sources, candidate pools, metrics, notifications, custom skills, <strong className="text-rose-600 dark:text-rose-400 font-bold">plus all Niches, Writers, RSS feeds, settings, and users</strong>) across local file caches, Firestore, and PostgreSQL. Restores pristine installer state.
+                                </span>
+                              </div>
+                            </div>
+
+                            <div className="pt-2">
+                              {showFactoryResetConfirm ? (
+                                <div className="space-y-2 p-2.5 bg-rose-600/10 border border-rose-500/30 rounded-lg text-left">
+                                  <p className="text-[9.5px] text-rose-600 dark:text-rose-400 font-bold leading-normal">
+                                    🛑 ABSOLUTE DANGER! This will wipe every single data table/collection on the active PostgreSQL database, local cache, and Firestore instance. This is irreversible and destroys your complete profile structure. Reset now?
+                                  </p>
+                                  <div className="flex gap-2">
+                                    <button
+                                      type="button"
+                                      onClick={async () => {
+                                        try {
+                                          const res = await fetch("/api/articles/clear-all", { method: "POST" });
+                                          if (res.ok) {
+                                            setArticles([]);
+                                            await fetchConfig();
+                                            await fetchNotifications();
+                                            if (typeof fetchRealSaaSStats === "function") {
+                                              await fetchRealSaaSStats();
+                                            }
+                                            setShowFactoryResetConfirm(false);
+                                          }
+                                        } catch (err) {
+                                          console.error("Failed to perform factory reset:", err);
+                                        }
+                                      }}
+                                      className="flex-1 py-1 px-2.5 bg-rose-700 hover:bg-rose-800 text-white font-bold text-[9.5px] rounded-md cursor-pointer text-center"
+                                    >
+                                      DESTROY ALL DATA
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => setShowFactoryResetConfirm(false)}
+                                      className="px-2.5 py-1 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-bold text-[9.5px] rounded-md cursor-pointer"
+                                    >
+                                      Cancel
+                                    </button>
+                                  </div>
+                                </div>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() => setShowFactoryResetConfirm(true)}
+                                  className="w-full py-2 bg-rose-600 hover:bg-rose-700 text-white font-mono text-[9px] font-extrabold uppercase tracking-widest rounded-lg shadow-sm transition-all duration-200 cursor-pointer text-center border-0"
+                                >
+                                  💀 Nuclear Factory Reset
                                 </button>
                               )}
                             </div>
