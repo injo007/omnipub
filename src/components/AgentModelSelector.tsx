@@ -25,7 +25,7 @@ export function AgentModelSelector({
   optionsMode = "text",
   children
 }: AgentModelSelectorProps & { children?: React.ReactNode }) {
-  const modelValue = settings[modelKey] || (optionsMode === "image" ? "imagen-4.0-generate-001" : "gemini-3.5-flash");
+  const modelValue = settings[modelKey] || (optionsMode === "image" ? "MiniMax-M3" : "openrouter/owl-alpha");
   const fallbackModelValue = settings[fallbackModelKey] || "global";
 
   const renderOptions = () => {

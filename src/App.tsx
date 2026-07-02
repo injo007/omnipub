@@ -638,26 +638,34 @@ export default function App() {
       openrouterApiKey: "",
       minimaxApiKey: "",
       clarityApiKey: "",
-      researchModel: "gemini-2.5-flash",
-      researchCustomModel: "moonshotai/kimi-k2.6:free",
-      draftModel: "gemini-2.5-pro",
-      draftCustomModel: "openrouter/free",
-      humanizeModel: "gemini-2.5-flash",
-      humanizeCustomModel: "nvidia/nemotron-3-super-120b-a12b:free",
-      seoModel: "gemini-2.5-flash",
-      imageModel: "imagen-3.0-generate-001",
-      imageFallbackModel: "nanobana",
-      imageCustomModel: "imagen-3.0-generate-001",
+      researchModel: "openrouter/owl-alpha",
+      researchCustomModel: "openrouter/owl-alpha",
+      draftModel: "MiniMax-M3",
+      draftCustomModel: "MiniMax-M3",
+      humanizeModel: "MiniMax-M3",
+      humanizeCustomModel: "MiniMax-M3",
+      seoModel: "openai/gpt-oss-120b:free",
+      seoCustomModel: "openai/gpt-oss-120b:free",
+      originalityModel: "openai/gpt-oss-120b:free",
+      originalityCustomModel: "openai/gpt-oss-120b:free",
+      validationModel: "openrouter/owl-alpha",
+      validationCustomModel: "openrouter/owl-alpha",
+      copilotSynthesisModel: "openrouter/owl-alpha",
+      copilotSynthesisCustomModel: "openrouter/owl-alpha",
+      globalFallbackModel: "openrouter/owl-alpha",
+      imageModel: "MiniMax-M3",
+      imageFallbackModel: "MiniMax-M3",
+      imageCustomModel: "MiniMax-M3",
       aiImagePreferred: true,
       minHumanScoreTarget: 95,
       maxConcurrentAgents: 3,
       openrouterCustomModel: "deepseek/deepseek-chat",
-      discoveryModel: "gemini-2.5-flash",
-      discoveryCustomModel: "google/gemini-2.5-flash",
+      discoveryModel: "openrouter/owl-alpha",
+      discoveryCustomModel: "openrouter/owl-alpha",
       discoveryFallbackModel: "global",
       discoveryFallbackCustomModel: "",
-      nicheDiscoveryModel: "gemini-2.5-flash",
-      nicheDiscoveryCustomModel: "google/gemini-2.5-flash",
+      nicheDiscoveryModel: "openrouter/owl-alpha",
+      nicheDiscoveryCustomModel: "openrouter/owl-alpha",
       nicheDiscoveryFallbackModel: "global",
       nicheDiscoveryFallbackCustomModel: "",
     },
@@ -6995,7 +7003,7 @@ export default function App() {
                                   Unified Fallback Model ID
                                 </label>
                                 <select
-                                  value={saasConfig.modelSettings.globalFallbackModel || "gemini-2.5-flash"}
+                                  value={saasConfig.modelSettings.globalFallbackModel || "openrouter/owl-alpha"}
                                   onChange={(e) => {
                                     const val = e.target.value;
                                     setSaasConfig((prev: any) => ({
@@ -7175,7 +7183,7 @@ export default function App() {
                               Unified Fallback Model ID
                             </label>
                             <select
-                              value={saasConfig.modelSettings.globalFallbackModel || "gemini-2.5-flash"}
+                              value={saasConfig.modelSettings.globalFallbackModel || "openrouter/owl-alpha"}
                               onChange={(e) => {
                                 const val = e.target.value;
                                 setSaasConfig((prev: any) => ({
@@ -10475,7 +10483,7 @@ export default function App() {
                                                     </span>
                                                     <span className="flex items-center gap-1.5 font-sans">
                                                       <span className="text-[7.5px] bg-slate-900 border border-slate-800 text-indigo-300 px-1 py-0.5 rounded uppercase font-mono">
-                                                        {log.modelActuallyUsed || log.modelRequested || "gemini-2.5-flash"}
+                                                        {log.modelActuallyUsed || log.modelRequested || "openrouter/owl-alpha"}
                                                       </span>
                                                       <span>
                                                         {new Date(

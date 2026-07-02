@@ -2168,7 +2168,7 @@ const DEFAULT_SETTINGS = {
     copilotSynthesisModel: "openrouter/owl-alpha",
     copilotSynthesisCustomModel: "openrouter/owl-alpha",
     fallbackEnabled: true,
-    globalFallbackModel: "gemini-2.5-flash",
+    globalFallbackModel: "openrouter/owl-alpha",
     imageModel: "MiniMax-M3",
     imageCustomModel: "MiniMax-M3",
     aiImagePreferred: true,
@@ -2176,36 +2176,36 @@ const DEFAULT_SETTINGS = {
     minHumanScoreTarget: 95,
     maxConcurrentAgents: 3,
     openrouterCustomModel: "deepseek/deepseek-chat",
-    discoveryModel: "gemini-2.5-flash",
-    discoveryCustomModel: "google/gemini-2.5-flash",
+    discoveryModel: "openrouter/owl-alpha",
+    discoveryCustomModel: "openrouter/owl-alpha",
     discoveryFallbackModel: "global",
     discoveryFallbackCustomModel: "",
-    nicheDiscoveryModel: "gemini-2.5-flash",
-    nicheDiscoveryCustomModel: "google/gemini-2.5-flash",
+    nicheDiscoveryModel: "openrouter/owl-alpha",
+    nicheDiscoveryCustomModel: "openrouter/owl-alpha",
     nicheDiscoveryFallbackModel: "global",
     nicheDiscoveryFallbackCustomModel: "",
     // Enterprise Pipelines mapping agent steps to models
     pipelines: {
       cheap: {
-        research: "gemini-2.5-flash",
-        draft: "gemini-2.5-flash",
-        editing: "gemini-2.5-flash",
-        validation: "gemini-2.5-flash",
-        seo: "gemini-2.5-flash"
+        research: "openrouter/owl-alpha",
+        draft: "MiniMax-M3",
+        editing: "MiniMax-M3",
+        validation: "openrouter/owl-alpha",
+        seo: "openai/gpt-oss-120b:free"
       },
       balanced: {
-        research: "gemini-2.5-flash",
-        draft: "gemini-2.5-pro",
-        editing: "gemini-2.5-flash",
-        validation: "gemini-2.5-flash",
-        seo: "gemini-2.5-flash"
+        research: "openrouter/owl-alpha",
+        draft: "MiniMax-M3",
+        editing: "MiniMax-M3",
+        validation: "openrouter/owl-alpha",
+        seo: "openai/gpt-oss-120b:free"
       },
       premium: {
-        research: "gemini-2.5-pro",
-        draft: "gemini-2.5-pro",
-        editing: "gemini-2.5-pro",
-        validation: "gemini-2.5-pro",
-        seo: "gemini-2.5-pro"
+        research: "openrouter/owl-alpha",
+        draft: "MiniMax-M3",
+        editing: "MiniMax-M3",
+        validation: "openrouter/owl-alpha",
+        seo: "openai/gpt-oss-120b:free"
       },
       emergency: {
         fallbackModel: "meta-llama/llama-3.3-70b-instruct"
@@ -3761,33 +3761,41 @@ function readDB(): LocalDB {
         dirty = true;
       }
       
-      // If settings use "custom-openrouter" but there is no valid OpenRouter API key, heal to Gemini defaults
-      const orApiKey = db.settings.modelSettings.openrouterApiKey;
-      const hasKey = orApiKey && orApiKey.startsWith("sk-or-") && orApiKey.length > 20;
-      if (!hasKey) {
-        if (db.settings.modelSettings.researchModel === "custom-openrouter") {
-          db.settings.modelSettings.researchModel = "gemini-2.5-flash";
-          dirty = true;
-        }
-        if (db.settings.modelSettings.draftModel === "custom-openrouter") {
-          db.settings.modelSettings.draftModel = "gemini-2.5-pro";
-          dirty = true;
-        }
-        if (db.settings.modelSettings.humanizeModel === "custom-openrouter") {
-          db.settings.modelSettings.humanizeModel = "gemini-2.5-flash";
-          dirty = true;
-        }
-        if (db.settings.modelSettings.validationModel === "custom-openrouter" || db.settings.modelSettings.validationModel === "gemini-2.5-flash") {
-          db.settings.modelSettings.validationModel = "gemini-2.5-flash";
-          dirty = true;
-        }
-        if (db.settings.modelSettings.originalityModel === "custom-openrouter" || db.settings.modelSettings.originalityModel === "gemini-2.5-flash") {
-          db.settings.modelSettings.originalityModel = "gemini-2.5-flash";
-          dirty = true;
-        }
-        if (db.settings.modelSettings.seoModel === "custom-openrouter" || db.settings.modelSettings.seoModel === "gemini-2.5-flash") {
-          db.settings.modelSettings.seoModel = "gemini-2.5-flash";
-          dirty = true;
+      const geminiApiKey = db.settings.modelSettings.geminiApiKey;
+      const hasGeminiKey = geminiApiKey && (geminiApiKey.startsWith("AIza") || geminiApiKey.startsWith("enc:"));
+      
+      // Proactively migrate any active settings that default to Gemini models when there is no valid Gemini API key
+      if (!hasGeminiKey) {
+        Object.keys(db.settings.modelSettings).forEach((key) => {
+          const val = db.settings.modelSettings[key];
+          if (typeof val === "string" && (val.includes("gemini") || val.includes("imagen") || val === "custom-openrouter" || !val)) {
+            if (key.includes("research")) {
+              db.settings.modelSettings[key] = "openrouter/owl-alpha";
+            } else if (key.includes("draft") || key.includes("humanize") || key.includes("image")) {
+              db.settings.modelSettings[key] = "MiniMax-M3";
+            } else if (key.includes("seo") || key.includes("originality")) {
+              db.settings.modelSettings[key] = "openai/gpt-oss-120b:free";
+            } else if (key.includes("validation") || key.includes("copilot") || key.includes("Fallback") || key.includes("discovery")) {
+              db.settings.modelSettings[key] = "openrouter/owl-alpha";
+            } else if (key !== "geminiApiKey" && key !== "openaiApiKey" && key !== "openrouterApiKey" && key !== "minimaxApiKey" && key !== "clarityApiKey") {
+              db.settings.modelSettings[key] = "openrouter/owl-alpha";
+            }
+            dirty = true;
+          }
+        });
+
+        // Update default pipelines as well to remove Gemini
+        if (db.settings.modelSettings.pipelines) {
+          const p = db.settings.modelSettings.pipelines;
+          ["cheap", "balanced", "premium"].forEach((plName) => {
+            if (p[plName]) {
+              if (!p[plName].research || p[plName].research.includes("gemini")) { p[plName].research = "openrouter/owl-alpha"; dirty = true; }
+              if (!p[plName].draft || p[plName].draft.includes("gemini")) { p[plName].draft = "MiniMax-M3"; dirty = true; }
+              if (!p[plName].editing || p[plName].editing.includes("gemini")) { p[plName].editing = "MiniMax-M3"; dirty = true; }
+              if (!p[plName].validation || p[plName].validation.includes("gemini")) { p[plName].validation = "openrouter/owl-alpha"; dirty = true; }
+              if (!p[plName].seo || p[plName].seo.includes("gemini")) { p[plName].seo = "openai/gpt-oss-120b:free"; dirty = true; }
+            }
+          });
         }
       }
     }
@@ -4070,67 +4078,95 @@ function getModelForAgent(agentKey: string, saasConfig: any, pipeline?: string):
     return isCustomModel(m) ? (mSettings.copilotSynthesisCustomModel || "openrouter/owl-alpha") : m;
   }
   if (agentKey === "discovery") {
-    const m = mSettings.discoveryModel || "gemini-2.5-flash";
-    return isCustomModel(m) ? (mSettings.discoveryCustomModel || "google/gemini-2.5-flash") : m;
+    const m = mSettings.discoveryModel || "openrouter/owl-alpha";
+    return isCustomModel(m) ? (mSettings.discoveryCustomModel || "openrouter/owl-alpha") : m;
   }
   if (agentKey === "nicheDiscovery") {
-    const m = mSettings.nicheDiscoveryModel || "gemini-2.5-flash";
-    return isCustomModel(m) ? (mSettings.nicheDiscoveryCustomModel || "google/gemini-2.5-flash") : m;
+    const m = mSettings.nicheDiscoveryModel || "openrouter/owl-alpha";
+    return isCustomModel(m) ? (mSettings.nicheDiscoveryCustomModel || "openrouter/owl-alpha") : m;
   }
   
   // 2. Pipeline settings fallbacks (if specific model omitted)
   const pl = pipeline ? pipeline.toLowerCase() : "balanced";
   const pConfig = mSettings.pipelines?.[pl] || mSettings.pipelines?.balanced || {};
   
+  let resultModel = "";
   switch (agentKey) {
-    case "opportunityScoring": return pConfig.validation || "openai/gpt-oss-120b:free";
-    case "researchVerification": return pConfig.research || "openrouter/owl-alpha";
-    case "seoOpportunity": return pConfig.seo || "openai/gpt-oss-120b:free";
-    case "brandVoiceWriter": return pConfig.draft || "MiniMax-M3";
-    case "naturalStyleEditor": return pConfig.editing || "MiniMax-M3";
-    case "qualitySafetyAuditor": return pConfig.validation || "openrouter/owl-alpha";
-    default: return "gemini-2.5-flash";
+    case "opportunityScoring": resultModel = pConfig.validation || "openai/gpt-oss-120b:free"; break;
+    case "researchVerification": resultModel = pConfig.research || "openrouter/owl-alpha"; break;
+    case "seoOpportunity": resultModel = pConfig.seo || "openai/gpt-oss-120b:free"; break;
+    case "brandVoiceWriter": resultModel = pConfig.draft || "MiniMax-M3"; break;
+    case "naturalStyleEditor": resultModel = pConfig.editing || "MiniMax-M3"; break;
+    case "qualitySafetyAuditor": resultModel = pConfig.validation || "openrouter/owl-alpha"; break;
+    default: resultModel = "openrouter/owl-alpha";
   }
+
+  // Absolute protection: If Gemini key is missing, never return a Gemini model!
+  const geminiApiKey = mSettings.geminiApiKey || process.env.GEMINI_API_KEY;
+  const hasGeminiKey = geminiApiKey && (geminiApiKey.startsWith("AIza") || geminiApiKey.startsWith("enc:"));
+  if (!hasGeminiKey && resultModel && (resultModel.includes("gemini") || resultModel.includes("imagen"))) {
+    if (agentKey === "brandVoiceWriter" || agentKey === "seniorEditorialOrchestrator" || agentKey === "naturalStyleEditor" || agentKey === "visualMediaDirector") {
+      return "MiniMax-M3";
+    }
+    if (agentKey === "seoOpportunity" || agentKey === "wordpressSeoPublisher" || agentKey === "originalityReadabilityValidator" || agentKey === "opportunityScoring") {
+      return "openai/gpt-oss-120b:free";
+    }
+    return "openrouter/owl-alpha";
+  }
+  return resultModel;
 }
 
 function getFallbackModelForAgent(agentKey: string, saasConfig: any): string {
   const mSettings = saasConfig?.modelSettings || saasConfig?.settings?.modelSettings || DEFAULT_SETTINGS.modelSettings;
   
   const mapping: Record<string, { model: string, custom: string }> = {
-    researchVerification: { model: mSettings.researchFallbackModel || "gemini-2.5-flash", custom: mSettings.researchFallbackCustomModel || "" },
-    strategyConfiguration: { model: mSettings.researchFallbackModel || "gemini-2.5-flash", custom: mSettings.researchFallbackCustomModel || "" },
-    brandVoiceWriter: { model: mSettings.draftFallbackModel || "gemini-2.5-flash", custom: mSettings.draftFallbackCustomModel || "" },
-    seniorEditorialOrchestrator: { model: mSettings.draftFallbackModel || "gemini-2.5-flash", custom: mSettings.draftFallbackCustomModel || "" },
-    naturalStyleEditor: { model: mSettings.humanizeFallbackModel || "gemini-2.5-flash", custom: mSettings.humanizeFallbackCustomModel || "" },
-    seoOpportunity: { model: mSettings.seoFallbackModel || "gemini-2.5-flash", custom: mSettings.seoFallbackCustomModel || "" },
-    wordpressSeoPublisher: { model: mSettings.seoFallbackModel || "gemini-2.5-flash", custom: mSettings.seoFallbackCustomModel || "" },
-    originalityReadabilityValidator: { model: mSettings.originalityFallbackModel || "gemini-2.5-flash", custom: mSettings.originalityFallbackCustomModel || "" },
-    qualitySafetyAuditor: { model: mSettings.validationFallbackModel || "gemini-2.5-flash", custom: mSettings.validationFallbackCustomModel || "" },
-    opportunityScoring: { model: mSettings.validationFallbackModel || "gemini-2.5-flash", custom: mSettings.validationFallbackCustomModel || "" },
-    visualMediaDirector: { model: mSettings.imageFallbackModel || "gemini-2.5-flash-image", custom: mSettings.imageFallbackCustomModel || "" },
-    copilotSynthesis: { model: mSettings.copilotSynthesisFallbackModel || "gemini-2.5-flash", custom: mSettings.copilotSynthesisFallbackCustomModel || "" },
-    discovery: { model: mSettings.discoveryFallbackModel || "gemini-2.5-flash", custom: mSettings.discoveryFallbackCustomModel || "" },
-    nicheDiscovery: { model: mSettings.nicheDiscoveryFallbackModel || "gemini-2.5-flash", custom: mSettings.nicheDiscoveryFallbackCustomModel || "" }
+    researchVerification: { model: mSettings.researchFallbackModel || "openrouter/owl-alpha", custom: mSettings.researchFallbackCustomModel || "" },
+    strategyConfiguration: { model: mSettings.researchFallbackModel || "openrouter/owl-alpha", custom: mSettings.researchFallbackCustomModel || "" },
+    brandVoiceWriter: { model: mSettings.draftFallbackModel || "MiniMax-M3", custom: mSettings.draftFallbackCustomModel || "" },
+    seniorEditorialOrchestrator: { model: mSettings.draftFallbackModel || "MiniMax-M3", custom: mSettings.draftFallbackCustomModel || "" },
+    naturalStyleEditor: { model: mSettings.humanizeFallbackModel || "MiniMax-M3", custom: mSettings.humanizeFallbackCustomModel || "" },
+    seoOpportunity: { model: mSettings.seoFallbackModel || "openai/gpt-oss-120b:free", custom: mSettings.seoFallbackCustomModel || "" },
+    wordpressSeoPublisher: { model: mSettings.seoFallbackModel || "openai/gpt-oss-120b:free", custom: mSettings.seoFallbackCustomModel || "" },
+    originalityReadabilityValidator: { model: mSettings.originalityFallbackModel || "openai/gpt-oss-120b:free", custom: mSettings.originalityFallbackCustomModel || "" },
+    qualitySafetyAuditor: { model: mSettings.validationFallbackModel || "openrouter/owl-alpha", custom: mSettings.validationFallbackCustomModel || "" },
+    opportunityScoring: { model: mSettings.validationFallbackModel || "openrouter/owl-alpha", custom: mSettings.validationFallbackCustomModel || "" },
+    visualMediaDirector: { model: mSettings.imageFallbackModel || "MiniMax-M3", custom: mSettings.imageFallbackCustomModel || "" },
+    copilotSynthesis: { model: mSettings.copilotSynthesisFallbackModel || "openrouter/owl-alpha", custom: mSettings.copilotSynthesisFallbackCustomModel || "" },
+    discovery: { model: mSettings.discoveryFallbackModel || "openrouter/owl-alpha", custom: mSettings.discoveryFallbackCustomModel || "" },
+    nicheDiscovery: { model: mSettings.nicheDiscoveryFallbackModel || "openrouter/owl-alpha", custom: mSettings.nicheDiscoveryFallbackCustomModel || "" }
   };
 
-  const entry = mapping[agentKey] || { model: mSettings.globalFallbackModel || "gemini-2.5-flash", custom: mSettings.globalFallbackCustomModel || "" };
+  const entry = mapping[agentKey] || { model: mSettings.globalFallbackModel || "openrouter/owl-alpha", custom: mSettings.globalFallbackCustomModel || "" };
   let targetModel = entry.model;
   let targetCustom = entry.custom;
   
   if (targetModel === "global") {
-    targetModel = mSettings.globalFallbackModel || "gemini-2.5-flash";
+    targetModel = mSettings.globalFallbackModel || "openrouter/owl-alpha";
     targetCustom = mSettings.globalFallbackCustomModel || "";
   }
   
   let target = (targetModel === "custom-openrouter" || targetModel === "openrouter-custom" || targetModel === "custom-minimax") ? targetCustom : targetModel;
   
   if (!target || target === "none" || target.toLowerCase().includes("none")) {
-    target = "gemini-3.5-flash"; // Absolute last resort internal fallback
+    target = "openrouter/owl-alpha"; // Absolute last resort internal fallback
   }
 
   // Final sanitization: ensure we never return "browser-assistant" for text fallbacks
   if (target === "browser-assistant") {
-    target = "gemini-3.5-flash";
+    target = "openrouter/owl-alpha";
+  }
+  
+  // Absolute protection: If Gemini key is missing, never return a Gemini model!
+  const geminiApiKey = mSettings.geminiApiKey || process.env.GEMINI_API_KEY;
+  const hasGeminiKey = geminiApiKey && (geminiApiKey.startsWith("AIza") || geminiApiKey.startsWith("enc:"));
+  if (!hasGeminiKey && target && (target.includes("gemini") || target.includes("imagen"))) {
+    if (agentKey === "brandVoiceWriter" || agentKey === "seniorEditorialOrchestrator" || agentKey === "naturalStyleEditor" || agentKey === "visualMediaDirector") {
+      return "MiniMax-M3";
+    }
+    if (agentKey === "seoOpportunity" || agentKey === "wordpressSeoPublisher" || agentKey === "originalityReadabilityValidator" || agentKey === "opportunityScoring") {
+      return "openai/gpt-oss-120b:free";
+    }
+    return "openrouter/owl-alpha";
   }
   
   return target;
