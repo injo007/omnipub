@@ -1867,18 +1867,22 @@ appRouter.get("/api/public/firebase-config", (req, res) => {
 // -------------------------------------------------------------
 let firestoreDb: any = null;
 
-try {
-  const configPath = path.join(process.cwd(), "firebase-applet-config.json");
-  if (fs.existsSync(configPath)) {
-    const firebaseConfig = JSON.parse(fs.readFileSync(configPath, "utf-8"));
-    const firebaseApp = initializeApp(firebaseConfig);
-    firestoreDb = getFirestore(firebaseApp, firebaseConfig.firestoreDatabaseId);
-    console.log("🔥 Firebase initialized on backend with databaseId: " + firebaseConfig.firestoreDatabaseId);
-  } else {
-    console.warn("⚠️ Firebase configuration file not found, running database in safe local mode.");
+if (getPgPool()) {
+  console.log("🐘 PostgreSQL database is configured. Skipping Firestore/Firebase database initialization entirely to guarantee PostgreSQL-only operation.");
+} else {
+  try {
+    const configPath = path.join(process.cwd(), "firebase-applet-config.json");
+    if (fs.existsSync(configPath)) {
+      const firebaseConfig = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+      const firebaseApp = initializeApp(firebaseConfig);
+      firestoreDb = getFirestore(firebaseApp, firebaseConfig.firestoreDatabaseId);
+      console.log("🔥 Firebase initialized on backend with databaseId: " + firebaseConfig.firestoreDatabaseId);
+    } else {
+      console.warn("⚠️ Firebase configuration file not found, running database in safe local mode.");
+    }
+  } catch (err: any) {
+    console.error("🔥 Failed to bootstrap Firebase on server-side:", err.message);
   }
-} catch (err: any) {
-  console.error("🔥 Failed to bootstrap Firebase on server-side:", err.message);
 }
 
 // Background persistence routines securely proxying transactions to Firestore
@@ -4956,7 +4960,11 @@ function getRecommendedWriterIdForNiche(db: any, niche: string, offset: number =
 // Basic configurations and writers
 appRouter.get("/api/config", async (req, res) => {
   try {
-    syncFromFirestore().catch(e => console.warn("⚠️ Background sync notice:", e.message));
+    if (getPgPool()) {
+      syncFromPostgres().catch(e => console.warn("⚠️ Background PostgreSQL sync notice:", e.message));
+    } else {
+      syncFromFirestore().catch(e => console.warn("⚠️ Background sync notice:", e.message));
+    }
     const db = readDB();
     
     if (!db.niches) {

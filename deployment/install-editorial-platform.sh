@@ -470,10 +470,35 @@ EOF
 name: editorial-production
 
 services:
+  db:
+    image: postgres:16-alpine
+    container_name: editorial-production-db
+    restart: always
+    environment:
+      POSTGRES_USER: "${PGUSER}"
+      POSTGRES_PASSWORD: "${PGPASSWORD}"
+      POSTGRES_DB: "${PGDATABASE}"
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    networks:
+      - editorial-production-internal
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "5"
+
   app:
     container_name: editorial-production-app
     image: editorial-platform:production
     restart: always
+    depends_on:
+      - db
     environment:
       - NODE_ENV=production
       - PORT=3000
@@ -528,6 +553,7 @@ networks:
 
 volumes:
   app-data:
+  pg-data:
   caddy-data:
   caddy-config:
 EOF
@@ -538,10 +564,35 @@ EOF
 name: editorial-staging
 
 services:
+  db:
+    image: postgres:16-alpine
+    container_name: editorial-staging-db
+    restart: always
+    environment:
+      POSTGRES_USER: "${PGUSER}"
+      POSTGRES_PASSWORD: "${PGPASSWORD}"
+      POSTGRES_DB: "${PGDATABASE}"
+    volumes:
+      - pg-staging-data:/var/lib/postgresql/data
+    networks:
+      - editorial-staging-internal
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"
+        max-file: "3"
+
   app:
     container_name: editorial-staging-app
     image: editorial-platform:staging
     restart: always
+    depends_on:
+      - db
     environment:
       - NODE_ENV=staging
       - PORT=3000
@@ -593,6 +644,7 @@ networks:
 
 volumes:
   app-staging-data:
+  pg-staging-data:
   caddy-staging-data:
   caddy-staging-config:
 EOF
