@@ -238,12 +238,195 @@ function parseInlineMarkdown(text: string): string {
   return s;
 }
 
+function applyStylesToHtmlBlock(tagName: string, blockContent: string): string {
+  if (tagName === "p") {
+    if (!blockContent.includes("style=")) {
+      return blockContent.replace(/^<p\b([^>]*)>/i, `<p style="line-height: 1.75; font-size: 16px; color: #334155; margin-bottom: 20px;"$1>`);
+    }
+  } else if (tagName.match(/^h[1-6]$/i)) {
+    const level = tagName[1];
+    const style = level === "1" 
+      ? `font-size: 28px; line-height: 1.25; font-weight: 700; color: #0f172a; margin-top: 36px; margin-bottom: 18px; letter-spacing: -0.02em;`
+      : level === "2"
+        ? `font-size: 22px; line-height: 1.35; font-weight: 600; color: #1e293b; margin-top: 32px; margin-bottom: 14px; letter-spacing: -0.015em; border-bottom: 1px solid #f1f5f9; padding-bottom: 6px;`
+        : `font-size: 18px; line-height: 1.4; font-weight: 600; color: #334155; margin-top: 24px; margin-bottom: 10px;`;
+    if (!blockContent.includes("style=")) {
+      return blockContent.replace(new RegExp(`^<h${level}\\b([^>]*)>`, "i"), `<h${level} style="${style}"$1>`);
+    }
+  } else if (tagName === "blockquote") {
+    if (!blockContent.includes("style=")) {
+      return blockContent.replace(/^<blockquote\b([^>]*)>/i, `<blockquote class="wp-block-quote" style="margin: 24px 0; padding: 16px 20px; background-color: #f8fafc; border-left: 4px solid #4f46e5; border-radius: 4px; font-style: italic; color: #475569; line-height: 1.6;"$1>`);
+    }
+  } else if (tagName === "ul") {
+    let content = blockContent;
+    if (!content.includes("style=")) {
+      content = content.replace(/^<ul\b([^>]*)>/i, `<ul style="list-style-type: disc; padding-left: 24px; margin-bottom: 20px; color: #334155;"$1>`);
+    }
+    content = content.replace(/<li\b([^>]*)>/gi, (match, attrs) => {
+      if (!attrs.includes("style=")) {
+        return `<li style="margin-bottom: 8px; line-height: 1.6;"${attrs}>`;
+      }
+      return match;
+    });
+    return content;
+  } else if (tagName === "ol") {
+    let content = blockContent;
+    if (!content.includes("style=")) {
+      content = content.replace(/^<ol\b([^>]*)>/i, `<ol style="list-style-type: decimal; padding-left: 24px; margin-bottom: 20px; color: #334155;"$1>`);
+    }
+    content = content.replace(/<li\b([^>]*)>/gi, (match, attrs) => {
+      if (!attrs.includes("style=")) {
+        return `<li style="margin-bottom: 8px; line-height: 1.6;"${attrs}>`;
+      }
+      return match;
+    });
+    return content;
+  } else if (tagName === "table") {
+    let content = blockContent;
+    content = content.replace(/^<table\b([^>]*)>/i, `<table style="width: 100%; border-collapse: collapse; text-align: left; font-family: inherit; font-size: 15px;"$1>`);
+    content = content.replace(/<thead\b([^>]*)>/gi, `<thead style="background-color: #f8fafc; border-bottom: 2px solid #e2e8f0; color: #1e293b;"$1>`);
+    content = content.replace(/<th\b([^>]*)>/gi, `<th style="padding: 14px 18px; font-weight: 600; text-transform: uppercase; font-size: 12px; tracking: 0.05em; color: #475569;"$1>`);
+    content = content.replace(/<td\b([^>]*)>/gi, `<td style="padding: 14px 18px; color: #334155;"$1>`);
+    content = content.replace(/<tr\b([^>]*)>/gi, (match, attrs) => {
+      if (!attrs.includes("style=")) {
+        return `<tr style="border-bottom: 1px solid #e2e8f0; transition: background-color 0.15s ease;"${attrs}>`;
+      }
+      return match;
+    });
+    return content;
+  }
+  return blockContent;
+}
+
+function convertHtmlToWpHtml(html: string): string {
+  if (!html) return "";
+  if (html.includes("<!-- wp:")) {
+    return html;
+  }
+
+  let remaining = html.trim();
+  const blocks: string[] = [];
+
+  while (remaining.length > 0) {
+    remaining = remaining.trim();
+    if (remaining.length === 0) break;
+
+    // Check if it starts with an HTML comment
+    if (remaining.startsWith("<!--")) {
+      const endComment = remaining.indexOf("-->");
+      if (endComment !== -1) {
+        const comment = remaining.substring(0, endComment + 3);
+        blocks.push(comment);
+        remaining = remaining.substring(endComment + 3);
+        continue;
+      }
+    }
+
+    // Check if it starts with an HTML block element
+    const match = remaining.match(/^<([a-zA-Z1-6]+)([^>]*)>/);
+    if (match) {
+      const tagName = match[1].toLowerCase();
+      const fullOpenTag = match[0];
+      
+      // If it's a self-closing/void tag like img or hr
+      if (tagName === "img" || tagName === "hr" || tagName === "br" || fullOpenTag.endsWith("/>")) {
+        const tagLength = fullOpenTag.length;
+        const blockContent = remaining.substring(0, tagLength);
+        
+        if (tagName === "img") {
+          blocks.push(`<!-- wp:image -->\n${blockContent}\n<!-- /wp:image -->`);
+        } else if (tagName === "hr") {
+          blocks.push(`<!-- wp:separator -->\n${blockContent}\n<!-- /wp:separator -->`);
+        } else {
+          blocks.push(blockContent);
+        }
+        remaining = remaining.substring(tagLength);
+        continue;
+      }
+
+      // Find the matching closing tag, taking care of nested structures if same tag name
+      const closeTag = `</${tagName}>`;
+      let searchIndex = fullOpenTag.length;
+      let depth = 1;
+      let foundClose = false;
+
+      while (searchIndex < remaining.length) {
+        const nextOpen = remaining.indexOf(`<${tagName}`, searchIndex);
+        const nextClose = remaining.indexOf(closeTag, searchIndex);
+
+        if (nextClose === -1) {
+          // No closing tag found, grab everything
+          break;
+        }
+
+        if (nextOpen !== -1 && nextOpen < nextClose) {
+          depth++;
+          searchIndex = nextOpen + `<${tagName}`.length;
+        } else {
+          depth--;
+          if (depth === 0) {
+            const blockLength = nextClose + closeTag.length;
+            const blockContent = remaining.substring(0, blockLength);
+            const styledContent = applyStylesToHtmlBlock(tagName, blockContent);
+            
+            // Wrap in Gutenberg comments based on tag
+            if (tagName === "p") {
+              blocks.push(`<!-- wp:paragraph -->\n${styledContent}\n<!-- /wp:paragraph -->`);
+            } else if (tagName.match(/^h[1-6]$/)) {
+              const level = tagName[1];
+              blocks.push(`<!-- wp:heading {"level":${level}} -->\n${styledContent}\n<!-- /wp:heading -->`);
+            } else if (tagName === "blockquote") {
+              blocks.push(`<!-- wp:quote -->\n${styledContent}\n<!-- /wp:quote -->`);
+            } else if (tagName === "table") {
+              blocks.push(`<!-- wp:table -->\n<figure class="wp-block-table"><div style="overflow-x: auto; margin: 30px 0; border: 1px solid #e2e8f0; border-radius: 8px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05);">${styledContent}</div></figure>\n<!-- /wp:table -->`);
+            } else if (tagName === "ul" || tagName === "ol") {
+              const isOrdered = tagName === "ol";
+              blocks.push(`<!-- wp:list ${isOrdered ? '{"ordered":true}' : ''} -->\n${styledContent}\n<!-- /wp:list -->`);
+            } else if (tagName === "figure") {
+              blocks.push(`<!-- wp:image -->\n${styledContent}\n<!-- /wp:image -->`);
+            } else {
+              blocks.push(styledContent);
+            }
+
+            remaining = remaining.substring(blockLength);
+            foundClose = true;
+            break;
+          } else {
+            searchIndex = nextClose + closeTag.length;
+          }
+        }
+      }
+
+      if (foundClose) {
+        continue;
+      }
+    }
+
+    // If it doesn't match a clean block tag, consume until the next '<' or end of string
+    const nextTagStart = remaining.indexOf("<", 1);
+    const consumeLength = nextTagStart === -1 ? remaining.length : nextTagStart;
+    const textBlock = remaining.substring(0, consumeLength).trim();
+    if (textBlock) {
+      blocks.push(`<!-- wp:paragraph -->\n<p>${textBlock}</p>\n<!-- /wp:paragraph -->`);
+    }
+    remaining = remaining.substring(consumeLength);
+  }
+
+  return blocks.join("\n\n");
+}
+
 function convertMarkdownToWpHtml(markdown: string): string {
   if (!markdown) return "";
   
   // If the content is already highly-structured HTML with Gutenberg blocks, return it directly!
-  if (markdown.includes("<!-- wp:") && markdown.includes("<p") && markdown.includes("<h2")) {
+  if (markdown.includes("<!-- wp:") && (markdown.includes("<p") || markdown.includes("<h2") || markdown.includes("<div"))) {
     return markdown;
+  }
+
+  // Intercept standard HTML payloads and format them beautifully using convertHtmlToWpHtml
+  const hasHtml = (markdown.includes("<p") || markdown.includes("<h2") || markdown.includes("<div") || markdown.includes("<h3") || markdown.includes("<ul") || markdown.includes("<ol") || markdown.includes("<blockquote") || markdown.includes("<table"));
+  if (hasHtml) {
+    return convertHtmlToWpHtml(markdown);
   }
   
   let rawHtml = markdown.replace(/\r\n/g, "\n");
@@ -2153,62 +2336,62 @@ const DEFAULT_SETTINGS = {
     openrouterApiKey: process.env.OPENROUTER_API_KEY || "",
     minimaxApiKey: process.env.MINIMAX_API_KEY || "",
     clarityApiKey: "",
-    researchModel: "openrouter/owl-alpha",
-    researchCustomModel: "openrouter/owl-alpha",
-    draftModel: "MiniMax-M3",
-    draftCustomModel: "MiniMax-M3",
-    humanizeModel: "MiniMax-M3",
-    humanizeCustomModel: "MiniMax-M3",
-    seoModel: "openai/gpt-oss-120b:free",
-    seoCustomModel: "openai/gpt-oss-120b:free",
-    originalityModel: "openai/gpt-oss-120b:free",
-    originalityCustomModel: "openai/gpt-oss-120b:free",
-    validationModel: "openrouter/owl-alpha",
-    validationCustomModel: "openrouter/owl-alpha",
-    copilotSynthesisModel: "openrouter/owl-alpha",
-    copilotSynthesisCustomModel: "openrouter/owl-alpha",
+    researchModel: "gemini-2.5-flash",
+    researchCustomModel: "gemini-2.5-flash",
+    draftModel: "gemini-2.5-pro",
+    draftCustomModel: "gemini-2.5-pro",
+    humanizeModel: "gemini-2.5-flash",
+    humanizeCustomModel: "gemini-2.5-flash",
+    seoModel: "gemini-2.5-flash",
+    seoCustomModel: "gemini-2.5-flash",
+    originalityModel: "gemini-2.5-flash",
+    originalityCustomModel: "gemini-2.5-flash",
+    validationModel: "gemini-2.5-flash",
+    validationCustomModel: "gemini-2.5-flash",
+    copilotSynthesisModel: "gemini-2.5-flash",
+    copilotSynthesisCustomModel: "gemini-2.5-flash",
     fallbackEnabled: true,
-    globalFallbackModel: "openrouter/owl-alpha",
-    imageModel: "MiniMax-M3",
-    imageCustomModel: "MiniMax-M3",
+    globalFallbackModel: "gemini-2.5-flash",
+    imageModel: "gemini-2.5-flash",
+    imageCustomModel: "gemini-2.5-flash",
     aiImagePreferred: true,
     inlineImageMode: "generate",
     minHumanScoreTarget: 95,
     maxConcurrentAgents: 3,
     openrouterCustomModel: "deepseek/deepseek-chat",
-    discoveryModel: "openrouter/owl-alpha",
-    discoveryCustomModel: "openrouter/owl-alpha",
+    discoveryModel: "gemini-2.5-flash",
+    discoveryCustomModel: "gemini-2.5-flash",
     discoveryFallbackModel: "global",
     discoveryFallbackCustomModel: "",
-    nicheDiscoveryModel: "openrouter/owl-alpha",
-    nicheDiscoveryCustomModel: "openrouter/owl-alpha",
+    nicheDiscoveryModel: "gemini-2.5-flash",
+    nicheDiscoveryCustomModel: "gemini-2.5-flash",
     nicheDiscoveryFallbackModel: "global",
     nicheDiscoveryFallbackCustomModel: "",
     // Enterprise Pipelines mapping agent steps to models
     pipelines: {
       cheap: {
-        research: "openrouter/owl-alpha",
-        draft: "MiniMax-M3",
-        editing: "MiniMax-M3",
-        validation: "openrouter/owl-alpha",
-        seo: "openai/gpt-oss-120b:free"
+        research: "gemini-2.5-flash",
+        draft: "gemini-2.5-flash",
+        editing: "gemini-2.5-flash",
+        validation: "gemini-2.5-flash",
+        seo: "gemini-2.5-flash"
       },
       balanced: {
-        research: "openrouter/owl-alpha",
-        draft: "MiniMax-M3",
-        editing: "MiniMax-M3",
-        validation: "openrouter/owl-alpha",
-        seo: "openai/gpt-oss-120b:free"
+        research: "gemini-2.5-flash",
+        draft: "gemini-2.5-pro",
+        editing: "gemini-2.5-flash",
+        validation: "gemini-2.5-flash",
+        seo: "gemini-2.5-flash"
       },
       premium: {
-        research: "openrouter/owl-alpha",
-        draft: "MiniMax-M3",
-        editing: "MiniMax-M3",
-        validation: "openrouter/owl-alpha",
-        seo: "openai/gpt-oss-120b:free"
+        research: "gemini-2.5-pro",
+        draft: "gemini-2.5-pro",
+        editing: "gemini-2.5-pro",
+        validation: "gemini-2.5-pro",
+        seo: "gemini-2.5-pro"
       },
       emergency: {
-        fallbackModel: "meta-llama/llama-3.3-70b-instruct"
+        fallbackModel: "gemini-2.5-flash"
       }
     },
     // Budget & Cost settings
@@ -3761,8 +3944,8 @@ function readDB(): LocalDB {
         dirty = true;
       }
       
-      const geminiApiKey = db.settings.modelSettings.geminiApiKey;
-      const hasGeminiKey = geminiApiKey && (geminiApiKey.startsWith("AIza") || geminiApiKey.startsWith("enc:"));
+      const geminiApiKey = db.settings.modelSettings.geminiApiKey || process.env.GEMINI_API_KEY;
+      const hasGeminiKey = geminiApiKey && (geminiApiKey.startsWith("AIza") || geminiApiKey.startsWith("enc:") || geminiApiKey.length > 5);
       
       // Proactively migrate any active settings that default to Gemini models when there is no valid Gemini API key
       if (!hasGeminiKey) {
@@ -3794,6 +3977,48 @@ function readDB(): LocalDB {
               if (!p[plName].editing || p[plName].editing.includes("gemini")) { p[plName].editing = "MiniMax-M3"; dirty = true; }
               if (!p[plName].validation || p[plName].validation.includes("gemini")) { p[plName].validation = "openrouter/owl-alpha"; dirty = true; }
               if (!p[plName].seo || p[plName].seo.includes("gemini")) { p[plName].seo = "openai/gpt-oss-120b:free"; dirty = true; }
+            }
+          });
+        }
+      } else {
+        // If they DO have a valid Gemini API key, upgrade any MiniMax-M3/openrouter/owl-alpha placeholders to premium Gemini!
+        Object.keys(db.settings.modelSettings).forEach((key: any) => {
+          const val = db.settings.modelSettings[key];
+          if (typeof val === "string" && (val.includes("MiniMax") || val.includes("openrouter/owl-alpha") || val.includes("openai/gpt-oss-120b") || val === "custom-minimax")) {
+            if (key.includes("research")) {
+              db.settings.modelSettings[key] = "gemini-2.5-flash";
+            } else if (key.includes("draft")) {
+              db.settings.modelSettings[key] = "gemini-2.5-pro";
+            } else if (key.includes("humanize") || key.includes("image")) {
+              db.settings.modelSettings[key] = "gemini-2.5-flash";
+            } else if (key.includes("seo") || key.includes("originality")) {
+              db.settings.modelSettings[key] = "gemini-2.5-flash";
+            } else if (key.includes("validation") || key.includes("copilot") || key.includes("Fallback") || key.includes("discovery")) {
+              db.settings.modelSettings[key] = "gemini-2.5-flash";
+            } else if (key !== "geminiApiKey" && key !== "openaiApiKey" && key !== "openrouterApiKey" && key !== "minimaxApiKey" && key !== "clarityApiKey") {
+              db.settings.modelSettings[key] = "gemini-2.5-flash";
+            }
+            dirty = true;
+          }
+        });
+
+        if (db.settings.modelSettings.pipelines) {
+          const p = db.settings.modelSettings.pipelines;
+          ["cheap", "balanced", "premium"].forEach((plName) => {
+            if (p[plName]) {
+              const mapping: Record<string, Record<string, string>> = {
+                cheap: { research: "gemini-2.5-flash", draft: "gemini-2.5-flash", editing: "gemini-2.5-flash", validation: "gemini-2.5-flash", seo: "gemini-2.5-flash" },
+                balanced: { research: "gemini-2.5-flash", draft: "gemini-2.5-pro", editing: "gemini-2.5-flash", validation: "gemini-2.5-flash", seo: "gemini-2.5-flash" },
+                premium: { research: "gemini-2.5-pro", draft: "gemini-2.5-pro", editing: "gemini-2.5-pro", validation: "gemini-2.5-pro", seo: "gemini-2.5-pro" }
+              };
+              const m = mapping[plName];
+              ["research", "draft", "editing", "validation", "seo"].forEach((step) => {
+                const current = p[plName][step];
+                if (!current || current.includes("MiniMax") || current.includes("owl-alpha") || current.includes("openai/gpt-oss-120b") || current.includes("custom-minimax")) {
+                  p[plName][step] = m[step];
+                  dirty = true;
+                }
+              });
             }
           });
         }
@@ -7783,9 +8008,8 @@ async function createPackageFromArticle(article: any, siteId: string, scheduledP
   const wordCount = (article.content || "").split(/\s+/).filter((w: string) => w.length > 0).length;
   const readingTime = Math.ceil(wordCount / 200);
 
-  // We can convert the markdown article.content to plain/rich HTML if needed,
-  // or wrap it simply.
-  const bodyHtml = article.content || "";
+  // Convert markdown to clean, standard, WordPress-ready block HTML
+  const bodyHtml = convertMarkdownToWpHtml(article.content || "");
 
   const slug = article.seo?.slug || article.title.toLowerCase().replace(/[^a-z0-9]+/g, "-");
 
@@ -8928,13 +9152,16 @@ function buildBrandVoiceWriterPrompt(editorialContext: EditorialContext, editori
   const systemPrompt = `You are an elite, multi-agent leveled Enterprise Editorial Writer Agent. Your core system identity is: [WRITER PROFILE: ${wp.name}].
 Your objective is to produce a masterful, highly original standalone longform news dispatch that reads beautifully, connects deeply with readers, and perfectly executes your active publishing brand-voice specs.
 
-COHESIVE HUMAN TONE ARCHITECTURE:
-- Voice & Tone Persona: ${wp.voiceStyle || wp.tone || "Expert Narrative Journalist"}
-- Editorial Pedigree: ${wp.bio || "Staff writer and deep-dive media analyst"}
-- Sentence Rhythm: ${wp.sentenceRhythm || "High-burstiness, human-pacing, varied clause structures"}
-- Paragraph Layout: ${wp.paragraphStyle || "Asymmetrical, journalistically staggered length formats"}
-- Spec-level guidelines to enforce: ${wp.customPromptInstruction || ""}
-${skillsIntroduction}
+DEEP HUMAN-CENTRIC NARRATIVE ARCHITECTURE & EDITORIAL NATURALNESS:
+- **Narrative Depth**: Do not just summarize facts sequentially. Weave a compelling, investigative narrative arc that captures the 'why' behind the news. Frame stories using human stakes, deep analytical curiosity, and constructive critique. Explore historical patterns, technical or cultural context, and real-world implications.
+- **Advanced Fact Integrity**: Ground every statement directly in verified claims from the Evidence Ledger. Perform active self-auditing as you write to guarantee 100% strict adherence to raw seed facts. Under no circumstances invent or generalize any claims.
+- **Cadence Burstiness & Rhythm**: Avoid a predictable machine cadence (monotonous sentence structures, repetitive transition words). Incorporate extreme sentence and paragraph variance: intersperse short, punchy, dramatic statements (e.g., "Look at the numbers.", "It gets worse.", "But why?", "Not exactly.") with elegant, complex analytical clauses. Ensure highly asymmetrical paragraph structures.
+- **Robotic Filler Stripping**: Strictly eliminate predictable phrases like "at its core," "it is important to note," "delve," "testament to," "beacon," "paving the way," "moreover," "furthermore," "in conclusion."
+
+PREMIUM VISUAL FORMATTING & SEMANTIC MARKUP:
+- **Heading Hierarchies (H2 & H3)**: Structure your article using refined, clear heading hierarchies. Use '##' (h2) for primary thematic hubs (e.g. key background, investigative insights, broader impact) and '###' (h3) for granular sub-narratives, specifications, or data breakdowns. Never skip a heading level.
+- **Elegant Pull-Quotes (<blockquote>)**: Harness '<blockquote>' or Markdown '> ' blockquotes to highlight highly engaging, dramatic, or pivotal quotes and insights from the Evidence Ledger. Place 1-2 high-impact pull-quotes throughout the article to act as visual anchors and editorial breathing room.
+- **Aesthetic Comparison Tables**: When presenting comparison metrics, specifications, timelines, or structured data, construct beautiful and highly legible Markdown tables ('| Col 1 | Col 2 |'). Keep tables crisp, scannable, and clean.
 
 CRITICAL BRAND-SAFETY & FACTUAL MANDATE:
 1. You may ONLY USE FACTS from the provided Evidence Ledger. DO NOT INVENT or hallucinate specific real-world visual event occurrences, fictitious outfits/fabrics, local venue descriptors, or fictitious crowd interactions.
@@ -8995,12 +9222,17 @@ Your primary task is to transform algorithmic drafts into warm, highly conversat
 
 To achieve this:
 - Erase all symmetrical paragraphs. Humans write with extreme burstiness: a one-line punchy sentence, followed by a longer analytical thought, followed by a moderate statement.
-- Eliminate ALL robotic transitions and "AI Tells": "At its core", "It is important to remember", "In a world where", "Moreover", "Furthermore", "In conclusion", "As we look to the future", "Not merely a X, but a Y", "Additionally", "Consequently", "Specifically".
+- Eliminate ALL robotic transitions and "AI Tells": "At its core", "It is important to remember", "In a world where", "Moreover", "Furthermore", "In conclusion", "As we look to the future", "Not merely a X, but a Y", "Additionally", "Consequently", "Specifically", "beacon", "testament to", "delve".
 - Inject genuine human voice, sarcasm/wit where appropriate, and editorial rhythm. Use rhetorical questions, brief illustrative anecdotes, and natural structural variance. Avoid parallel sentence structures or academic summaries.
+
+PREMIUM VISUAL FORMATTING & SEMANTIC MARKUP ENFORCEMENT:
+- **Refined Heading Hierarchies**: Ensure headers use logical markdown subheadings ('##' for H2 main thematic pivots, and '###' for H3 detailed breakdowns). Do not allow H3 headings to jump in without an H2 parent. Keep titles bold and descriptive.
+- **Semantic Pull-Quotes (<blockquote>)**: Convert critical statements, striking verified quotes, or core findings from the Evidence Ledger into elegant Markdown blockquotes ('> quote text'). Ensure these visual pull-quotes feel organic, premium, and impactful.
+- **Aesthetic Comparison Tables**: Formulate comparisons, specs, or summaries into clear, clean Markdown tables ('| Header | Header |'). Ensure the column titles are brief and the rows are highly scannable.
 
 CRITICAL FACTUAL POLICY:
 You are acting as an editor, NOT a researcher. You MUST NOT introduce any new names, dates, quotes, statistics, or real-world events that are not explicitly provided in the Evidence Ledger.
-DO NOT fabricate any first-person experiences, fictitious subjective opinions disguised as fact, or fake scenarios.`;
+DO NOT fabricate any first-person experiences, fictitious subjective opinions disguised as fact, or fake scenarios. Strict compliance with fact-checking is mandatory.`;
 
   const userPrompt = `Rigorously edit and polish this written draft to sound completely natural, engaging, and in line with ${wp.name}'s writer profile.
 Embrace a conversational, relatable, and authentic human tone. Erase robotic transitions, repetitive sentence patterns, and academic structures. Maintain a highly dynamic, variable cadence (< 5% AI content detection signature).

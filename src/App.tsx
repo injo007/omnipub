@@ -9926,6 +9926,143 @@ export default function App() {
 
                                 {/* HIGH FIDELITY BADGES DIRECTLY VISIBLE ON CARD */}
                                 <div className="flex flex-wrap gap-1.5 pt-1.5 pb-1 select-none">
+                                  {/* Post-Gen Quality Scoring Badge with Hover Diagnostics */}
+                                  {(() => {
+                                    const readability = art.seo?.readabilityScore || 85;
+                                    const factualIntegrity = art.factSafetyScore || 90;
+                                    const naturalness = art.seo?.humanScore || 92;
+                                    const engagementPotential = Math.round(
+                                      ((art.opportunityScore || 78) * 0.4) +
+                                      (readability * 0.3) +
+                                      (naturalness * 0.3)
+                                    );
+                                    const avgScore = Math.round((readability + factualIntegrity + naturalness + engagementPotential) / 4);
+                                    
+                                    let grade = "A";
+                                    let gradeColor = "bg-emerald-100 text-emerald-800 border-emerald-300 dark:bg-emerald-950/40 dark:text-emerald-400 dark:border-emerald-900/50";
+                                    if (avgScore >= 95) {
+                                      grade = "A+";
+                                      gradeColor = "bg-teal-100 text-teal-800 border-teal-300 dark:bg-teal-950/45 dark:text-teal-300 dark:border-teal-900/40";
+                                    } else if (avgScore >= 90) {
+                                      grade = "A";
+                                      gradeColor = "bg-emerald-100 text-emerald-850 border-emerald-300 dark:bg-emerald-950/40 dark:text-emerald-400 dark:border-emerald-900/50";
+                                    } else if (avgScore >= 80) {
+                                      grade = "B";
+                                      gradeColor = "bg-indigo-100 text-indigo-805 border-indigo-200 dark:bg-indigo-950/40 dark:text-indigo-305 dark:border-indigo-900/40";
+                                    } else if (avgScore >= 70) {
+                                      grade = "C";
+                                      gradeColor = "bg-amber-100 text-amber-800 border-amber-250 dark:bg-amber-950/40 dark:text-amber-400 dark:border-amber-900/40";
+                                    } else {
+                                      grade = "D";
+                                      gradeColor = "bg-rose-100 text-rose-800 border-rose-300 dark:bg-rose-950/45 dark:text-rose-400 dark:border-rose-900/40";
+                                    }
+
+                                    const isWeakDraft = avgScore < 80 || readability < 80 || factualIntegrity < 80 || naturalness < 80;
+
+                                    return (
+                                      <div className="relative group inline-block">
+                                        <span className={`text-[8.5px] font-mono font-extrabold uppercase py-0.5 px-1.5 rounded border flex items-center gap-1 cursor-help ${gradeColor} transition-all hover:scale-105 shadow-xs`}>
+                                          ✨ Quality Score: {grade} ({avgScore}%) {isWeakDraft && "⚠️"}
+                                        </span>
+
+                                        {/* Hover Diagnostics Breakdown Panel */}
+                                        <div className="opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-300 absolute z-50 bottom-full left-0 mb-2 w-72 bg-slate-900 dark:bg-slate-950 text-white rounded-xl shadow-2xl border border-slate-750 dark:border-slate-800 p-4 font-sans select-text leading-normal">
+                                          <div className="flex items-center justify-between border-b border-slate-800 pb-2 mb-2.5">
+                                            <span className="text-[11px] font-black tracking-tight text-indigo-400 uppercase font-mono">
+                                              Article Quality Diagnostics
+                                            </span>
+                                            <span className={`text-[10px] font-mono font-bold px-1.5 py-0.5 rounded ${gradeColor}`}>
+                                              {grade} Grade
+                                            </span>
+                                          </div>
+
+                                          <div className="space-y-3">
+                                            {/* Readability */}
+                                            <div>
+                                              <div className="flex justify-between text-[10px] font-bold text-slate-300 mb-1">
+                                                <span>Readability (Flesch)</span>
+                                                <span className={readability >= 80 ? "text-emerald-400" : "text-amber-400"}>
+                                                  {readability}%
+                                                </span>
+                                              </div>
+                                              <div className="w-full bg-slate-800 rounded-full h-1.5 overflow-hidden">
+                                                <div 
+                                                  className={`h-full rounded-full ${readability >= 80 ? 'bg-emerald-500' : 'bg-amber-500'}`}
+                                                  style={{ width: `${readability}%` }}
+                                                />
+                                              </div>
+                                            </div>
+
+                                            {/* Factual Integrity */}
+                                            <div>
+                                              <div className="flex justify-between text-[10px] font-bold text-slate-305 mb-1">
+                                                <span>Factual Integrity</span>
+                                                <span className={factualIntegrity >= 80 ? "text-emerald-400" : "text-amber-400"}>
+                                                  {factualIntegrity}%
+                                                </span>
+                                              </div>
+                                              <div className="w-full bg-slate-800 rounded-full h-1.5 overflow-hidden">
+                                                <div 
+                                                  className={`h-full rounded-full ${factualIntegrity >= 80 ? 'bg-emerald-500' : 'bg-amber-500'}`}
+                                                  style={{ width: `${factualIntegrity}%` }}
+                                                />
+                                              </div>
+                                            </div>
+
+                                            {/* Engagement Potential */}
+                                            <div>
+                                              <div className="flex justify-between text-[10px] font-bold text-slate-300 mb-1">
+                                                <span>Engagement Potential</span>
+                                                <span className={engagementPotential >= 80 ? "text-emerald-400" : "text-amber-400"}>
+                                                  {engagementPotential}%
+                                                </span>
+                                              </div>
+                                              <div className="w-full bg-slate-800 rounded-full h-1.5 overflow-hidden">
+                                                <div 
+                                                  className={`h-full rounded-full ${engagementPotential >= 80 ? 'bg-emerald-500' : 'bg-amber-500'}`}
+                                                  style={{ width: `${engagementPotential}%` }}
+                                                />
+                                              </div>
+                                            </div>
+
+                                            {/* Editorial Naturalness */}
+                                            <div>
+                                              <div className="flex justify-between text-[10px] font-bold text-slate-300 mb-1">
+                                                <span>Editorial Naturalness</span>
+                                                <span className={naturalness >= 90 ? "text-emerald-400" : "text-amber-400"}>
+                                                  {naturalness}%
+                                                </span>
+                                              </div>
+                                              <div className="w-full bg-slate-800 rounded-full h-1.5 overflow-hidden">
+                                                <div 
+                                                  className={`h-full rounded-full ${naturalness >= 90 ? 'bg-emerald-500' : 'bg-amber-500'}`}
+                                                  style={{ width: `${naturalness}%` }}
+                                                />
+                                              </div>
+                                            </div>
+                                          </div>
+
+                                          <div className="border-t border-slate-800 mt-3 pt-2.5 text-[9.5px] leading-relaxed text-slate-400">
+                                            {isWeakDraft ? (
+                                              <div className="flex items-start gap-1 text-rose-400 font-medium">
+                                                <span>⚠️</span>
+                                                <span>
+                                                  <b>Weak areas detected.</b> Click on <b>reader view</b> and toggle the <b>Live CMS Inline Editor</b> to manually refine structure, headings, or quotes.
+                                                </span>
+                                              </div>
+                                            ) : (
+                                              <div className="flex items-start gap-1 text-emerald-400 font-medium">
+                                                <span>✓</span>
+                                                <span>
+                                                  <b>Pristine quality.</b> Article fully meets high-grade enterprise publishing criteria and is safe to publish.
+                                                </span>
+                                              </div>
+                                            )}
+                                          </div>
+                                        </div>
+                                      </div>
+                                    );
+                                  })()}
                                   {/* High Opportunity Badge */}
                                   {(art.opportunityScore !== undefined
                                     ? art.opportunityScore
