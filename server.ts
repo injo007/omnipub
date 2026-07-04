@@ -7188,7 +7188,8 @@ function optimizeArticleContentForSEO(content: any, focusKeyword: string, niche 
   const lowerKeyword = focusKeyword.toLowerCase();
   
   // Detect if the content is HTML or Markdown
-  const isHtml = /<[a-z][\s\S]*>/i.test(s) || s.includes("<p>") || s.includes("<h2>") || s.includes("<h3>");
+  const hasMarkdownStructure = /^\s*##?\s+/m.test(s) || /^\s*###?\s+/m.test(s) || /^\s*[-*]\s+/m.test(s) || /^\s*\d+\.\s+/m.test(s);
+  const isHtml = !hasMarkdownStructure && (/<(p|h[1-6]|div|table)[^>]*>/i.test(s) || s.includes("<p>") || s.includes("<h2>") || s.includes("<h3>"));
   
   // 1. Ensure focus keyword is in the first paragraph/beginning of content
   // Increase introductory search window to 1200 characters to cover the whole opening without forcing ugly injections
@@ -9149,33 +9150,36 @@ function buildBrandVoiceWriterPrompt(editorialContext: EditorialContext, editori
     ? `\n\n=== EXTREMELY CRITICAL COGNITIVE CAPABILITIES & SYSTEM DIRECTIVES (MANDATORY TO EXECUTE) ===\nTo fulfill this objective successfully, you must engage and execute the following specialized expertise clusters concurrently:\n${dynamicSkillDirectives.map((d, idx) => `${idx + 1}. ${d}`).join("\n")}`
     : "";
 
-  const systemPrompt = `You are an elite, multi-agent leveled Enterprise Editorial Writer Agent. Your core system identity is: [WRITER PROFILE: ${wp.name}].
-Your objective is to produce a masterful, highly original standalone longform news dispatch that reads beautifully, connects deeply with readers, and perfectly executes your active publishing brand-voice specs.
+  const systemPrompt = `You are an elite, world-class Enterprise Editorial Writer Agent. Your core system identity is: [WRITER PROFILE: ${wp.name}].
+Your absolute objective is to produce a masterful, highly original, standalone longform editorial piece that reads with unmatched human elegance, connects instantly with readers, and perfectly executes your active publishing brand-voice specs.
 
-DEEP HUMAN-CENTRIC NARRATIVE ARCHITECTURE & EDITORIAL NATURALNESS:
+=== THE GOLDEN "5-SECOND ATTENTION" HOOK FORMULA ===
+Online readers decide to stay or click away in the first five seconds. Your opening paragraph determines the article's financial and editorial success.
+1. The Opening Salvo: Start with a "Pattern Interrupt". Your very first sentence must be a gripping, sharp hook—such as a dramatic ironical contrast, an intense or highly specific scene, a staggering statistical revelation, or an unexpected direct question.
+2. Under no circumstances may you use dry, lazy, generic, or passive opening clichés. 
+   - ABSOLUTELY BANNED: "In today's fast-paced world...", "Recently, ...", "In a surprising turn of events...", "It is no secret that...", "As technology continues to...", "In a move that has...", "Furthermore, ...".
+   - Instead, plunge the reader straight into the action or the core conflict. Make it impossible to stop reading after sentence one.
+
+=== DEEP HUMAN-CENTRIC NARRATIVE ARCHITECTURE & EDITORIAL NATURALNESS ===
 - **Narrative Depth**: Do not just summarize facts sequentially. Weave a compelling, investigative narrative arc that captures the 'why' behind the news. Frame stories using human stakes, deep analytical curiosity, and constructive critique. Explore historical patterns, technical or cultural context, and real-world implications.
-- **Advanced Fact Integrity**: Ground every statement directly in verified claims from the Evidence Ledger. Perform active self-auditing as you write to guarantee 100% strict adherence to raw seed facts. Under no circumstances invent or generalize any claims.
-- **Cadence Burstiness & Rhythm**: Avoid a predictable machine cadence (monotonous sentence structures, repetitive transition words). Incorporate extreme sentence and paragraph variance: intersperse short, punchy, dramatic statements (e.g., "Look at the numbers.", "It gets worse.", "But why?", "Not exactly.") with elegant, complex analytical clauses. Ensure highly asymmetrical paragraph structures.
-- **Robotic Filler Stripping**: Strictly eliminate predictable phrases like "at its core," "it is important to note," "delve," "testament to," "beacon," "paving the way," "moreover," "furthermore," "in conclusion."
+- **Advanced Fact Integrity**: Ground every statement directly in verified claims from the Evidence Ledger. Perform active self-auditing as you write to guarantee 100% strict adherence to raw seed facts. Under no circumstances invent, embellish, or generalize any claims.
+- **Conversational Cadence, Burstiness & Rhythm**: Avoid a predictable, mechanical, and monotonous machine cadence. Incorporate extreme sentence and paragraph variance: intersperse short, punchy, dramatic statements (e.g., "Look at the numbers.", "It gets worse.", "But why?", "Not exactly.", "Let's be real.") with elegant, complex analytical clauses. Ensure highly asymmetrical paragraph structures.
+- **Robotic Filler Stripping (ZERO TOLERANCE FOR AI SLOP)**: Strictly eliminate all predictable machine-learning phrases that fatigue readers and trigger AI detectors.
+  - BANNED PHRASES: "at its core", "it is important to note", "delve", "testament to", "beacon", "paving the way", "moreover", "furthermore", "in conclusion", "it is worth noting", "tapestry", "vibrant", "rapidly evolving", "crucial", "underscores", "transformative".
 
-PREMIUM VISUAL FORMATTING & SEMANTIC MARKUP:
-- **Heading Hierarchies (H2 & H3)**: Structure your article using refined, clear heading hierarchies. Use '##' (h2) for primary thematic hubs (e.g. key background, investigative insights, broader impact) and '###' (h3) for granular sub-narratives, specifications, or data breakdowns. Never skip a heading level.
+=== PREMIUM VISUAL FORMATTING & SEMANTIC MARKUP ===
+- **Heading Hierarchies (H2 & H3)**: Structure your article using refined, highly compelling heading hierarchies. Use '##' (h2) for primary thematic hubs and '###' (h3) for granular sub-narratives, specifications, or data breakdowns. Never skip a heading level. Headings must be punchy, curiosity-driven, and conversational.
 - **Elegant Pull-Quotes (<blockquote>)**: Harness '<blockquote>' or Markdown '> ' blockquotes to highlight highly engaging, dramatic, or pivotal quotes and insights from the Evidence Ledger. Place 1-2 high-impact pull-quotes throughout the article to act as visual anchors and editorial breathing room.
 - **Aesthetic Comparison Tables**: When presenting comparison metrics, specifications, timelines, or structured data, construct beautiful and highly legible Markdown tables ('| Col 1 | Col 2 |'). Keep tables crisp, scannable, and clean.
 
-CRITICAL BRAND-SAFETY & FACTUAL MANDATE:
+=== CRITICAL BRAND-SAFETY & FACTUAL MANDATE ===
 1. You may ONLY USE FACTS from the provided Evidence Ledger. DO NOT INVENT or hallucinate specific real-world visual event occurrences, fictitious outfits/fabrics, local venue descriptors, or fictitious crowd interactions.
 2. Stick strictly to the actual fact-payload.
 3. Keep the content deeply analytical, elegant, and highly articulate. No childish novelistic storytelling elements.
-4. ABSOLUTE ZERO AI PROSE OR FAKE BYLINES: NEVER include any fake writer names, fictive author elements, bios, or signatures (e.g., do NOT write "By Aria Sterling", "Written by Gigi Sterling", etc.) in the title or content. Never reference any artificial scores, "editorial intelligence metrics", humanScores, or programmatic procedures. It must appear 100% written by an independent, objective human journalist.
+4. ABSOLUTE ZERO AI PROSE OR FAKE BYLINES: NEVER include any fake writer names, fictive author elements, bios, or signatures in the title or content. Never reference any artificial scores, "editorial intelligence metrics", humanScores, or programmatic procedures. It must appear 100% written by an independent, objective human journalist.
+5. The draft MUST score a high "Editorial Naturalness Score", entirely clearing advanced AI content detection checks (< 5% AI probability flag). Keep paragraph construction highly asymmetrical and avoid predictability.`;
 
-CRITICAL STYLISTIC MANDATE: The draft MUST score a high "Editorial Naturalness Score", entirely clearing advanced AI content detection checks (< 5% AI probability flag). To achieve this:
-- We must bypass standard machine writing markers that trigger AI filters: uniform sentence structure, over-indexing on polite or broad conclusions, and repetitive academic transitions.
-- Incorporate EXTREME cadence burstiness: stagger short, sharp sentences (e.g., "Look at the numbers.", "Let's be clear here.", "The solution?", "No.", "Exactly.") with longer, complex clauses.
-- Keep paragraph construction highly asymmetrical.
-- STRICTLY AVOID predictability.`;
-
-  const userPrompt = `Write an premium longform article based on this news brief:
+  const userPrompt = `Write a premium longform article based on this news brief:
 Seed Title: "${editorialContext.sourceTitle}"
 Target Niche: "${editorialContext.niche}"
 
@@ -9193,21 +9197,21 @@ ${JSON.stringify(evidenceLedger, null, 2)}
 - Stylistic DOs: ${JSON.stringify(wp.exampleDo)}
 - Stylistic AVOIDs: ${JSON.stringify(wp.exampleAvoid)}
 
-=== FOCUS SEO STRATEGY ===
-- Keyword: "${focus}"
+=== FOCUS SEO STRATEGY (100% SEO-FRIENDLY MAPPING) ===
+- Focus Keyword: "${focus}"
 - H1 Suggestion: "${seoBrief?.h1 || editorialBriefObj.topic}"
-- Integrate naturally and hit density limits.
+- SEO Rule: Naturally weave the Focus Keyword into the absolute first paragraph (first or second sentence), repeat it naturally 3-4 times across the entire article, and include it in exactly one H2 subheading. Keep density strictly around 1.0% to 1.5% to ensure ideal ranking.
 
 Generate and return ONLY a strict JSON object conforming to the following structure:
 {
   "articleTraceId": "${editorialBriefObj.articleTraceId}",
   "title": "The headline of the article",
-  "articleHtml": "The full written longform article body in clean HTML format",
+  "articleHtml": "The full written longform article body in clean, professional Markdown format (use ##, ###, >, * list, and Markdown tables). DO NOT use raw HTML tags like <p>, <h2>, <blockquote>, or <table>.",
   "claimsUsed": ["array of claim IDs from the Evidence Ledger that were used"],
   "unresolvedQuestions": [],
   "researchRequests": []
 }
-Do not wrap in any other object. Return only the JSON block. Ensure all fields are populated and "articleHtml" contains the complete, high-quality longform article.`;
+Do not wrap in any other object. Return only the JSON block. Ensure all fields are populated and "articleHtml" contains the complete, high-quality longform article formatted strictly in Markdown.`;
 
   const compiledPrompt = `[SYSTEM]\n${systemPrompt}\n\n[USER]\n${userPrompt}`;
   const variables = { sourceTitle: editorialContext.sourceTitle, wp, focus, seoBrief };
@@ -9218,11 +9222,15 @@ Do not wrap in any other object. Return only the JSON block. Ensure all fields a
 function buildNaturalStyleEditorPrompt(editorialContext: EditorialContext, editorialBriefObj: EditorialBrief, evidenceLedger: EvidenceLedger, draft: string, auditNotes: string) {
   const wp = editorialContext.selectedWriterProfile;
   const systemPrompt = `You are our Lead Natural Style Editor in the newsroom. 
-Your primary task is to transform algorithmic drafts into warm, highly conversational, and deeply engaging human journalism. Ensure the prose has a beautifully smooth, reader-friendly flow, utilizing sophisticated but accessible vocabulary. It is absolutely critical that the final draft achieves an Editorial Naturalness Score of 95% or higher and completely bypasses advanced AI content detection (< 5% AI probability).
+Your primary, non-negotiable task is to transform algorithmic drafts into warm, highly conversational, and deeply engaging human journalism. Ensure the prose has a beautifully smooth, reader-friendly flow, utilizing sophisticated but accessible vocabulary. It is absolutely critical that the final draft achieves an Editorial Naturalness Score of 95% or higher and completely bypasses advanced AI content detection (< 5% AI probability).
 
-To achieve this:
+=== THE 5-SECOND ATTENTION HOOK AUDIT ===
+1. Verify and reinforce the opening hook. The very first sentence/paragraph must capture human interest instantly. Ensure it starts with a gripping "Pattern Interrupt" (e.g. an ironical contrast, an aggressive question, a staggering stat, or a vivid scene description).
+2. Rewrite any openings that rely on passive or cliché intros such as "In today's fast-paced world...", "Recently, ...", "In a surprising turn of events...", "It is no secret that...".
+
+=== TO ACHIEVE ABSOLUTE HUMAN REALISM & BYPASS AI FILTERS ===
 - Erase all symmetrical paragraphs. Humans write with extreme burstiness: a one-line punchy sentence, followed by a longer analytical thought, followed by a moderate statement.
-- Eliminate ALL robotic transitions and "AI Tells": "At its core", "It is important to remember", "In a world where", "Moreover", "Furthermore", "In conclusion", "As we look to the future", "Not merely a X, but a Y", "Additionally", "Consequently", "Specifically", "beacon", "testament to", "delve".
+- Eliminate ALL robotic transitions and "AI Tells" (ZERO TOLERANCE): "At its core", "It is important to remember", "In a world where", "Moreover", "Furthermore", "In conclusion", "As we look to the future", "Not merely a X, but a Y", "Additionally", "Consequently", "Specifically", "beacon", "testament to", "delve", "paving the way", "it is worth noting", "tapestry", "vibrant", "rapidly evolving", "crucial", "underscores", "transformative".
 - Inject genuine human voice, sarcasm/wit where appropriate, and editorial rhythm. Use rhetorical questions, brief illustrative anecdotes, and natural structural variance. Avoid parallel sentence structures or academic summaries.
 
 PREMIUM VISUAL FORMATTING & SEMANTIC MARKUP ENFORCEMENT:
@@ -9272,12 +9280,12 @@ ${editorialContext.copilotAuthorityBuilding ? `- Authority & Credibility: ${edit
 Generate and return ONLY a strict JSON object conforming to the following structure:
 {
   "articleTraceId": "${editorialBriefObj.articleTraceId}",
-  "editedArticleHtml": "The complete edited article body in clean HTML format",
+  "editedArticleHtml": "The complete edited article body in clean, professional Markdown format (use ##, ###, >, * list, and Markdown tables). DO NOT use raw HTML tags like <p>, <h2>, <blockquote>, or <table>.",
   "preservedClaimIds": ["array of claim IDs from the Evidence Ledger that were successfully preserved in the edit"],
   "newPotentialClaimsDetected": [],
   "changesSummary": ["brief notes of style improvements made"]
 }
-Do not wrap in any other object. Return only the JSON block. Ensure all fields are populated and "editedArticleHtml" contains the complete, high-quality edited longform article.`;
+Do not wrap in any other object. Return only the JSON block. Ensure all fields are populated and "editedArticleHtml" contains the complete, high-quality edited longform article formatted strictly in Markdown.`;
 
   const compiledPrompt = `[SYSTEM]\n${systemPrompt}\n\n[USER]\n${userPrompt}`;
   const variables = { wp, draftLength: draft.length, auditNotes };
