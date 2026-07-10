@@ -197,7 +197,13 @@ export function parseAndValidateResearchOutput(jsonString: string): { success: b
           contradictsClaim,
           riskLevel,
           addedByAgent,
-          notes
+          notes,
+          claimCategory: entry.claimCategory,
+          isTimeSensitive: entry.isTimeSensitive,
+          isPublishCritical: entry.isPublishCritical,
+          validUntil: entry.validUntil,
+          verificationMethod: entry.verificationMethod,
+          sourceCount: entry.sourceCount
         };
       });
     }

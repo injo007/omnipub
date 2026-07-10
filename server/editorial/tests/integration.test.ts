@@ -55,7 +55,7 @@ describe("POST /api/articles/create - Integration Flow", () => {
           text: JSON.stringify({
              articleTraceId: "trace-abc",
              title: "A Valid Title",
-             articleHtml: "<p>Item costs $50 in 2026</p><p>Bus arrives every 10 minutes</p>",
+             articleHtml: "<p>Item costs $50 in 2026</p><p>Bus arrives every 10 minutes</p><p>This is a long draft paragraph added to meet the minimal length constraint of one hundred characters required by the platform's brand-safe verification gate.</p>",
              claimsUsed: ["c1", "c2"],
              unresolvedQuestions: [],
              researchRequests: []
@@ -66,7 +66,7 @@ describe("POST /api/articles/create - Integration Flow", () => {
         return {
              text: JSON.stringify({
                articleTraceId: "trace-abc",
-               editedArticleHtml: "<p>Item costs $50 in 2026</p><p>Bus arrives every 10 minutes</p>",
+               editedArticleHtml: "<p>Item costs $50 in 2026</p><p>Bus arrives every 10 minutes</p><p>This is a long draft paragraph added to meet the minimal length constraint of one hundred characters required by the platform's brand-safe verification gate.</p>",
                preservedClaimIds: ["c1", "c2"],
                newPotentialClaimsDetected: [],
                changesSummary: []
@@ -207,7 +207,7 @@ describe("POST /api/articles/create - Integration Flow", () => {
           text: JSON.stringify({
              articleTraceId: "trace-abc",
              title: "Invalid Title",
-             articleHtml: "<p>Item costs $50 in 2026</p><p>Bus arrives every 10 minutes</p>",
+             articleHtml: "<p>Item costs $50 in 2026</p><p>Bus arrives every 10 minutes</p><p>This is a long draft paragraph added to meet the minimal length constraint of one hundred characters required by the platform's brand-safe verification gate.</p>",
              claimsUsed: ["c1", "unknown-claim-id"]
           })
         };
@@ -230,7 +230,7 @@ describe("POST /api/articles/create - Integration Flow", () => {
         return {
              text: JSON.stringify({
                articleTraceId: "trace-abc",
-               editedArticleHtml: "<p>Item costs $50 in 2026</p>",
+               editedArticleHtml: "<p>Item costs $50 in 2026</p><p>This is a long draft paragraph added to meet the minimal length constraint of one hundred characters required by the platform's brand-safe verification gate.</p>",
                preservedClaimIds: ["unknown-claim"],
                newPotentialClaimsDetected: [],
                changesSummary: []
@@ -255,7 +255,7 @@ describe("POST /api/articles/create - Integration Flow", () => {
           text: JSON.stringify({
              articleTraceId: "trace-abc",
              title: "Invalid Title",
-             articleHtml: "<p>Item costs $50 in 2026</p><p>unsupported factual sentence</p>",
+             articleHtml: "<p>Item costs $50 in 2026</p><p>unsupported factual sentence</p><p>This is a long draft paragraph added to meet the minimal length constraint of one hundred characters required by the platform's brand-safe verification gate.</p>",
              claimsUsed: ["c1", "c2"]
           })
         };
@@ -278,7 +278,7 @@ describe("POST /api/articles/create - Integration Flow", () => {
         return {
              text: JSON.stringify({
                articleTraceId: "trace-abc",
-               editedArticleHtml: "<p>I stayed at the property last summer and found the rooms exceptionally quiet.</p>",
+               editedArticleHtml: "<p>I stayed at the property last summer and found the rooms exceptionally quiet. This is a long draft paragraph added to meet the minimal length constraint of one hundred characters required by the platform's brand-safe verification gate.</p>",
                preservedClaimIds: ["c1"]
              })
         };
