@@ -25,7 +25,7 @@ export function AgentModelSelector({
   optionsMode = "text",
   children
 }: AgentModelSelectorProps & { children?: React.ReactNode }) {
-  const modelValue = settings[modelKey] || (optionsMode === "image" ? "MiniMax-M3" : "openrouter/owl-alpha");
+  const modelValue = settings[modelKey] || (optionsMode === "image" ? "imagen-4.0-generate-001" : "MiniMax-M3");
   const fallbackModelValue = settings[fallbackModelKey] || "global";
 
   const renderOptions = () => {
@@ -50,11 +50,14 @@ export function AgentModelSelector({
         </optgroup>
         <optgroup label="OpenRouter" className="text-emerald-400 font-mono text-[10px]">
           <option value="custom-openrouter">✦ Custom OpenRouter Model</option>
+          <option value="cohere/north-mini-code:free">Cohere North Mini Code (Resilience)</option>
           <option value="deepseek/deepseek-chat">DeepSeek V3 (Fast)</option>
           <option value="meta-llama/llama-3.3-70b-instruct">Llama 3.3 70B</option>
           <option value="anthropic/claude-3.5-sonnet">Claude 3.5 Sonnet</option>
         </optgroup>
         <optgroup label="MiniMax" className="text-rose-400 font-mono text-[10px]">
+          <option value="MiniMax-M3">MiniMax M3 (Primary)</option>
+          <option value="MiniMax-M2.7">MiniMax M2.7 (Structured JSON)</option>
           <option value="custom-minimax">✦ Custom MiniMax Model</option>
           <option value="minimax/abab6.5g-chat">abab6.5g Chat</option>
           <option value="minimax/abab7-chat">abab7 Chat</option>
