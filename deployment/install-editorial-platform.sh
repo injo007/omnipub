@@ -1416,6 +1416,36 @@ function application_reports_postgres_ready() {
     '
 }
 
+function reload_caddy_proxy() {
+    local compose_file="$1"
+    local environment_name="$2"
+    local proxy_container
+    proxy_container=$(docker compose -f "$compose_file" ps -q proxy 2>/dev/null || true)
+    if [[ -z "$proxy_container" ]]; then
+        log "ERROR" "The $environment_name Caddy proxy container was not created."
+        return 1
+    fi
+    if ! docker exec "$proxy_container" caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile >/dev/null 2>&1; then
+        log "ERROR" "The $environment_name Caddy configuration is invalid."
+        report_container_failure "$proxy_container"
+        return 1
+    fi
+    if ! docker exec "$proxy_container" caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile >/dev/null 2>&1; then
+        log "ERROR" "The $environment_name Caddy proxy could not reload its current configuration."
+        report_container_failure "$proxy_container"
+        return 1
+    fi
+    log "INFO" "$environment_name Caddy configuration validated and reloaded."
+}
+
+function caddy_configuration_is_valid() {
+    local compose_file="$1"
+    local proxy_container
+    proxy_container=$(docker compose -f "$compose_file" ps -q proxy 2>/dev/null || true)
+    [[ -n "$proxy_container" ]] && \
+        docker exec "$proxy_container" caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile >/dev/null 2>&1
+}
+
 function postgres_has_application_data() {
     local container="$1"
     local schema_exists
@@ -1511,6 +1541,7 @@ function deploy_application() {
     # Production Deploy
     log "INFO" "Starting Production Stack via Docker Compose..."
     docker compose -f "${BASE_DIR}/compose.production.yml" up -d --remove-orphans
+    reload_caddy_proxy "${BASE_DIR}/compose.production.yml" "production"
     if ! wait_for_container_health "editorial-production-app" 180; then
         log "ERROR" "Production application did not become healthy; deployment metadata will not be recorded."
         exit 5
@@ -1525,6 +1556,7 @@ function deploy_application() {
     if [[ "$DEPLOY_STAGING" == "true" ]]; then
         log "INFO" "Starting Staging Stack via Docker Compose..."
         docker compose -f "${BASE_DIR}/compose.staging.yml" up -d --remove-orphans
+        reload_caddy_proxy "${BASE_DIR}/compose.staging.yml" "staging"
         if ! wait_for_container_health "editorial-staging-app" 180; then
             log "ERROR" "Staging application did not become healthy; deployment metadata will not be recorded."
             exit 5
@@ -1629,6 +1661,22 @@ function verify_installation() {
             log "ERROR" "Security Leak: Non-essential ports are publicly accessible! Listeners:\n$public_listeners"
             passed=false
         fi
+    fi
+
+    # 6. Confirm the active reverse proxy has loaded a valid current Caddyfile.
+    if caddy_configuration_is_valid "${BASE_DIR}/compose.production.yml"; then
+        log "INFO" "Production Caddy configuration is active and valid."
+    else
+        log "ERROR" "Production Caddy configuration validation failed."
+        passed=false
+    fi
+
+    if [[ -n "${PRODUCTION_DOMAIN:-}" ]]; then
+        log "INFO" "Public application URL: https://${PRODUCTION_DOMAIN}"
+        log "INFO" "Use the configured hostname in the browser; HTTPS access by raw server IP is unsupported and will fail certificate validation."
+    else
+        log "ERROR" "Production domain is missing from installer configuration."
+        passed=false
     fi
 
     if [[ "$passed" == "true" ]]; then
@@ -2033,6 +2081,10 @@ case "$CMD" in
         ;;
     "status")
         log "INFO" "Gathering host system status reports..."
+        if [[ -n "${PRODUCTION_DOMAIN:-}" ]]; then
+            log "INFO" "Public application URL: https://${PRODUCTION_DOMAIN}"
+            log "INFO" "Raw-IP HTTPS is unsupported; use the configured hostname after its DNS A/AAAA record points to this server."
+        fi
         df -h /
         free -m
         if [[ "${BYPASS_PREFLIGHTS:-false}" != "true" ]]; then

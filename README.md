@@ -130,7 +130,7 @@ The installer now pins the managed identity to `postgres@db:5432/editorial_db`, 
 
 ### Direct IP address does not open the site
 
-Caddy uses the production domain configured during installation. Point that domain's DNS `A` record to the server, allow ports 80 and 443, and open the domain rather than the raw server IP.
+Caddy uses the production domain configured during installation. Point that domain's DNS `A` record to the server, allow ports 80 and 443, and open `https://your-configured-domain` rather than the raw server IP. Browsing `https://SERVER_IP` can produce `SSL_ERROR_INTERNAL_ERROR_ALERT` because the IP is not the configured TLS identity. The installer now validates and explicitly reloads the mounted Caddyfile on every deployment, and `status` plus `verify` print the configured public URL.
 
 ---
 

@@ -79,6 +79,18 @@ describe("Ubuntu installer packaging contract", () => {
     expect(installer).toContain('"health_verified": true');
   });
 
+  it("reloads and validates Caddy after mounted configuration changes", () => {
+    const productionStart = installer.indexOf('Starting Production Stack via Docker Compose');
+    const caddyReload = installer.indexOf('reload_caddy_proxy "${BASE_DIR}/compose.production.yml" "production"', productionStart);
+    const applicationHealth = installer.indexOf('wait_for_container_health "editorial-production-app" 180', productionStart);
+    expect(caddyReload).toBeGreaterThan(productionStart);
+    expect(applicationHealth).toBeGreaterThan(caddyReload);
+    expect(installer).toContain("caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile");
+    expect(installer).toContain("caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile");
+    expect(installer).toContain('Public application URL: https://${PRODUCTION_DOMAIN}');
+    expect(installer).toContain("Raw-IP HTTPS is unsupported");
+  });
+
   it("prints container exit, OOM, restart, and recent-log diagnostics", () => {
     expect(installer).toContain("function report_container_failure()");
     expect(installer).toContain("oom_killed={{.State.OOMKilled}}");
