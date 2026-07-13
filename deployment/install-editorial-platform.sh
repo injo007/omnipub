@@ -757,7 +757,7 @@ services:
       POSTGRES_PASSWORD: "${PGPASSWORD}"
       POSTGRES_DB: "${PGDATABASE}"
     healthcheck:
-      test: ["CMD-SHELL", "PGPASSWORD=\"\$\${POSTGRES_PASSWORD}\" psql --host 127.0.0.1 --username \"\$\${POSTGRES_USER}\" --dbname \"\$\${POSTGRES_DB}\" --command 'SELECT 1' >/dev/null"]
+      test: ["CMD-SHELL", "PGPASSWORD=\"\$\${POSTGRES_PASSWORD}\" psql --host \"\$\${HOSTNAME}\" --username \"\$\${POSTGRES_USER}\" --dbname \"\$\${POSTGRES_DB}\" --command 'SELECT 1' >/dev/null"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -864,7 +864,7 @@ services:
       POSTGRES_PASSWORD: "${PGPASSWORD}"
       POSTGRES_DB: "${PGDATABASE}"
     healthcheck:
-      test: ["CMD-SHELL", "PGPASSWORD=\"\$\${POSTGRES_PASSWORD}\" psql --host 127.0.0.1 --username \"\$\${POSTGRES_USER}\" --dbname \"\$\${POSTGRES_DB}\" --command 'SELECT 1' >/dev/null"]
+      test: ["CMD-SHELL", "PGPASSWORD=\"\$\${POSTGRES_PASSWORD}\" psql --host \"\$\${HOSTNAME}\" --username \"\$\${POSTGRES_USER}\" --dbname \"\$\${POSTGRES_DB}\" --command 'SELECT 1' >/dev/null"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -1309,21 +1309,17 @@ function reconcile_managed_postgres_credentials() {
     local container="$1"
     local environment_name="$2"
 
-    local authenticated=false
-    if docker exec --env "PGPASSWORD=$PGPASSWORD" "$container" \
-        psql --host 127.0.0.1 --username postgres --dbname editorial_db --tuples-only --no-align --command "SELECT 1" >/dev/null 2>&1; then
-        authenticated=true
-        if [[ -f "${BASE_DIR}/metadata/deployment.json" ]] && \
-           jq -e '.health_verified == true' "${BASE_DIR}/metadata/deployment.json" >/dev/null 2>&1; then
-            log "INFO" "$environment_name PostgreSQL managed-role authentication verified."
-            return
-        fi
-        log "INFO" "$environment_name PostgreSQL authentication works, but deployment is incomplete; reapplying the root-only managed password before bootstrap."
+    # The loopback pg_hba.conf rule may be trusted on an older volume, so a
+    # successful 127.0.0.1 query does not prove that Docker-network SCRAM auth
+    # works. Connect to the container's bridge address through its hostname,
+    # which follows the same host rule used by the application.
+    if docker exec --env "PGPASSWORD=$PGPASSWORD" "$container" sh -ec \
+        'exec psql --host "$HOSTNAME" --username postgres --dbname editorial_db --tuples-only --no-align --command "SELECT 1"' >/dev/null 2>&1; then
+        log "INFO" "$environment_name PostgreSQL managed-role bridge authentication verified."
+        return
     fi
 
-    if [[ "$authenticated" != "true" ]]; then
-        log "WARN" "$environment_name PostgreSQL credentials do not match the persistent managed volume. Reconciling the private postgres role with the root-only installer configuration."
-    fi
+    log "WARN" "$environment_name PostgreSQL bridge credentials do not match the persistent managed volume. Reconciling the private postgres role with the root-only installer configuration."
     if ! docker exec "$container" psql --username postgres --dbname postgres --tuples-only --no-align --command "SELECT 1" >/dev/null 2>&1; then
         log "ERROR" "Cannot access the managed postgres administrator role through the container-local socket. The volume may have been initialized outside this installer; no role or data was changed."
         report_container_failure "$container"
@@ -1345,9 +1341,9 @@ function reconcile_managed_postgres_credentials() {
         docker exec "$container" createdb --username postgres --owner postgres editorial_db
     fi
 
-    if ! docker exec --env "PGPASSWORD=$PGPASSWORD" "$container" \
-        psql --host 127.0.0.1 --username postgres --dbname editorial_db --tuples-only --no-align --command "SELECT 1" >/dev/null 2>&1; then
-        log "ERROR" "$environment_name PostgreSQL role reconciliation completed but authenticated connectivity still failed."
+    if ! docker exec --env "PGPASSWORD=$PGPASSWORD" "$container" sh -ec \
+        'exec psql --host "$HOSTNAME" --username postgres --dbname editorial_db --tuples-only --no-align --command "SELECT 1"' >/dev/null 2>&1; then
+        log "ERROR" "$environment_name PostgreSQL role reconciliation completed but bridge-authenticated connectivity still failed."
         report_container_failure "$container"
         exit 5
     fi

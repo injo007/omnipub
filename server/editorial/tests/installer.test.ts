@@ -46,12 +46,14 @@ describe("Ubuntu installer packaging contract", () => {
     expect(installer).toContain("ALTER ROLE postgres WITH LOGIN PASSWORD");
     expect(installer).toContain('^[A-Za-z0-9_-]{16,128}$');
     expect(installer).toContain("will be synchronized with the private managed PostgreSQL role");
-    expect(installer).toContain("psql --host 127.0.0.1 --username postgres --dbname editorial_db");
+    expect(installer).toContain('psql --host "$HOSTNAME" --username postgres --dbname editorial_db');
+    expect(installer).not.toContain("psql --host 127.0.0.1 --username postgres --dbname editorial_db");
     expect(installer).toContain('--env "PGPASSWORD=$PGPASSWORD"');
     expect(installer).toContain('--env "PG_DIAGNOSTIC_SALT=$diagnostic_salt"');
     expect(installer).toContain("password_fingerprint=$password_fingerprint");
     expect(installer).toContain('PGPASSWORD: "${PGPASSWORD}"');
     expect(productionCompose).toContain('$${POSTGRES_PASSWORD}');
+    expect(productionCompose).toContain('$${HOSTNAME}');
     expect(productionCompose).toContain("--command 'SELECT 1'");
     expect(productionCompose).toContain("PGPASSWORD: ${PGPASSWORD}");
   });
