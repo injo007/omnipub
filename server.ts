@@ -33,6 +33,8 @@ import { validateWriterVoice } from "./server/editorial/writerVoiceValidationSer
 import { attemptRepair } from "./server/editorial/editorialRepairService";
 import { createVersion } from "./server/editorial/articleVersionService";
 import { evaluateEditorialQuality } from "./server/editorial/editorialQualityService";
+import { assessMediaAsset, type MediaAssetAssessment } from "./server/editorial/imageQualityService";
+import { assessResearchIntegrity } from "./server/editorial/researchIntegrityService";
 import { PublishingQueueService, setPushToWordPressAdapter } from "./server/editorial/publishingQueueService";
 import { FinalArticlePackage } from "./server/editorial/typesPhaseD";
 
@@ -1072,6 +1074,7 @@ async function generateUnifiedImage(prompt: string, niche: string, overrideModel
     return { 
       imageUrl: getDeterministicBackupImage(prompt, niche), 
       source: "Browser Assistant (Staging)", 
+      isFallback: true,
       errorLogs: ["Generation skipped: Browser Assistant mode active. Use the visual editor to paste your external URL."]
     };
   }
@@ -1204,72 +1207,6 @@ async function generateUnifiedImage(prompt: string, niche: string, overrideModel
 }
 
 
-async function getUsableOrGeneratedImage(sourceUrl: string, imagePrompt: string, niche: string): Promise<{ imageUrl: string; source: string }> {
-  console.log(`[IMAGE WORKFLOW] Checking original article images for sourceUrl: "${sourceUrl}"`);
-  
-  if (sourceUrl && (sourceUrl.startsWith("http://") || sourceUrl.startsWith("https://"))) {
-    try {
-      // Fetch source article HTML with a quick timeout (3.5s) to avoid blocking the workflow
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 3500);
-      const res = await fetch(sourceUrl, { 
-        signal: controller.signal,
-        headers: {
-          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-        }
-      });
-      clearTimeout(timeoutId);
-      
-      if (res.ok) {
-        const html = await res.text();
-        
-        // Beautiful matching regexes for og:image and twitter:image meta tags
-        const ogMatch = html.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i) ||
-                        html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image["']/i);
-        const twitterMatch = html.match(/<meta[^>]+name=["']twitter:image["'][^>]+content=["']([^"']+)["']/i) ||
-                             html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+name=["']twitter:image["']/i);
-        
-        let crawledUrl = ogMatch ? ogMatch[1] : (twitterMatch ? twitterMatch[1] : null);
-        
-        // If no meta tags, scan for absolute image img tags in body
-        if (!crawledUrl) {
-          const imgMatches = html.match(/<img[^>]+src=["'](https?:\/\/[^"']+\.(?:png|jpe?g|webp|gif))["']/gi);
-          if (imgMatches && imgMatches.length > 0) {
-            for (const imgTag of imgMatches) {
-              const srcMatch = imgTag.match(/src=["']([^"']+)["']/i);
-              if (srcMatch && srcMatch[1]) {
-                const srcUrl = srcMatch[1];
-                if (!srcUrl.includes("logo") && !srcUrl.includes("icon") && !srcUrl.includes("pixel") && !srcUrl.includes("sprite")) {
-                  crawledUrl = srcUrl;
-                  break;
-                }
-              }
-            }
-          }
-        }
-        
-        if (crawledUrl && crawledUrl.startsWith("http")) {
-          console.log(`[IMAGE WORKFLOW] Extracted candidate image URL: "${crawledUrl}". Verifying usability...`);
-          const imgController = new AbortController();
-          const imgTimeout = setTimeout(() => imgController.abort(), 2000);
-          const imgRes = await fetch(crawledUrl, { method: "HEAD", signal: imgController.signal });
-          clearTimeout(imgTimeout);
-          
-          if (imgRes.ok) {
-            console.log(`[IMAGE WORKFLOW] Original article image is usable! Returning direct image URL: "${crawledUrl}"`);
-            return { imageUrl: crawledUrl, source: "Original Article Image" };
-          }
-        }
-      }
-    } catch (err: any) {
-      console.warn(`[IMAGE WORKFLOW] Silent crawl/verify original image skip: ${err.message}. Seamlessly generating identical replica instead...`);
-    }
-  }
-  
-  // If no usable image is found in original article, generate beautiful identical/ideal image instead
-  console.log(`[IMAGE WORKFLOW] No usable original image found. Generating identical model representation via AI visual pipeline.`);
-  return await generateUnifiedImage(imagePrompt, niche);
-}
 const PORT = 3000;
 
 // Import Phase F enterprise governance, environment, and observability modules
@@ -8820,12 +8757,9 @@ appRouter.post("/api/articles/create", async (req, res) => {
         });
       }
       researchError = err?.message || err?.toString() || "Unknown API Error";
-      researchResults = JSON.stringify({
-        articleTraceId,
-        researchBrief: { topic: sourceTitle || "Research Topic", readerIntent: "info", whyItMattersNow: "now", verifiedFacts: ["Standard factual verification auto-run."], unverifiedClaims: [], conflictingClaims: [], freshnessWarnings: [], recommendedAngles: ["Comprehensive analysis"], readerQuestions: [], riskFlags: [] },
-        sources: [{ url: sourceUrl || "https://example.com/source", title: sourceTitle || "Source Portal", publisher: "News Portal" }],
-        evidenceLedger: [{ claimId: "c_fail", articleId: articleTraceId, articleTraceId, claimText: "Standard factual context compiled successfully.", sourceUrl: sourceUrl || "https://example.com/source", sourceTitle: sourceTitle || "Source Portal", publisher: "News Portal", sourceDate: "2026-07-01", accessedAt: "2026-07-01", sourceType: "web", isPrimarySource: true, confidence: 100, freshnessStatus: "current", verificationStatus: "verified", supportsClaim: true, contradictsClaim: false, riskLevel: "low", addedByAgent: "fallback", notes: "Fallback compiled automatically" }]
-      });
+      addLog("research", "Research Verification Agent", "failed", `Research could not be completed by the configured provider. No synthetic evidence was created. Error: ${researchError}`, undefined, researchPromptObj.compiledPrompt, rsModel, researchMeta);
+      abortAndPersist("Research provider failed", "RESEARCH_FAILED", "Research could not be completed with verifiable evidence. Needs manual review.");
+      return;
     }
 
     let parsedResearchOutput: ResearchOutput | null = null;
@@ -8841,49 +8775,6 @@ appRouter.post("/api/articles/create", async (req, res) => {
        } catch(e) {}
     }
 
-    if (!researchParseRes.success && process.env.NODE_ENV !== "test") {
-       console.warn("Invalid Research Output schema after repair, generating resilient fallback mock.");
-       const fallbackJSON = {
-         articleTraceId,
-         researchBrief: { 
-           topic: sourceTitle || "Autonomous Research", 
-           readerIntent: "info", 
-           whyItMattersNow: "now", 
-           verifiedFacts: ["Factual context verified successfully under automatic failover."], 
-           unverifiedClaims: [], 
-           conflictingClaims: [], 
-           freshnessWarnings: [], 
-           recommendedAngles: ["Detailed editorial review"], 
-           readerQuestions: [], 
-           riskFlags: [] 
-         },
-         sources: [{ url: sourceUrl || "https://example.com/source", title: sourceTitle || "Source Reference", publisher: "News Network" }],
-         evidenceLedger: [{ 
-           claimId: "claim_fallback_auto", 
-           articleId: articleTraceId, 
-           articleTraceId, 
-           claimText: "Standard factual context compiled successfully.", 
-           sourceUrl: sourceUrl || "https://example.com/source", 
-           sourceTitle: sourceTitle || "Source Reference", 
-           publisher: "News Network", 
-           sourceDate: "2026-07-01", 
-           accessedAt: "2026-07-01", 
-           sourceType: "web", 
-           isPrimarySource: true, 
-           confidence: 100, 
-           freshnessStatus: "current", 
-           verificationStatus: "verified", 
-           supportsClaim: true, 
-           contradictsClaim: false, 
-           riskLevel: "low", 
-           addedByAgent: "Research Verification Agent", 
-           notes: "Verified automatically during failover." 
-         }]
-       };
-       researchResults = JSON.stringify(fallbackJSON);
-       researchParseRes = parseAndValidateResearchOutput(researchResults);
-    }
-
     if (!researchParseRes.success) {
        abortAndPersist("Invalid Research Output schema", "RESEARCH_FAILED", "Invalid Research Output schema. Needs manual review.");
        return;
@@ -8891,66 +8782,25 @@ appRouter.post("/api/articles/create", async (req, res) => {
        parsedResearchOutput = researchParseRes.data!;
     }
     
-    // Supplement sources if we do not have enough to pass the source validation gate
+    // Evidence must come from the research provider. Never fill a short ledger
+    // with generic publisher URLs or synthetic "verified" claims.
     if (!parsedResearchOutput.sources || !Array.isArray(parsedResearchOutput.sources)) {
       parsedResearchOutput.sources = [];
     }
     
     const minNeededSources = (detectedNiche === "destination" || detectedNiche === "hotel" || detectedNiche === "wellness") ? 3 : 2;
-    if (parsedResearchOutput.sources.length < minNeededSources) {
-      console.log(`[SOURCE HYDRATION] Supplementing ${minNeededSources - parsedResearchOutput.sources.length} sources to clear validation gate.`);
-      
-      const nicheStandardSources: Record<string, Array<{ url: string, title: string, publisher: string }>> = {
-        hollywood: [
-          { url: "https://variety.com", title: `Variety Industry Coverage on ${sourceTitle}`, publisher: "Variety" },
-          { url: "https://www.hollywoodreporter.com", title: `The Hollywood Reporter News Context for ${sourceTitle}`, publisher: "The Hollywood Reporter" }
-        ],
-        tech: [
-          { url: "https://techcrunch.com", title: `TechCrunch Industry Detail on ${sourceTitle}`, publisher: "TechCrunch" },
-          { url: "https://www.theverge.com", title: `The Verge Analysis for ${sourceTitle}`, publisher: "The Verge" }
-        ],
-        sports: [
-          { url: "https://www.espn.com", title: `ESPN Tactical Sports Summary on ${sourceTitle}`, publisher: "ESPN" },
-          { url: "https://www.theathletic.com", title: `The Athletic Playbook Study on ${sourceTitle}`, publisher: "The Athletic" }
-        ]
-      };
-      
-      const standardList = nicheStandardSources[detectedNiche.toLowerCase()] || [
-        { url: "https://news.google.com", title: `Google News Coverage on ${sourceTitle}`, publisher: "Google News Feed" },
-        { url: "https://www.reuters.com", title: `Reuters Global Context for ${sourceTitle}`, publisher: "Reuters" }
-      ];
-      
-      if (!parsedResearchOutput.evidenceLedger || !Array.isArray(parsedResearchOutput.evidenceLedger)) {
-        parsedResearchOutput.evidenceLedger = [];
-      }
-      
-      for (const src of standardList) {
-        if (parsedResearchOutput.sources.length >= minNeededSources) break;
-        if (!parsedResearchOutput.sources.some((s: any) => s.url === src.url)) {
-          parsedResearchOutput.sources.push(src);
-          parsedResearchOutput.evidenceLedger.push({
-            claimId: `claim_supplement_${crypto.randomBytes(3).toString("hex")}`,
-            articleId: taskId,
-            articleTraceId,
-            claimText: `Supplementary context and background verified against ${src.publisher} industry coverage.`,
-            sourceUrl: src.url,
-            sourceTitle: src.title,
-            publisher: src.publisher,
-            sourceDate: new Date().toISOString().split("T")[0],
-            accessedAt: new Date().toISOString(),
-            sourceType: "web",
-            isPrimarySource: false,
-            confidence: 90,
-            freshnessStatus: "current",
-            verificationStatus: "verified",
-            supportsClaim: true,
-            contradictsClaim: false,
-            riskLevel: "low",
-            addedByAgent: "Source Verification Gatekeeper",
-            notes: "Added automatically to verify structural background."
-          });
-        }
-      }
+    const researchIntegrity = assessResearchIntegrity(
+      parsedResearchOutput.sources,
+      parsedResearchOutput.evidenceLedger,
+      minNeededSources,
+    );
+    if (!researchIntegrity.passed) {
+      abortAndPersist(
+        "Research integrity gate failed",
+        "RESEARCH_INTEGRITY_FAILED",
+        `Research integrity gate failed: ${researchIntegrity.reasons.join(" ")} Needs manual review.`,
+      );
+      return;
     }
     
     try { pipelineStates = recordStateTransition(pipelineStates, articleTraceId, "RESEARCHED", "Research Verification Agent", rsModel, "Research output constructed"); } catch(e){}
@@ -8958,15 +8808,7 @@ appRouter.post("/api/articles/create", async (req, res) => {
     const evidenceLedger: EvidenceLedger = parsedResearchOutput.evidenceLedger || [];
 
 
-    if (researchError) {
-      const isQuota = researchError.includes("quota") || researchError.includes("429") || researchError.includes("RESOURCE_EXHAUSTED");
-      const errDetail = isQuota 
-        ? "⚠️ Research Quota Limit Exceeded (429 - Resource Exhausted). Utilizing Heuristics."
-        : `⚠️ Fact brief generation error: ${researchError}. Utilizing Heuristics.`;
-      addLog("research", "Research Verification Agent [Fallback Mode]", "success", errDetail, researchResults, researchPromptObj.compiledPrompt, rsModel, researchMeta);
-    } else {
-      addLog("research", `Research Verification Agent`, "success", "Fact brief generated successfully. Cleared for rewrite drafting.", researchResults, researchPromptObj.compiledPrompt, rsModel, researchMeta);
-    }
+    addLog("research", "Research Verification Agent", "success", "Fact brief generated with the required source records. Cleared for evidence-led drafting.", researchResults, researchPromptObj.compiledPrompt, rsModel, researchMeta);
 
     // -------------------------------------------------------------
     // AGENT 1.5: SEO Opportunity Agent (Focus Keyword Selection)
@@ -9618,6 +9460,7 @@ appRouter.post("/api/articles/create", async (req, res) => {
     let finalImageUrl = "";
     let imageSource = "";
     let mediaReviewRequired = false;
+    let headerMediaAssessment: MediaAssetAssessment | null = null;
     
     // Source-site images are never reused without a recorded license and rights
     // audit. This workflow currently has no asset-rights repository, so it only
@@ -9682,7 +9525,9 @@ appRouter.post("/api/articles/create", async (req, res) => {
       if (activeInlineImageMode === 'promptOnly') {
         finalImageUrl = `#prompt-only:${encodeURIComponent(imagePrompt)}`;
         imageSource = "Manual Prompt Output";
-        addLog("image", "Orchestrator Media Render", "success", "SaaS Config requested Prompt-Only mode. Bypassing image generation; packing descriptive prompt in header slot.");
+        headerMediaAssessment = assessMediaAsset({ imageUrl: finalImageUrl, source: imageSource, prompt: imagePrompt });
+        mediaReviewRequired = true;
+        addLog("image", "Orchestrator Media Render", "warning", "SaaS Config requested Prompt-Only mode. A human must create and approve the header asset before publication.");
       } else if (activeInlineImageMode === 'none') {
         finalImageUrl = "";
         imageSource = "Stripped Graphics";
@@ -9693,16 +9538,23 @@ appRouter.post("/api/articles/create", async (req, res) => {
           const generated = await generateUnifiedImage(imagePrompt, niche, imgModel);
           finalImageUrl = generated.imageUrl;
           imageSource = generated.source;
-          
-          if (generated.isFallback) {
+          headerMediaAssessment = assessMediaAsset({
+            imageUrl: finalImageUrl,
+            source: imageSource,
+            prompt: imagePrompt,
+            isFallback: generated.isFallback,
+          });
+
+          if (!headerMediaAssessment.approved) {
             mediaReviewRequired = true;
-            addLog("image", "Orchestrator Media Render", "failed", `All targeted provider pipelines failed: ${generated.errorLogs?.join(" | ") || "Unknown quota error"}. The backup asset is held for media review and cannot auto-publish.`);
+            addLog("image", "Image Technical & Rights Gate", "failed", `Media approval score ${headerMediaAssessment.score}/100. ${headerMediaAssessment.reasons.join(" ")} ${generated.errorLogs?.join(" | ") || ""}`.trim());
           } else {
-            addLog("image", "Orchestrator Media Render", "success", `Successfully rendered visual via ${imageSource}!`);
+            addLog("image", "Image Technical & Rights Gate", "success", `Approved original media asset (${headerMediaAssessment.score}/100) from ${imageSource}.`);
           }
         } catch (imgErr: any) {
           finalImageUrl = "";
           imageSource = "Media generation unavailable";
+          headerMediaAssessment = assessMediaAsset({ imageUrl: finalImageUrl, source: imageSource, prompt: imagePrompt, isFallback: true });
           mediaReviewRequired = true;
           addLog("image", "Orchestrator Media Render", "failed", `No approved media was produced. The article is held for media review. Error: ${imgErr.message || imgErr}`);
         }
@@ -9748,9 +9600,19 @@ appRouter.post("/api/articles/create", async (req, res) => {
             addLog("image", "Visual Media Director", "running", `Generating inline image ${i + 1}/${imageMatches.length} for prompt: "${item.altText}"...`);
             try {
               const generated = await generateUnifiedImage(item.altText, niche, imgModel);
-              if (generated.imageUrl) {
+              const inlineAssessment = assessMediaAsset({
+                imageUrl: generated.imageUrl,
+                source: generated.source,
+                prompt: item.altText,
+                isFallback: generated.isFallback,
+              });
+              if (inlineAssessment.approved) {
                 editedDraft = editedDraft.replace(item.originalMatch, `![${item.altText}](${generated.imageUrl})`);
-                addLog("image", "Visual Media Director", "success", `Replaced inline visual slot ${i + 1} with generated asset url.`);
+                addLog("image", "Image Technical & Rights Gate", "success", `Approved inline media asset ${i + 1} (${inlineAssessment.score}/100).`);
+              } else {
+                mediaReviewRequired = true;
+                editedDraft = editedDraft.replace(item.originalMatch, `**[Visual review required: ${item.altText}]**`);
+                addLog("image", "Image Technical & Rights Gate", "failed", `Inline media asset ${i + 1} held for review: ${inlineAssessment.reasons.join(" ")}`);
               }
             } catch (err: any) {
               mediaReviewRequired = true;
@@ -9788,6 +9650,7 @@ appRouter.post("/api/articles/create", async (req, res) => {
         provider: resolveProvider(imgModel),
         source: imageSource,
         requiresManualReview: mediaReviewRequired,
+        assessment: headerMediaAssessment,
         // Store a stable reference fingerprint, never the base64 image payload.
         assetFingerprint: crypto.createHash("sha256").update(finalImageUrl).digest("hex"),
         createdAt: new Date().toISOString(),
@@ -9835,6 +9698,7 @@ appRouter.post("/api/articles/create", async (req, res) => {
       content: editedDraft,
       originalImageUrl: finalImageUrl,
       imageSource,
+      mediaAssessment: headerMediaAssessment,
       // Keep natural spaces in tags for better SEO and matching
       tags: Array.from(new Set([niche, ...(seoParams.keywords || [])])),
       status: finalArticleStatus,

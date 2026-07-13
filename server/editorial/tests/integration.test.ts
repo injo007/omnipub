@@ -9,7 +9,7 @@ function setTestAdapterMock(mock: any) {
   if (!mock) return;
   app = buildApp({
     llmCompletion: mock,
-    generateImage: async () => ({ imageUrl: "data:image/png;base64,iVBORw0KGgo=", source: "Test Mock Image" }),
+    generateImage: async () => ({ imageUrl: `data:image/png;base64,${"a".repeat(1_600)}`, source: "Google test image model" }),
     pushToWordPress: async () => ({ status: "success", postId: 123, postUrl: "https://mock.wordpress.com/123" })
   });
 }
@@ -41,10 +41,13 @@ describe("POST /api/articles/create - Integration Flow", () => {
           text: JSON.stringify({
             articleTraceId: "trace-abc",
             researchBrief: { topic: "Test", readerIntent: "info", whyItMattersNow: "now", originalAngle: "good", verifiedFacts: ["f1", "f2"], unverifiedClaims: [], conflictingClaims: [], riskFlags: [], freshnessWarnings: [], recommendedAngles: [], readerQuestions: [] },
-            sources: [{ url: "https://x.com", title: "X", publisher: "X" }],
+            sources: [
+              { url: "https://x.com", title: "X reporting", publisher: "X" },
+              { url: "https://www.reuters.com", title: "Reuters context", publisher: "Reuters" },
+            ],
             evidenceLedger: [
-              { claimId: "c1", articleId: "test-art", articleTraceId: "trace-abc", claimCategory: "PRICE", claimText: "Item costs $50 in 2026", sourceUrl: "https://x.com/1", sourceTitle: "X", publisher: "X", sourceDate: "2026", accessedAt: "2026", sourceType: "web", isPrimarySource: true, confidence: 99, verificationStatus: "verified", freshnessStatus: "current", supportsClaim: true, contradictsClaim: false, riskLevel: "none", addedByAgent: "test", notes: "" },
-              { claimId: "c2", articleId: "test-art", articleTraceId: "trace-abc", claimCategory: "TRANSPORT_SCHEDULE", claimText: "Bus arrives every 10 minutes", sourceUrl: "https://x.com/1", sourceTitle: "X", publisher: "X", sourceDate: "2026", accessedAt: "2026", sourceType: "web", isPrimarySource: true, confidence: 99, verificationStatus: "verified", freshnessStatus: "current", supportsClaim: true, contradictsClaim: false, riskLevel: "none", addedByAgent: "test", notes: "" }
+              { claimId: "c1", articleId: "test-art", articleTraceId: "trace-abc", claimCategory: "PRICE", claimText: "Item costs $50 in 2026", sourceUrl: "https://x.com", sourceTitle: "X", publisher: "X", sourceDate: "2026", accessedAt: "2026", sourceType: "web", isPrimarySource: true, confidence: 99, verificationStatus: "verified", freshnessStatus: "current", supportsClaim: true, contradictsClaim: false, riskLevel: "none", addedByAgent: "test", notes: "" },
+              { claimId: "c2", articleId: "test-art", articleTraceId: "trace-abc", claimCategory: "TRANSPORT_SCHEDULE", claimText: "Bus arrives every 10 minutes", sourceUrl: "https://www.reuters.com", sourceTitle: "Reuters", publisher: "Reuters", sourceDate: "2026", accessedAt: "2026", sourceType: "web", isPrimarySource: true, confidence: 99, verificationStatus: "verified", freshnessStatus: "current", supportsClaim: true, contradictsClaim: false, riskLevel: "none", addedByAgent: "test", notes: "" }
             ]
           }),
           metadata: { tokensInput: 10, tokensOutput: 10 }
@@ -134,8 +137,8 @@ describe("POST /api/articles/create - Integration Flow", () => {
       if (agentName === "Originality & Readability Validator") return { text: JSON.stringify({ uniqueness: 100, uniquenessFeedback: "ok", readabilityScore: 100, humanScore: 100, humanFeedback: "ok" }) };
       if (agentName === "Lead Quality & Safety Compliance Inspector") return { text: JSON.stringify({ isSafe: true, safetyScore: 100, violations: [] }) };
       if (agentName === "WordPress SEO Publisher") return { text: JSON.stringify({ title: "Valid Title", description: "Desc", focusKeyword: "key", keywords: [] }) };
-      if (agentName === "Visual Media Director") return { text: "Image prompt" };
-      if (agentName === "Image Prompt Compiler") return { text: "Image prompt" };
+      if (agentName === "Visual Media Director") return { text: "Original editorial illustration showing a modern travel itinerary with geometric maps, warm light, and no text." };
+      if (agentName === "Image Prompt Compiler") return { text: "Original editorial illustration showing a modern travel itinerary with geometric maps, warm light, and no text." };
       
       // Default return empty JSON to satisfy
       return { text: "{}" };
