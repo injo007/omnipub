@@ -71,12 +71,26 @@ describe("Ubuntu installer packaging contract", () => {
     const productionStart = installer.indexOf('Starting Production Stack via Docker Compose');
     const appHealthGate = installer.indexOf('wait_for_container_health "editorial-production-app" 180', productionStart);
     const readinessGate = installer.indexOf('application_reports_postgres_ready "editorial-production-app"', appHealthGate);
+    const publicHttpsGate = installer.indexOf("wait_for_public_https 120", readinessGate);
     const metadataWrite = installer.indexOf('cat <<EOF > "${BASE_DIR}/metadata/deployment.json"', readinessGate);
     expect(appHealthGate).toBeGreaterThan(productionStart);
     expect(readinessGate).toBeGreaterThan(appHealthGate);
-    expect(metadataWrite).toBeGreaterThan(readinessGate);
+    expect(publicHttpsGate).toBeGreaterThan(readinessGate);
+    expect(metadataWrite).toBeGreaterThan(publicHttpsGate);
     expect(installer).toContain('"schema_initialized": true');
     expect(installer).toContain('"health_verified": true');
+    expect(installer).toContain('"public_https_verified": true');
+  });
+
+  it("rejects placeholder domains and requires DNS plus public HTTPS", () => {
+    expect(installer).toContain("function production_domain_is_valid()");
+    expect(installer).toContain("your-real-domain.com");
+    expect(installer).toContain("validate_production_domain_dns");
+    expect(installer).toContain("getent ahostsv4");
+    expect(installer).toContain("function wait_for_public_https()");
+    expect(installer).toContain('--resolve "${PRODUCTION_DOMAIN}:443:127.0.0.1"');
+    expect(installer).toContain("wait_for_public_https 120");
+    expect(installer).toContain("--domain requires a DNS hostname");
   });
 
   it("reloads and validates Caddy after mounted configuration changes", () => {

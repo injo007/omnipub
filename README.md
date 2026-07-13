@@ -11,6 +11,7 @@ To install the platform on a fresh physical or virtual Linux server, follow thes
 ### 1. Requirements & Sizing
 *   **Host OS**: Ubuntu Server 24.04 LTS (x86_64)
 *   **Permissions**: Strict `sudo` or `root` privileges.
+*   **Production hostname**: A real DNS hostname you control, with an `A` record resolving to the server before installation. Placeholder domains and raw-IP HTTPS are rejected.
 *   **Production-only minimum**: 1 vCPU, 2 GB RAM, 40 GB available disk. This profile uses reduced worker concurrency and does not start staging.
 *   **Production + staging minimum**: 4 vCPU, 8 GB RAM, 80 GB available disk.
 *   **Recommended sizing**: 8 vCPU, 16 GB RAM, 160 GB NVMe SSD.
@@ -130,7 +131,7 @@ The installer now pins the managed identity to `postgres@db:5432/editorial_db`, 
 
 ### Direct IP address does not open the site
 
-Caddy uses the production domain configured during installation. Point that domain's DNS `A` record to the server, allow ports 80 and 443, and open `https://your-configured-domain` rather than the raw server IP. Browsing `https://SERVER_IP` can produce `SSL_ERROR_INTERNAL_ERROR_ALERT` because the IP is not the configured TLS identity. The installer now validates and explicitly reloads the mounted Caddyfile on every deployment, and `status` plus `verify` print the configured public URL.
+Caddy uses the production domain configured during installation. Point that domain's DNS `A` record to the server, allow ports 80 and 443, and open `https://your-configured-domain` rather than the raw server IP. Browsing `https://SERVER_IP` can produce `SSL_ERROR_INTERNAL_ERROR_ALERT` because the IP is not the configured TLS identity. The installer rejects placeholders such as `your-real-domain.com`, requires the DNS record to resolve, validates and explicitly reloads the mounted Caddyfile, and confirms a trusted HTTPS health response before recording installation success. Supply the real hostname you control with `--domain` when resuming an interrupted installation.
 
 ---
 

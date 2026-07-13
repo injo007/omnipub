@@ -159,6 +159,7 @@ Options:
   --source <directory>         Build from a local application checkout.
   --repo <git-url>             Clone the application when the installer is used standalone.
   --ref <branch-tag-or-sha>    Git revision to install (default: main).
+  --domain <hostname>          Set the real production DNS hostname used for public HTTPS.
   --legacy-db <file>           Import a db.json snapshot when PostgreSQL is empty.
   --production-only            Deploy only production (default on hosts below the full profile).
   --with-staging               Deploy isolated production and staging stacks (8 GB RAM minimum).
@@ -446,18 +447,49 @@ function require_remote_backup_config() {
     fi
 }
 
+function production_domain_is_valid() {
+    local domain="${1,,}"
+    [[ "$domain" =~ ^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$ ]] || return 1
+    case "$domain" in
+        your-real-domain.com|*.your-real-domain.com|editorial-intelligence.com|*.editorial-intelligence.com|example.com|*.example.com|example.org|*.example.org|example.net|*.example.net|domain.com|localhost|*.example|*.invalid|*.localhost|*.test)
+            return 1
+            ;;
+    esac
+    return 0
+}
+
+function validate_production_domain_dns() {
+    if [[ "${BYPASS_PREFLIGHTS:-false}" == "true" ]]; then
+        return 0
+    fi
+
+    local resolved_ipv4
+    resolved_ipv4=$(getent ahostsv4 "$PRODUCTION_DOMAIN" 2>/dev/null | awk '{print $1}' | sort -u | paste -sd, -)
+    if [[ -z "$resolved_ipv4" ]]; then
+        local server_ipv4
+        server_ipv4=$(ip -4 -o addr show scope global | awk '{split($4, address, "/"); print address[1]}' | paste -sd, -)
+        log "ERROR" "Production domain $PRODUCTION_DOMAIN does not have a resolvable DNS A record. Create an A record pointing it to this server${server_ipv4:+ ($server_ipv4)}, wait for DNS propagation, then rerun install."
+        exit 4
+    fi
+    log "INFO" "Production domain DNS resolved: $PRODUCTION_DOMAIN -> $resolved_ipv4"
+}
+
 function collect_config() {
     log "INFO" "Collecting application secrets and domain configs..."
-    
-    # Check if we have previous configs
+
+    # The main entry point already loaded this file before processing command-line
+    # overrides. Do not source it again here or --domain would be overwritten.
     if [[ -f "$INSTALLER_CONF" ]]; then
-        # shellcheck disable=SC1090
-        source "$INSTALLER_CONF"
         log "INFO" "Existing configuration loaded from $INSTALLER_CONF."
     fi
 
     local staging_domain="${STAGING_DOMAIN:-}"
     local prod_domain="${PRODUCTION_DOMAIN:-}"
+    if [[ -n "$prod_domain" ]] && ! production_domain_is_valid "$prod_domain"; then
+        log "WARN" "Ignoring invalid or placeholder production domain from stored configuration: $prod_domain"
+        prod_domain=""
+        PRODUCTION_DOMAIN=""
+    fi
     local admin_email="${ADMIN_EMAIL:-admin@editorial-intelligence.com}"
     local gemini_key="${GEMINI_API_KEY:-$(read_stored_env_value "${ETC_DIR}/production.env" GEMINI_API_KEY)}"
     local openrouter_key="${OPENROUTER_API_KEY:-$(read_stored_env_value "${ETC_DIR}/production.env" OPENROUTER_API_KEY)}"
@@ -484,12 +516,15 @@ function collect_config() {
     if [[ "${NON_INTERACTIVE:-false}" == "false" ]]; then
         echo -e "${YELLOW}--- Secure Platform Setup Inquiries ---${NC}"
         
-        while [[ -z "${PRODUCTION_DOMAIN:-}" ]]; do
+        while true; do
             read -r -p "Enter Production Domain Name${prod_domain:+ [$prod_domain]}: " input
-            PRODUCTION_DOMAIN="${input:-$prod_domain}"
-            if [[ -z "$PRODUCTION_DOMAIN" ]]; then
-                log "WARN" "A real production DNS hostname is required; the raw server IP is not used for Caddy HTTPS routing."
+            local domain_candidate="${input:-$prod_domain}"
+            domain_candidate="${domain_candidate,,}"
+            if production_domain_is_valid "$domain_candidate"; then
+                PRODUCTION_DOMAIN="$domain_candidate"
+                break
             fi
+            log "WARN" "Enter a real DNS hostname that you control. Placeholder names, reserved example domains, URLs, localhost, and raw IP addresses are rejected."
         done
 
         if [[ "$DEPLOY_STAGING" == "true" ]]; then
@@ -577,10 +612,11 @@ function collect_config() {
         log "ERROR" "Missing model credential. Export OPENROUTER_API_KEY or MINIMAX_API_KEY, then rerun the same install command. No database or deployment data was removed."
         exit 4
     fi
-    if [[ -z "$PRODUCTION_DOMAIN" || "$PRODUCTION_DOMAIN" == *"://"* || "$PRODUCTION_DOMAIN" == "editorial-intelligence.com" || "$PRODUCTION_DOMAIN" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-        log "ERROR" "PRODUCTION_DOMAIN must be a real DNS hostname pointing to this server, without http:// or https://. Raw IP addresses and placeholder domains are rejected."
+    if ! production_domain_is_valid "${PRODUCTION_DOMAIN:-}"; then
+        log "ERROR" "PRODUCTION_DOMAIN must be a real DNS hostname you control. Placeholder domains, reserved example names, URLs, localhost, and raw IP addresses are rejected. Use --domain <hostname> or rerun interactively."
         exit 4
     fi
+    validate_production_domain_dns
     if [[ -z "$PGPASSWORD" ]]; then
         PGPASSWORD="$(openssl rand -hex 24)"
         log "INFO" "No PostgreSQL password was supplied; a strong password was generated and will be stored in root-only configuration."
@@ -1446,6 +1482,40 @@ function caddy_configuration_is_valid() {
         docker exec "$proxy_container" caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile >/dev/null 2>&1
 }
 
+function public_https_is_ready() {
+    [[ -n "${PRODUCTION_DOMAIN:-}" ]] || return 1
+    curl --ipv4 --fail --silent --show-error \
+        --noproxy '*' \
+        --connect-timeout 5 --max-time 10 \
+        --resolve "${PRODUCTION_DOMAIN}:443:127.0.0.1" \
+        "https://${PRODUCTION_DOMAIN}/api/health" >/dev/null 2>&1
+}
+
+function wait_for_public_https() {
+    if [[ "${BYPASS_PREFLIGHTS:-false}" == "true" ]]; then
+        return 0
+    fi
+
+    local timeout_seconds="${1:-120}"
+    local elapsed=0
+    while (( elapsed < timeout_seconds )); do
+        if public_https_is_ready; then
+            log "INFO" "Public HTTPS certificate and reverse-proxy health verified: https://${PRODUCTION_DOMAIN}"
+            return 0
+        fi
+        sleep 5
+        elapsed=$((elapsed + 5))
+    done
+
+    log "ERROR" "Public HTTPS did not become ready for https://${PRODUCTION_DOMAIN}. Confirm its DNS A record points to this server and inspect the Caddy certificate logs. Raw-IP HTTPS is not a supported fallback."
+    local proxy_container
+    proxy_container=$(docker compose -f "${BASE_DIR}/compose.production.yml" ps -q proxy 2>/dev/null || true)
+    if [[ -n "$proxy_container" ]]; then
+        report_container_failure "$proxy_container"
+    fi
+    return 1
+}
+
 function postgres_has_application_data() {
     local container="$1"
     local schema_exists
@@ -1551,6 +1621,7 @@ function deploy_application() {
         report_container_failure "editorial-production-app"
         exit 5
     fi
+    wait_for_public_https 120
 
     # Staging Deploy
     if [[ "$DEPLOY_STAGING" == "true" ]]; then
@@ -1588,7 +1659,8 @@ function deploy_application() {
   "staging_enabled": ${DEPLOY_STAGING},
   "legacy_migration": "${LEGACY_MIGRATION_STATUS}",
   "schema_initialized": true,
-  "health_verified": true
+  "health_verified": true,
+  "public_https_verified": true
 }
 EOF
     chmod 644 "${BASE_DIR}/metadata/deployment.json"
@@ -1603,10 +1675,10 @@ function verify_installation() {
 
     # 1. Check metadata
     if [[ -f "${BASE_DIR}/metadata/deployment.json" ]] && \
-       jq -e '.schema_initialized == true and .health_verified == true' "${BASE_DIR}/metadata/deployment.json" >/dev/null 2>&1; then
-        log "INFO" "Deployment metadata is active and records successful schema and health gates."
+       jq -e '.schema_initialized == true and .health_verified == true and .public_https_verified == true' "${BASE_DIR}/metadata/deployment.json" >/dev/null 2>&1; then
+        log "INFO" "Deployment metadata is active and records successful schema, health, and public HTTPS gates."
     elif [[ -f "${BASE_DIR}/metadata/deployment.json" ]]; then
-        log "ERROR" "Deployment metadata is incomplete or predates the mandatory schema/readiness gates. Rerun install to complete deployment."
+        log "ERROR" "Deployment metadata is incomplete or predates the mandatory schema, readiness, and public HTTPS gates. Rerun install to complete deployment."
         passed=false
     else
         log "WARN" "Deployment metadata record not found."
@@ -1674,6 +1746,12 @@ function verify_installation() {
     if [[ -n "${PRODUCTION_DOMAIN:-}" ]]; then
         log "INFO" "Public application URL: https://${PRODUCTION_DOMAIN}"
         log "INFO" "Use the configured hostname in the browser; HTTPS access by raw server IP is unsupported and will fail certificate validation."
+        if public_https_is_ready; then
+            log "INFO" "Public HTTPS certificate and reverse-proxy health are ready."
+        else
+            log "ERROR" "Public HTTPS is not ready for the configured domain. Check its DNS A record and Caddy certificate logs."
+            passed=false
+        fi
     else
         log "ERROR" "Production domain is missing from installer configuration."
         passed=false
@@ -2029,6 +2107,11 @@ if [[ "$CMD" == "install" ]]; then
             --ref)
                 [[ $# -ge 2 ]] || { log "ERROR" "--ref requires a branch, tag, or commit SHA."; exit 4; }
                 APP_REF="$2"
+                shift 2
+                ;;
+            --domain)
+                [[ $# -ge 2 ]] || { log "ERROR" "--domain requires a DNS hostname."; exit 4; }
+                PRODUCTION_DOMAIN="$2"
                 shift 2
                 ;;
             --legacy-db)
