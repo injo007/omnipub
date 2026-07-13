@@ -122,6 +122,12 @@ sudo ./deployment/install-editorial-platform.sh install \
 
 If startup still fails for a different reason, the installer now records the container exit code, OOM status, restart count, and the last 120 container log lines in `/var/log/editorial-platform/installer.log`.
 
+### `role "..." does not exist` or PostgreSQL password authentication failed
+
+The bundled PostgreSQL container is a managed internal service, not an external database connection form. Older installer versions accepted a custom username such as `Ania` after the persistent volume had already been initialized with the `postgres` role. PostgreSQL could report that it was accepting connections even though the configured role did not exist.
+
+The installer now pins the managed identity to `postgres@db:5432/editorial_db`, uses an authenticated SQL health check, and synchronizes the private `postgres` role password with the root-only installer configuration before schema bootstrap. It does not delete the volume or application data. Rerun the normal installation command and leave the PostgreSQL password blank to reuse the stored value.
+
 ### Direct IP address does not open the site
 
 Caddy uses the production domain configured during installation. Point that domain's DNS `A` record to the server, allow ports 80 and 443, and open the domain rather than the raw server IP.

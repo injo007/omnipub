@@ -6,7 +6,7 @@ Staging and production run as isolated Docker Compose stacks on Ubuntu Server 24
 
 * `NODE_ENV=production`
 * `POSTGRES_REQUIRED=true`
-* `PGHOST=db`, `PGPORT=5432`, `PGDATABASE`, `PGUSER`, and a strong `PGPASSWORD`
+* Managed database identity: `PGHOST=db`, `PGPORT=5432`, `PGDATABASE=editorial_db`, `PGUSER=postgres`, and a strong `PGPASSWORD`
 * Exactly 32 bytes in `CREDENTIALS_VAULT_KEY`
 * `OPENROUTER_API_KEY` or `MINIMAX_API_KEY` for MiniMax-M3
 * HTTPS `APP_URL`

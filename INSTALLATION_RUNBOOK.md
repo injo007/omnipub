@@ -83,6 +83,7 @@ The platform uses a local, self-contained PostgreSQL instance running alongside 
 -   A malformed credential-vault key from an incomplete deployment is replaced automatically. The installer never rotates the key automatically after deployment metadata exists.
 -   Restic/AWS values cannot block application installation. Use `configure-backup` after the website is healthy.
 -   PostgreSQL schema creation is a one-shot gate before application startup. An unhealthy or restarting application cannot produce successful deployment metadata, and failure diagnostics include exit/OOM/restart state plus recent container logs.
+-   The bundled database uses the stable managed identity `postgres@db:5432/editorial_db`; custom role, database, host, and port prompts are intentionally unavailable. Reruns reconcile the private role password before schema bootstrap and preserve the volume.
 
 ### B. Network Isolation Model
 The master installer configures four isolated Docker bridge networks to guarantee staging and production container environments never cross-talk or share routes:

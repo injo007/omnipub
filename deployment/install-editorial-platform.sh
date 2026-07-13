@@ -464,11 +464,18 @@ function collect_config() {
     local minimax_key="${MINIMAX_API_KEY:-$(read_stored_env_value "${ETC_DIR}/production.env" MINIMAX_API_KEY)}"
     local vault_key="${CREDENTIALS_VAULT_KEY:-$(read_stored_env_value "${ETC_DIR}/production.env" CREDENTIALS_VAULT_KEY)}"
     
-    local pg_user="${PGUSER:-postgres}"
+    local configured_pg_user="${PGUSER:-postgres}"
+    local configured_pg_database="${PGDATABASE:-editorial_db}"
+    local configured_pg_host="${PGHOST:-db}"
+    local configured_pg_port="${PGPORT:-5432}"
+    local pg_user="postgres"
     local pg_password="${PGPASSWORD:-}"
-    local pg_database="${PGDATABASE:-editorial_db}"
-    local pg_host="${PGHOST:-db}"
-    local pg_port="${PGPORT:-5432}"
+    local pg_database="editorial_db"
+    local pg_host="db"
+    local pg_port="5432"
+    if [[ "$configured_pg_user" != "$pg_user" || "$configured_pg_database" != "$pg_database" || "$configured_pg_host" != "$pg_host" || "$configured_pg_port" != "$pg_port" ]]; then
+        log "WARN" "The managed PostgreSQL stack uses the stable internal identity postgres@db:5432/editorial_db. Older custom connection values will be replaced to keep the persistent volume and application credentials aligned."
+    fi
     local worker_concurrency=2
     if [[ "$DEPLOY_STAGING" == "true" ]]; then
         worker_concurrency=5
@@ -524,10 +531,13 @@ function collect_config() {
         fi
 
         echo -e "${YELLOW}--- Self-Hosted PostgreSQL Configuration ---${NC}"
-        read -r -p "Enter PostgreSQL Username [$pg_user]: " input
-        PGUSER="${input:-$pg_user}"
+        PGUSER="$pg_user"
+        PGDATABASE="$pg_database"
+        PGHOST="$pg_host"
+        PGPORT="$pg_port"
+        log "INFO" "Using managed PostgreSQL identity postgres@db:5432/editorial_db."
 
-        echo -n "Enter PostgreSQL Password (hidden): "
+        echo -n "Enter PostgreSQL Password (hidden, leave blank to reuse or generate): "
         read -r -s input_pg_pass
         echo ""
         if [[ -n "$input_pg_pass" ]]; then
@@ -535,15 +545,6 @@ function collect_config() {
         else
             PGPASSWORD="$pg_password"
         fi
-
-        read -r -p "Enter PostgreSQL Database Name [$pg_database]: " input
-        PGDATABASE="${input:-$pg_database}"
-
-        read -r -p "Enter PostgreSQL Host (use 'db' for internal container connection) [$pg_host]: " input
-        PGHOST="${input:-$pg_host}"
-
-        read -r -p "Enter PostgreSQL Port [$pg_port]: " input
-        PGPORT="${input:-$pg_port}"
 
     else
         log "INFO" "Non-interactive execution mode. Consuming environment variables or defaults."
@@ -583,9 +584,18 @@ function collect_config() {
     if [[ -z "$PGPASSWORD" ]]; then
         PGPASSWORD="$(openssl rand -hex 24)"
         log "INFO" "No PostgreSQL password was supplied; a strong password was generated and will be stored in root-only configuration."
+    elif [[ ! "$PGPASSWORD" =~ ^[A-Za-z0-9_-]{16,128}$ ]]; then
+        if [[ ! -f "${BASE_DIR}/metadata/deployment.json" ]] || \
+           ! jq -e '.health_verified == true' "${BASE_DIR}/metadata/deployment.json" >/dev/null 2>&1; then
+            PGPASSWORD="$(openssl rand -hex 24)"
+            log "WARN" "The password from an incomplete older deployment is not safe for deterministic environment-file handling. A strong replacement was generated and will be synchronized with the private managed PostgreSQL role."
+        else
+            log "ERROR" "The stored PostgreSQL password uses unsupported characters or is shorter than 16 characters. A verified deployment exists, so credentials will not be rotated automatically."
+            exit 4
+        fi
     fi
-    if [[ "$PGHOST" != "db" ]]; then
-        log "ERROR" "This installer provisions internal PostgreSQL containers, so PGHOST must be 'db'. Use the manual deployment runbook for an external PostgreSQL service."
+    if [[ "$PGUSER" != "postgres" || "$PGDATABASE" != "editorial_db" || "$PGHOST" != "db" || "$PGPORT" != "5432" ]]; then
+        log "ERROR" "The managed PostgreSQL stack requires postgres@db:5432/editorial_db. Use the manual deployment runbook for an external PostgreSQL service."
         exit 4
     fi
     if [[ -z "$CREDENTIALS_VAULT_KEY" ]]; then
@@ -747,7 +757,7 @@ services:
       POSTGRES_PASSWORD: "${PGPASSWORD}"
       POSTGRES_DB: "${PGDATABASE}"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${PGUSER} -d ${PGDATABASE}"]
+      test: ["CMD-SHELL", "PGPASSWORD=\"\$\${POSTGRES_PASSWORD}\" psql --host 127.0.0.1 --username \"\$\${POSTGRES_USER}\" --dbname \"\$\${POSTGRES_DB}\" --command 'SELECT 1' >/dev/null"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -849,7 +859,7 @@ services:
       POSTGRES_PASSWORD: "${PGPASSWORD}"
       POSTGRES_DB: "${PGDATABASE}"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${PGUSER} -d ${PGDATABASE}"]
+      test: ["CMD-SHELL", "PGPASSWORD=\"\$\${POSTGRES_PASSWORD}\" psql --host 127.0.0.1 --username \"\$\${POSTGRES_USER}\" --dbname \"\$\${POSTGRES_DB}\" --command 'SELECT 1' >/dev/null"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -1235,6 +1245,7 @@ function apply_hardening() {
 function wait_for_container_health() {
     local container="$1"
     local timeout_seconds="${2:-120}"
+    local retry_unhealthy="${3:-false}"
     local elapsed=0
     while (( elapsed < timeout_seconds )); do
         local status
@@ -1246,6 +1257,11 @@ function wait_for_container_health() {
         if [[ "$status" == "healthy" || "$status" == "running" ]]; then
             return 0
         fi
+        if [[ "$status" == "unhealthy" && "$retry_unhealthy" == "true" ]]; then
+            sleep 2
+            elapsed=$((elapsed + 2))
+            continue
+        fi
         if [[ "$status" == "unhealthy" || "$status" == "exited" || "$status" == "dead" ]]; then
             log "ERROR" "Container $container entered terminal state: $status"
             report_container_failure "$container"
@@ -1256,6 +1272,68 @@ function wait_for_container_health() {
     done
     log "ERROR" "Timed out waiting for container health: $container"
     return 1
+}
+
+function wait_for_postgres_server() {
+    local container="$1"
+    local timeout_seconds="${2:-120}"
+    local elapsed=0
+    while (( elapsed < timeout_seconds )); do
+        if docker exec "$container" pg_isready --timeout=2 >/dev/null 2>&1; then
+            return 0
+        fi
+        if [[ "$(docker inspect --format '{{.State.Status}}' "$container" 2>/dev/null || echo missing)" =~ ^(exited|dead|missing)$ ]]; then
+            log "ERROR" "PostgreSQL container stopped before accepting connections: $container"
+            report_container_failure "$container"
+            return 1
+        fi
+        sleep 2
+        elapsed=$((elapsed + 2))
+    done
+    log "ERROR" "Timed out waiting for PostgreSQL to accept connections: $container"
+    report_container_failure "$container"
+    return 1
+}
+
+function reconcile_managed_postgres_credentials() {
+    local container="$1"
+    local environment_name="$2"
+
+    if docker exec --env "PGPASSWORD=$PGPASSWORD" "$container" \
+        psql --host 127.0.0.1 --username postgres --dbname editorial_db --tuples-only --no-align --command "SELECT 1" >/dev/null 2>&1; then
+        log "INFO" "$environment_name PostgreSQL managed-role authentication verified."
+        return
+    fi
+
+    log "WARN" "$environment_name PostgreSQL credentials do not match the persistent managed volume. Reconciling the private postgres role with the root-only installer configuration."
+    if ! docker exec "$container" psql --username postgres --dbname postgres --tuples-only --no-align --command "SELECT 1" >/dev/null 2>&1; then
+        log "ERROR" "Cannot access the managed postgres administrator role through the container-local socket. The volume may have been initialized outside this installer; no role or data was changed."
+        report_container_failure "$container"
+        exit 5
+    fi
+
+    local escaped_password="${PGPASSWORD//\'/\'\'}"
+    if ! docker exec "$container" psql --username postgres --dbname postgres --set ON_ERROR_STOP=1 \
+        --command "ALTER ROLE postgres WITH LOGIN PASSWORD '$escaped_password'" >/dev/null; then
+        log "ERROR" "Failed to synchronize the managed postgres role password."
+        exit 5
+    fi
+
+    local database_exists
+    database_exists=$(docker exec "$container" psql --username postgres --dbname postgres --tuples-only --no-align \
+        --command "SELECT EXISTS (SELECT 1 FROM pg_database WHERE datname = 'editorial_db')" 2>/dev/null || echo f)
+    if [[ "$database_exists" != "t" ]]; then
+        log "WARN" "$environment_name managed database editorial_db does not exist; creating it without modifying other databases."
+        docker exec "$container" createdb --username postgres --owner postgres editorial_db
+    fi
+
+    if ! docker exec --env "PGPASSWORD=$PGPASSWORD" "$container" \
+        psql --host 127.0.0.1 --username postgres --dbname editorial_db --tuples-only --no-align --command "SELECT 1" >/dev/null 2>&1; then
+        log "ERROR" "$environment_name PostgreSQL role reconciliation completed but authenticated connectivity still failed."
+        report_container_failure "$container"
+        exit 5
+    fi
+    log "INFO" "$environment_name PostgreSQL managed-role credentials reconciled successfully."
 }
 
 function report_container_failure() {
@@ -1389,11 +1467,15 @@ function deploy_application() {
     # Start PostgreSQL and initialize its schema before application startup. This prevents
     # first-boot crashes from leaving an empty database and an unhealthy restart loop.
     docker compose -f "${BASE_DIR}/compose.production.yml" up -d db
-    wait_for_container_health "editorial-production-db" 120
+    wait_for_postgres_server "editorial-production-db" 120
+    reconcile_managed_postgres_credentials "editorial-production-db" "production"
+    wait_for_container_health "editorial-production-db" 120 true
     initialize_postgres_schema "${BASE_DIR}/compose.production.yml" "editorial-production-db" "production"
     if [[ "$DEPLOY_STAGING" == "true" ]]; then
         docker compose -f "${BASE_DIR}/compose.staging.yml" up -d db
-        wait_for_container_health "editorial-staging-db" 120
+        wait_for_postgres_server "editorial-staging-db" 120
+        reconcile_managed_postgres_credentials "editorial-staging-db" "staging"
+        wait_for_container_health "editorial-staging-db" 120 true
         initialize_postgres_schema "${BASE_DIR}/compose.staging.yml" "editorial-staging-db" "staging"
     else
         docker compose -f "${BASE_DIR}/compose.staging.yml" down --remove-orphans 2>/dev/null || true

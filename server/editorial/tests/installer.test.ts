@@ -9,6 +9,7 @@ const packageJson = JSON.parse(fs.readFileSync(path.join(root, "package.json"), 
 const readme = fs.readFileSync(path.join(root, "README.md"), "utf8");
 const migrationScript = fs.readFileSync(path.join(root, "scripts/migrate-json-to-postgres.ts"), "utf8");
 const ciWorkflow = fs.readFileSync(path.join(root, ".github/workflows/ci.yml"), "utf8");
+const productionCompose = fs.readFileSync(path.join(root, "compose.production.yml"), "utf8");
 
 describe("Ubuntu installer packaging contract", () => {
   it("builds only from the validated staged source directory", () => {
@@ -19,14 +20,35 @@ describe("Ubuntu installer packaging contract", () => {
 
   it("starts PostgreSQL and performs legacy migration before application startup", () => {
     const databaseStart = installer.indexOf('up -d db');
+    const roleReconciliation = installer.indexOf("reconcile_managed_postgres_credentials", databaseStart);
     const schemaBootstrap = installer.indexOf("initialize_postgres_schema", databaseStart);
     const migration = installer.indexOf("migrate_legacy_database_if_needed", databaseStart);
     const applicationStart = installer.indexOf('up -d --remove-orphans', migration);
     expect(databaseStart).toBeGreaterThan(-1);
+    expect(roleReconciliation).toBeGreaterThan(databaseStart);
+    expect(schemaBootstrap).toBeGreaterThan(roleReconciliation);
     expect(schemaBootstrap).toBeGreaterThan(databaseStart);
     expect(migration).toBeGreaterThan(schemaBootstrap);
     expect(migration).toBeGreaterThan(databaseStart);
     expect(applicationStart).toBeGreaterThan(migration);
+  });
+
+  it("pins the managed PostgreSQL identity and verifies authenticated health", () => {
+    const collectConfigStart = installer.indexOf("function collect_config()");
+    const templatesStart = installer.indexOf("function write_embedded_templates()", collectConfigStart);
+    const collectConfig = installer.slice(collectConfigStart, templatesStart);
+    expect(collectConfig).toContain('local pg_user="postgres"');
+    expect(collectConfig).toContain('local pg_database="editorial_db"');
+    expect(collectConfig).toContain('local pg_host="db"');
+    expect(collectConfig).not.toContain("Enter PostgreSQL Username");
+    expect(collectConfig).not.toContain("Enter PostgreSQL Database Name");
+    expect(installer).toContain("function reconcile_managed_postgres_credentials()");
+    expect(installer).toContain("ALTER ROLE postgres WITH LOGIN PASSWORD");
+    expect(installer).toContain('^[A-Za-z0-9_-]{16,128}$');
+    expect(installer).toContain("will be synchronized with the private managed PostgreSQL role");
+    expect(installer).toContain("psql --host 127.0.0.1 --username postgres --dbname editorial_db");
+    expect(productionCompose).toContain('$${POSTGRES_PASSWORD}');
+    expect(productionCompose).toContain("--command 'SELECT 1'");
   });
 
   it("bundles the migration executable into the production build", () => {
