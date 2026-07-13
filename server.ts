@@ -3577,6 +3577,46 @@ async function runSingleGeminiInference(
   };
 }
 
+async function runSingleMiniMaxInference(
+  modelName: string,
+  contents: string,
+  systemInstruction?: string,
+  jsonMode?: boolean,
+  apiKey?: string
+): Promise<{ text: string; inputTokens: number; outputTokens: number }> {
+  if (!apiKey) {
+    throw new Error("MiniMax API key is missing. Specify it in your Settings.");
+  }
+
+  const minimax = new OpenAI({
+    apiKey,
+    baseURL: "https://api.minimaxi.chat/v1",
+    timeout: 120000,
+  });
+  const messages: any[] = [];
+  if (systemInstruction) messages.push({ role: "system", content: systemInstruction });
+  messages.push({ role: "user", content: contents });
+
+  let nativeModelName = modelName.replace(/^minimax\//i, "");
+  if (["minimax-3", "minimax3"].includes(nativeModelName.toLowerCase())) nativeModelName = "MiniMax-M3";
+  if (["minimax-2.7", "minimax2.7"].includes(nativeModelName.toLowerCase())) nativeModelName = "MiniMax-M2.7";
+
+  const response = await minimax.chat.completions.create({
+    model: nativeModelName,
+    messages,
+    response_format: jsonMode ? { type: "json_object" } : undefined,
+    max_tokens: 8192,
+  });
+  if (!response?.choices?.[0]) {
+    throw new Error("MiniMax API returned no completion choices.");
+  }
+  return {
+    text: response.choices[0].message?.content || "",
+    inputTokens: response.usage?.prompt_tokens || 0,
+    outputTokens: response.usage?.completion_tokens || 0,
+  };
+}
+
 // -------------------------------------------------------------
 // Unified LLM Completion Handler with Provider Routing
 // -------------------------------------------------------------
@@ -4013,6 +4053,23 @@ export async function runLLMCompletion(params: any): Promise<any> {
               }
             }
           }
+      } else if (fbProvider === "minimax" && minimaxApiKey) {
+        try {
+          const fbResult = await runSingleMiniMaxInference(fallbackModelId, contents, systemInstruction, jsonMode, minimaxApiKey);
+          text = fbResult.text;
+          inputTokens = fbResult.inputTokens;
+          outputTokens = fbResult.outputTokens;
+          if (inputTokens === 0) calculateTokensHeuristic(text);
+          fallbackModelUsed = fallbackModelId;
+          success = true;
+          addNotification("success", "Playback Stabilized", `Rerouted agent execution stabilized on MiniMax fallback "${fallbackModelId}".`);
+        } catch (fbErr: any) {
+          finalStatus = "failed";
+          const totalErr = `Configured MiniMax fallback ${fallbackTarget} failed: ${fbErr.message || fbErr}`;
+          console.error(`[LLM Fallback Failure] ${totalErr}`);
+          addNotification("error", "Configured Fallback Failed", totalErr);
+          throw new Error(totalErr);
+        }
       } else {
         try {
           const geminiModel = (fbProvider === "gemini" && fallbackModelId) ? fallbackModelId : "gemini-2.5-flash";
