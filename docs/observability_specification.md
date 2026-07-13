@@ -48,7 +48,7 @@ The system tracks metrics across four core operational categories:
 *   `unauthorized_requests`: Blocked authentication attempts.
 *   `rate_limit_blocks`: Throttled client requests.
 *   `invalid_schema_requests`: Malformed body payloads.
-*   `firestore_rule_denials`: Denied Client writes.
+*   `database_constraint_denials`: Rejected database writes or constraint violations.
 
 ---
 
@@ -60,7 +60,7 @@ The system tracks metrics across four core operational categories:
 | `RECONCILIATION_BACKLOG` | **WARN** | `reconciliation_backlog > 5` | Validate background workers, check target site connection, evaluate load. | `/docs/runbooks/reconciliation.md` |
 | `WP_AUTH_FAILURES` | **CRITICAL** | `auth_failures >= 3 in 1m` | Revoke and cycle application keys. Verify user permissions on target WP site. | `/docs/runbooks/auth_failure.md` |
 | `BUDGET_CEILING_WARN` | **WARN** | `spend >= 80% monthly_budget` | Transition pipeline to `Cheap` tier. Audit top resource-consuming feeds. | `/docs/runbooks/cost_control.md` |
-| `FIRESTORE_FAILURE` | **CRITICAL** | `database_error >= 5 in 1m` | Verify GCP regional status. Check Firebase IAM permissions. | `/docs/runbooks/firestore_outage.md` |
+| `POSTGRESQL_FAILURE` | **CRITICAL** | `database_error >= 5 in 1m` | Check container health, connections, disk capacity, and PostgreSQL logs. | `/docs/runbooks/postgresql-outage.md` |
 
 ---
 

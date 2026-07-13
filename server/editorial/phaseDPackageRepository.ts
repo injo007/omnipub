@@ -1,6 +1,5 @@
 import { FinalArticlePackage, PhaseDAuditEvent } from "./typesPhaseD";
-import { getApps } from "firebase-admin/app";
-import { getFirestore } from "firebase-admin/firestore";
+import { getDocumentStore } from "../db/documentStore";
 
 export interface IPhaseDPackageRepository {
     getByPackageId(packageId: string): Promise<FinalArticlePackage | null>;
@@ -36,17 +35,16 @@ export class InMemoryPhaseDPackageRepository implements IPhaseDPackageRepository
     }
 }
 
-export class FirestorePhaseDPackageRepository implements IPhaseDPackageRepository {
+export class PostgresPhaseDPackageRepository implements IPhaseDPackageRepository {
     private get db() {
-        if (!getApps().length) {
-            throw new Error("Firebase Admin not initialized.");
-        }
-        return getFirestore();
+        return getDocumentStore();
     }
 
     async getByPackageId(packageId: string): Promise<FinalArticlePackage | null> {
-        const doc = await this.db.collection('phase_d_packages').doc(packageId).get();
-        return doc.exists ? doc.data() as FinalArticlePackage : null;
+        const direct = await this.db.collection('phase_d_packages').doc(packageId).get();
+        if (direct.exists) return direct.data() as FinalArticlePackage;
+        const snapshot = await this.db.collection('phase_d_packages').where('packageId', '==', packageId).limit(1).get();
+        return snapshot.empty ? null : snapshot.docs[0].data() as FinalArticlePackage;
     }
 
     async getByIdempotencyKey(key: string): Promise<FinalArticlePackage | null> {
@@ -60,15 +58,13 @@ export class FirestorePhaseDPackageRepository implements IPhaseDPackageRepositor
         try {
             return await this.db.runTransaction(async (transaction) => {
                 const doc = await transaction.get(docRef);
-                if (doc.exists) {
-                    return doc.data() as FinalArticlePackage;
-                }
+                if (doc.exists) return doc.data() as FinalArticlePackage;
                 const data = { ...pkg, idempotencyKey: key };
-                transaction.set(docRef, data);
-                return pkg;
+                await transaction.set(docRef, data);
+                return data;
             });
         } catch (error) {
-            console.error("Firestore transaction failed", error);
+            console.error("PostgreSQL transaction failed", error);
             throw new Error("Persistence exception: " + String(error));
         }
     }

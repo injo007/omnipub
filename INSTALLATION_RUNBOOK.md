@@ -48,9 +48,9 @@ This document defines installation workflows for operators setting up fresh phys
 ## 4. Production-Ready System Integrations
 
 ### A. Database Isolation Model (Self-Hosted PostgreSQL)
-The platform replaces external Firestore cloud dependence with a local, self-contained PostgreSQL instance running alongside the application.
+The platform uses a local, self-contained PostgreSQL instance running alongside the application. No cloud database service is required.
 -   **Auto-Migration & Schema Setup**: On the very first boot of the application service, the app's internal database initialization engine connects to PostgreSQL, creates all standard relational tables (such as `articles`, `writers`, `feeds`, etc.), and migrates any existing local cache (`db.json`) completely and automatically.
--   **Security Configuration**: PGPASSWORD and other credentials are encrypted at rest using the standard AES-256-CBC engine with the `CREDENTIALS_VAULT_KEY` parameter.
+-   **Security Configuration**: PostgreSQL credentials are stored in root-readable environment files (`0600`). WordPress secrets are encrypted by the 32-byte `CREDENTIALS_VAULT_KEY` before persistence.
 
 ### B. Network Isolation Model
 The master installer configures four isolated Docker bridge networks to guarantee staging and production container environments never cross-talk or share routes:
@@ -64,4 +64,3 @@ To ensure absolute service persistence, self-healing, and concurrency limits acr
 -   `Restart=always`: Automates instant service recovery upon container or engine crash.
 -   `RestartSec=10`: Spreading engine restarts safely to prevent crash-loops.
 -   `LimitNOFILE=65535`: Sets file descriptors to high limits to support highly concurrent queue workers.
-

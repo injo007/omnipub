@@ -3,7 +3,7 @@
 Based on our empirical gap analysis, these updates must be implemented to fulfill the specification:
 
 ## 1. Phase B: Solidify the Editorial Foundation
-*   **Establish Evidence Ledger**: Introduce a deterministic schema representing source-to-claim mappings stored on the `Article` object inside `db.json` and Firestore.
+*   **Establish Evidence Ledger**: Introduce a deterministic schema representing source-to-claim mappings stored in PostgreSQL JSONB article records.
 *   **Establish Editorial Brief Schema**: Build an intermediate pipeline state that produces and saves an `EditorialBrief` rather than immediately executing the drafting models.
 
 ## 2. Phase C: Upgrade the Writer System

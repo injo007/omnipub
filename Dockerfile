@@ -36,13 +36,7 @@ RUN addgroup -g 1001 -S nodejs && \
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/package.json ./package.json
 COPY --from=deps /app/node_modules ./node_modules
-# Copy firestore rules & blueprints if application reads them at runtime
-COPY --from=builder /app/firestore.rules ./firestore.rules
-COPY --from=builder /app/firebase-blueprint.json ./firebase-blueprint.json
-COPY --from=builder /app/firebase-applet-config.json ./firebase-applet-config.json
-
-# If localDb JSON persistence file exists or is created
-RUN touch db.json && chown -R nodejs:nodejs /app
+RUN chown -R nodejs:nodejs /app
 
 USER nodejs
 

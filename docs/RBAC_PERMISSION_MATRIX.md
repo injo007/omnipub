@@ -48,7 +48,7 @@ The platform distinguishes seven core operational and automated security roles:
 
 ## 3. Server-Side Enforcement Mechanisms
 
-Role enforcement is executed strictly on the server-side via custom Express middleware, Firestore Security Rules, and service-layer assertions. Client-side role checks are used exclusively for interface decoration (hiding unpermitted UI blocks) and never serve as security gates.
+Role enforcement is executed on the server through Express middleware, service-layer assertions, and a least-privilege PostgreSQL application role. Client-side role checks are used only for interface decoration.
 
 ### Express Middleware Example
 ```typescript
@@ -71,15 +71,12 @@ export function requireRole(allowedRoles: string[]) {
 }
 ```
 
-### Firestore Rule Constraints
-```javascript
-match /saas_settings/{settingId} {
-  allow read: if request.auth != null;
-  allow write: if request.auth != null && (
-    get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
-    get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'sysadmin'
-  );
-}
+### PostgreSQL Role Constraints
+```sql
+REVOKE ALL ON DATABASE editorial_db FROM PUBLIC;
+GRANT CONNECT ON DATABASE editorial_db TO editorial_app;
+GRANT USAGE ON SCHEMA public TO editorial_app;
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO editorial_app;
 ```
 
 ---

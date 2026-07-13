@@ -18,4 +18,13 @@ This guide summarizes all environment variable configurations, validation constr
 
 ## 3. Cryptography Keys
 
-*   **`CREDENTIALS_VAULT_KEY`**: Strict 32-character hexadecimal key used to encrypt and decrypt sensitive remote WordPress credentials in Firestore.
+*   **`CREDENTIALS_VAULT_KEY`**: Exactly 32 bytes; encrypts sensitive WordPress credentials before PostgreSQL persistence.
+
+## 4. PostgreSQL
+
+* **`PGHOST`**: `db` in Docker Compose; a hostname or socket host for direct deployment.
+* **`PGPORT`**: PostgreSQL port, normally `5432`.
+* **`PGDATABASE`**, **`PGUSER`**, **`PGPASSWORD`**: Database name and credentials.
+* **`POSTGRES_REQUIRED`**: Set to `true` in staging and production. Startup fails closed if PostgreSQL is unavailable.
+
+Use either `OPENROUTER_API_KEY` or `MINIMAX_API_KEY` for MiniMax-M3. `GEMINI_API_KEY` is optional. `AUTH_REQUIRED=true` enables the self-hosted `APP_API_TOKEN` bearer-token gate.

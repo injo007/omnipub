@@ -23,9 +23,9 @@
     "status": "NOT IMPLEMENTED",
     "details": "All scheduling uses manual UI polling rather than a persistent background job cluster (no setInterval or temporal)."
   },
-  "firestore_persistence": {
-    "status": "PARTIALLY VERIFIED",
-    "details": "Data is asynchronously synced unidirectionally to Firestore, but relies entirely on `db.json` locally. Uses `setDoc` but no `runTransaction`."
+  "postgresql_persistence": {
+    "status": "IMPLEMENTED",
+    "details": "PostgreSQL is the required staging and production source of truth. Queue leases and state transitions use transactions; db.json import is migration-only in production."
   },
   "passage_level_originality": {
     "status": "NOT IMPLEMENTED",

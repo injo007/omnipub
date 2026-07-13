@@ -192,7 +192,7 @@ export const ALERT_RUNBOOKS: Record<string, AlertConfig> = {
     severity: "CRITICAL",
     trigger: "dead_letter_jobs > 0",
     evaluationWindow: "5m",
-    recommendedAction: "Inspect the dead-letter-queue collection in Firestore, check target site credentials and connection error details.",
+    recommendedAction: "Inspect the PostgreSQL publishing_queue table, then check target-site credentials and connection errors.",
     escalationTarget: "Head SaaS Engineer",
     runbookLink: "/docs/runbooks/DEAD_LETTER_recovery.md"
   },
@@ -220,13 +220,13 @@ export const ALERT_RUNBOOKS: Record<string, AlertConfig> = {
     escalationTarget: "Administrator",
     runbookLink: "/docs/runbooks/budget_exhaustion.md"
   },
-  FIRESTORE_OUTAGE: {
+  POSTGRESQL_OUTAGE: {
     severity: "CRITICAL",
-    trigger: "Sustained Firestore errors",
+    trigger: "Sustained PostgreSQL connection or transaction errors",
     evaluationWindow: "1m",
-    recommendedAction: "Verify Google Cloud Status dashboard, trigger secondary read fallback paths.",
+    recommendedAction: "Check PostgreSQL container health, connection saturation, disk capacity, and recent database logs.",
     escalationTarget: "SRE On-Call",
-    runbookLink: "/docs/runbooks/Firestore_outage.md"
+    runbookLink: "/docs/runbooks/postgresql-outage.md"
   }
 };
 
@@ -272,7 +272,7 @@ class MetricsTracker {
     rate_limit_blocks: 0,
     invalid_schema_requests: 0,
     rejected_manual_resolutions: 0,
-    firestore_rule_denials: 0
+    database_constraint_denials: 0
   };
 
   // Prevent High Cardinality - strip variable items
@@ -373,7 +373,7 @@ class MetricsTracker {
       rate_limit_blocks: 0,
       invalid_schema_requests: 0,
       rejected_manual_resolutions: 0,
-      firestore_rule_denials: 0
+      database_constraint_denials: 0
     };
   }
 }

@@ -64,7 +64,7 @@ describe("Phase F: Production Integration & Observability Tests", () => {
     expect(loadedState.settings.costLimit).toBe(0.15);
   });
 
-  // 7. Firestore lease updates execute transactionally.
+  // 7. PostgreSQL lease updates execute transactionally.
   it("should execute lease updates transactionally with lock prevention", () => {
     const lease = { id: "job-1", leased: true, leasedAt: Date.now() };
     const transactionResult = { ...lease };
@@ -175,11 +175,11 @@ describe("Phase F: Production Integration & Observability Tests", () => {
     expect(resStatus).toBe(503);
   });
 
-  // 22. Stateful cache transitions match Firestore collections.
-  it("should synchronize active local cache states back to firestore collections during runtime sync", () => {
+  // 22. Stateful cache transitions match PostgreSQL records.
+  it("should synchronize active cache state to PostgreSQL records", () => {
     const cachedState = { job_1: "published" };
-    const firestoreState = { ...cachedState };
-    expect(firestoreState.job_1).toBe("published");
+    const postgresState = { ...cachedState };
+    expect(postgresState.job_1).toBe("published");
   });
 
   // 23. Custom security overrides authorize blocked executions.

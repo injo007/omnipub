@@ -1,5 +1,5 @@
 import { EditorialQualityScore, OriginalityAnalysis, NaturalnessAnalysis, WriterVoiceValidation } from "./types";
-import { v4 as uuidv4 } from "uuid";
+import { randomUUID as uuidv4 } from "crypto";
 
 export function evaluateEditorialQuality(
   articleTraceId: string,

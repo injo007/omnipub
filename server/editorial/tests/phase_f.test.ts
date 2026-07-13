@@ -22,18 +22,28 @@ import {
 } from "../governanceService";
 
 describe("Phase F: Production Readiness & Governance Unit Tests", () => {
+  const validProductionEnv = {
+    NODE_ENV: "production",
+    APP_URL: "https://my-app.com",
+    PGPASSWORD: "strong-postgres-password",
+    CREDENTIALS_VAULT_KEY: "12345678901234567890123456789012",
+    OPENROUTER_API_KEY: "sk-or-valid-production-key"
+  } as const;
+
   beforeEach(() => {
     vi.restoreAllMocks();
   });
 
   // 1. Production startup fails with missing secrets.
-  it("should fail production validation if GEMINI_API_KEY is missing", () => {
+  it("should fail production validation if the PostgreSQL password is missing", () => {
     expect(() => {
       validateEnvironment({
         NODE_ENV: "production",
-        APP_URL: "https://my-app.com"
+        APP_URL: "https://my-app.com",
+        CREDENTIALS_VAULT_KEY: "12345678901234567890123456789012",
+        OPENROUTER_API_KEY: "sk-or-valid-production-key"
       });
-    }).toThrow("Missing required GEMINI_API_KEY");
+    }).toThrow("Missing required PGPASSWORD");
   });
 
   // 2. Development startup may use explicit development adapters.
@@ -49,8 +59,7 @@ describe("Phase F: Production Readiness & Governance Unit Tests", () => {
   it("should reject public environment prefixing of server secrets", () => {
     expect(() => {
       validateEnvironment({
-        NODE_ENV: "production",
-        GEMINI_API_KEY: "real-secret-key",
+        ...validProductionEnv,
         VITE_GEMINI_API_KEY: "leaked-secret-prefix"
       });
     }).toThrow("Security breach: Server-only key prefix found");
@@ -69,8 +78,8 @@ describe("Phase F: Production Readiness & Governance Unit Tests", () => {
   it("should reject placeholder secrets in production mode", () => {
     expect(() => {
       validateEnvironment({
-        NODE_ENV: "production",
-        GEMINI_API_KEY: "MY_GEMINI_API_KEY"
+        ...validProductionEnv,
+        OPENROUTER_API_KEY: "your-key"
       });
     }).toThrow("Placeholder secret detected");
   });
@@ -86,8 +95,7 @@ describe("Phase F: Production Readiness & Governance Unit Tests", () => {
   it("should reject malformed or non-https APP_URL in production", () => {
     expect(() => {
       validateEnvironment({
-        NODE_ENV: "production",
-        GEMINI_API_KEY: "real-key-123",
+        ...validProductionEnv,
         APP_URL: "http://malformed-url"
       });
     }).toThrow("Production APP_URL must be a secure HTTPS endpoint");
@@ -172,9 +180,9 @@ describe("Phase F: Production Readiness & Governance Unit Tests", () => {
 
   // 14. Health readiness probe correctly diagnoses database outages.
   it("should report database unreadiness during active provider failures", () => {
-    let firestoreConnected = false;
-    let localDbExists = true;
-    const isReady = firestoreConnected && localDbExists;
+    const postgresConnected = false;
+    const postgresRequired = true;
+    const isReady = !postgresRequired || postgresConnected;
     expect(isReady).toBe(false);
   });
 
@@ -301,8 +309,8 @@ describe("Phase F: Production Readiness & Governance Unit Tests", () => {
     expect(activeCostControls.operatorOverrides[activeCostControls.operatorOverrides.length - 1].operatorId).toBe("admin-user-001");
   });
 
-  // 27. Firestore write restrictions prevent unauthorized tenant modifications.
-  it("should enforce firestore write constraints mapping", () => {
+  // 27. Server authorization prevents unauthorized tenant modifications.
+  it("should enforce tenant write constraints", () => {
     const userUid = "user-tenant-a" as string;
     const docTenantId = "user-tenant-b" as string;
     const canWrite = userUid === docTenantId;

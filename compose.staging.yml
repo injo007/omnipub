@@ -6,9 +6,15 @@ services:
     container_name: editorial-staging-db
     restart: always
     environment:
-      POSTGRES_USER: ${PG_USER:-postgres}
-      POSTGRES_PASSWORD: ${PG_PASSWORD}
-      POSTGRES_DB: ${PG_DATABASE:-editorial_db}
+      POSTGRES_USER: ${PGUSER:-postgres}
+      POSTGRES_PASSWORD: ${PGPASSWORD}
+      POSTGRES_DB: ${PGDATABASE:-editorial_db}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${PGUSER:-postgres} -d ${PGDATABASE:-editorial_db}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
     volumes:
       - pg-staging-data:/var/lib/postgresql/data
     networks:
@@ -32,10 +38,12 @@ services:
     image: editorial-platform:staging
     restart: always
     depends_on:
-      - db
+      db:
+        condition: service_healthy
     environment:
       - NODE_ENV=staging
       - PORT=3000
+      - POSTGRES_REQUIRED=true
     env_file:
       - /etc/editorial-platform/staging.env
     expose:

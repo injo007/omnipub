@@ -2,7 +2,7 @@
 
 ## 1. Security & Authentication Bypass
 **Risk Level:** HIGH
-**Description:** Development environments and specific endpoints explicitly bypass authentication. While there's an `authMiddleware` enforcing Firebase verification, tokens can be bypassed via `DEV_BYPASS_TOKEN` or `process.env.FIREBASE_AUTH_STRICT` toggles.
+**Description:** Self-hosted deployments can disable API authentication for a trusted private network. Internet-facing installations should enable `AUTH_REQUIRED=true`, configure `APP_API_TOKEN`, or enforce equivalent authentication at the reverse proxy.
 **Impact:** Unauthorized users could potentially trigger expensive workflows if misconfigured in production.
 
 ## 2. In-Memory and JSON Database Limitations

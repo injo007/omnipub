@@ -170,9 +170,9 @@ export const WordpressResponseSchema = z.object({
   slug: z.string().optional()
 });
 
-export const FirestoreJobRecordSchema = PublishingJobSchema;
+export const PublishingJobRecordSchema = PublishingJobSchema;
 
-export const FirestoreAuditEventSchema = z.object({
+export const PublishingAuditEventSchema = z.object({
   articleId: z.string().min(1),
   workflowRunId: z.string().min(1),
   packageId: z.string().min(1),

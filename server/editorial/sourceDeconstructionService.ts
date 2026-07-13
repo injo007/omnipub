@@ -1,6 +1,6 @@
 import { appContext } from "../../server";
 import { SourceDeconstruction } from "./types";
-import { v4 as uuidv4 } from "uuid";
+import { randomUUID as uuidv4 } from "crypto";
 
 export async function deconstructSource(
   sourceUrl: string,

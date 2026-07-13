@@ -1,5 +1,5 @@
 import { ArticleVersion } from "./types";
-import { v4 as uuidv4 } from "uuid";
+import { randomUUID as uuidv4 } from "crypto";
 
 export function createVersion(
   articleTraceId: string,

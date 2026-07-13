@@ -634,7 +634,7 @@ export default function NicheBlogPreview({
         setTimeout(() => setSaveSuccess(false), 3000);
       }
     } catch (err) {
-      console.error("Failed to sync edited article fields back to database/firebase:", err);
+      console.error("Failed to save edited article fields to PostgreSQL:", err);
     } finally {
       setIsSaving(false);
     }
@@ -1134,7 +1134,7 @@ export default function NicheBlogPreview({
 
                     {saveSuccess && (
                       <div className="text-[10px] text-emerald-600 font-bold text-center mt-1 animate-pulse">
-                        ✓ Updated! Saved to persistence & Firestore sync.
+                        ✓ Updated! Saved to PostgreSQL.
                       </div>
                     )}
                   </div>

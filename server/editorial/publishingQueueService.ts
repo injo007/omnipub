@@ -1,6 +1,5 @@
-import { getApps } from "firebase-admin/app";
-import { getFirestore } from "firebase-admin/firestore";
-import { v4 as uuidv4 } from "uuid";
+import { randomUUID as uuidv4 } from "crypto";
+import { getDocumentStore, type DocumentReference, type DocumentTransaction } from "../db/documentStore";
 import { 
   PublishingJob, 
   AuditTransition, 
@@ -8,7 +7,7 @@ import {
   isValidTransition,
   calculateJobIdempotencyKey,
   WordpressResponseSchema,
-  FirestoreAuditEventSchema
+  PublishingAuditEventSchema
 } from "./publishingQueueTypes";
 import { FinalArticlePackage, PhaseDAuditEvent } from "./typesPhaseD";
 import { buildWordpressPayload } from "./wordpressPayloadBuilder";
@@ -31,8 +30,8 @@ export type FailureClass =
   | "PACKAGE_INVALID"
   | "PACKAGE_REVOKED"
   | "AMBIGUOUS_REMOTE_OUTCOME"
-  | "FIRESTORE_TRANSIENT"
-  | "FIRESTORE_FATAL"
+  | "DATABASE_TRANSIENT"
+  | "DATABASE_FATAL"
   | "LEASE_LOST"
   | "UNKNOWN_TECHNICAL_FAILURE";
 
@@ -110,7 +109,7 @@ export class PublishingQueueService {
         if (job.leaseToken !== leaseToken) return false;
         
         const nextExpires = new Date(Date.now() + durationMs).toISOString();
-        transaction.update(docRef, {
+        await transaction.update(docRef, {
           leaseExpiresAt: nextExpires
         });
         return true;
@@ -189,10 +188,7 @@ export class PublishingQueueService {
   }
 
   private get db() {
-    if (!getApps().length) {
-      throw new Error("Firebase Admin not initialized.");
-    }
-    return getFirestore();
+    return getDocumentStore();
   }
 
   /**
@@ -200,8 +196,8 @@ export class PublishingQueueService {
    * Central state transition check is enforced here.
    */
   private async appendAuditEvent(
-    transaction: FirebaseFirestore.Transaction | null,
-    jobDocRef: FirebaseFirestore.DocumentReference,
+    transaction: DocumentTransaction | null,
+    jobDocRef: DocumentReference<PublishingJob>,
     job: PublishingJob,
     newStatus: JobStatus,
     action: string,
@@ -244,12 +240,12 @@ export class PublishingQueueService {
     };
 
     // Safe parsing via schemas
-    const auditEvent = FirestoreAuditEventSchema.parse(rawAuditEvent);
+    const auditEvent = PublishingAuditEventSchema.parse(rawAuditEvent);
 
     if (transaction) {
-      transaction.set(jobDocRef, updatedJob);
+      await transaction.set(jobDocRef, updatedJob);
       const auditRef = this.db.collection("phase_d_audits").doc();
-      transaction.set(auditRef, auditEvent);
+      await transaction.set(auditRef, auditEvent);
     } else {
       await jobDocRef.set(updatedJob);
       await this.db.collection("phase_d_audits").add(auditEvent);
@@ -334,7 +330,7 @@ export class PublishingQueueService {
       };
 
       job.auditHistory.push(transition);
-      transaction.set(docRef, job);
+      await transaction.set(docRef, job);
 
       const auditEvent: PhaseDAuditEvent = {
         articleId: packageId.replace("pkg_", ""),
@@ -347,7 +343,7 @@ export class PublishingQueueService {
         targetSiteId: job.targetSiteId
       };
       const auditRef = this.db.collection("phase_d_audits").doc();
-      transaction.set(auditRef, auditEvent);
+      await transaction.set(auditRef, auditEvent);
 
       return job;
     });
@@ -356,7 +352,7 @@ export class PublishingQueueService {
   }
 
   /**
-   * Fetch and lease pending jobs for the worker using Firestore transactions
+   * Fetch and lease pending jobs using PostgreSQL transactions.
    */
   async leaseNextJobs(limit: number = 5, workerId: string = `worker_${uuidv4().substring(0, 8)}`): Promise<PublishingJob[]> {
     if (this.isDraining) {
@@ -837,7 +833,7 @@ export class PublishingQueueService {
       }
 
       // 5. Update package
-      transaction.update(this.db.collection("phase_d_packages").doc(currentJob.packageId), {
+      await transaction.update(this.db.collection("phase_d_packages").doc(currentJob.packageId), {
         "publishingTarget.permalinkPreview": destinationUrl
       });
 

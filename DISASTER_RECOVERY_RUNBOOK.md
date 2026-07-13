@@ -7,7 +7,7 @@ This guide contains runbooks to restore operational continuity in the event of m
 ## 1. System Recovery Classifications
 
 *   **Total Host Deletion**: Physical server failure, VM corruption, or cloud provider outage.
-*   **Database Corruption**: Firestore data corruption or structural ledger failure.
+*   **Database Corruption**: PostgreSQL data corruption, failed storage volume, or structural ledger failure.
 *   **Secrets compromised**: Accidental leak of credentials, requiring key rotation.
 
 ---
@@ -22,3 +22,5 @@ This guide contains runbooks to restore operational continuity in the event of m
     sudo ./deployment/install-editorial-platform.sh restore --backup <backup-id>
     ```
 5.  **Verify & Go Live**: Perform `sudo ./deployment/install-editorial-platform.sh verify` to validate clean container lifecycles.
+
+Backups contain a PostgreSQL custom-format dump created with `pg_dump`. Restore uses `pg_restore --clean --if-exists`, restarts the application, and then runs the installer verification gate.

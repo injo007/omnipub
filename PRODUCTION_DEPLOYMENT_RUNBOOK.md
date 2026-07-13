@@ -8,7 +8,7 @@ This runbook guides engineers through deploying and promoting releases to the pr
 
 Production uses isolated keys stored securely inside `/etc/editorial-platform/production.env` with owner-only access permissions (`chmod 600`).
 
-*   **Production Database**: Dedicated production Firebase Project ID and credentials vault.
+*   **Production Database**: Dedicated PostgreSQL 16 container and persistent `pg-data` volume; it is never published on a host port.
 *   **Production WordPress**: Dedicated domain and secure Application Password.
 *   **Production Models**: High-throughput dedicated API keys.
 *   **Network Perimeter Isolation**: Containers run within the isolated `editorial-production-internal` and `editorial-production-proxy` bridge networks, with no logical overlap or paths to staging stacks.

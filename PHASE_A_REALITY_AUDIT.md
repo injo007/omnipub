@@ -1,7 +1,7 @@
 # Phase A – Reality Audit
 
 ## 1. Executive Reality Summary
-The codebase resembles a single-threaded functional pipeline rather than a resilient background-processing newsroom. While impressive linearly, the backend relies heavily on `db.json` as a synchronous persistence layer instead of true `Firestore` transactions. The majority of multi-agent tasks are bundled inside a single continuous Express route (`/api/articles/create`) that executes synchronously rather than across distributed message queues.
+Historical finding: the pipeline began as a synchronous JSON-backed implementation. It now uses PostgreSQL for workspace state and transactional queue leases, although the main article-creation route still coordinates several stages in one request.
 
 ## 2. End-To-End Pipeline Execution
 **Path Verified:** `/api/articles/create`
@@ -18,8 +18,8 @@ The codebase resembles a single-threaded functional pipeline rather than a resil
 
 ## 3. Storage & Configuration Reality
 *   **Primary Database:** `db.json`.
-*   **Firestore Sync:** Exists (`persistToFirestore`) but is strictly unidirectional background sync without transactional safety (`runTransaction` is entirely absent).
-*   **Auth & Security:** The `authMiddleware` reads Firebase tokens but provides global bypass logic for `development` environments and generic fallback UIDs.
+*   **PostgreSQL Persistence:** Workspace records use JSONB upserts; publishing packages and jobs use transactions and row locks.
+*   **Auth & Security:** Self-hosted bearer-token authentication is optional and controlled by `AUTH_REQUIRED` and `APP_API_TOKEN`.
 
 ## 4. UI-Only Features
 *   Background Schedulers / Cron jobs. (Only manual triggering exists).

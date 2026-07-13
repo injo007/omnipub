@@ -11,11 +11,18 @@ export const EnvironmentSchema = z.object({
   OPENROUTER_API_KEY: z.string().optional(),
   MINIMAX_API_KEY: z.string().optional(),
   OPENAI_API_KEY: z.string().optional(),
-  CREDENTIALS_VAULT_KEY: z.string().default("fb3ac64b732d4e7f9188a3b50c6d9bc5"),
+  CREDENTIALS_VAULT_KEY: z.string().optional(),
   DEV_BYPASS_TOKEN: z.string().optional(),
-  FIREBASE_AUTH_STRICT: z.string().optional(),
+  APP_API_TOKEN: z.string().optional(),
+  AUTH_REQUIRED: z.string().optional(),
   BYPASS_AUTH: z.string().optional(),
   APP_URL: z.string().optional(),
+  PGHOST: z.string().default("localhost"),
+  PGPORT: z.string().default("5432"),
+  PGDATABASE: z.string().default("editorial_db"),
+  PGUSER: z.string().default("postgres"),
+  PGPASSWORD: z.string().optional(),
+  POSTGRES_REQUIRED: z.string().optional(),
   // Worker & queue configurations with safe boundaries
   WORKER_CONCURRENCY: z.preprocess((val) => val === undefined || val === null || val === "" ? 5 : parseInt(val as string, 10), z.number().min(1).max(20).default(5)),
   WORKER_LEASE_DURATION_SEC: z.preprocess((val) => val === undefined || val === null || val === "" ? 60 : parseInt(val as string, 10), z.number().min(5).max(300).default(60)),
@@ -41,16 +48,18 @@ export function validateEnvironment(env: Record<string, any>): RuntimeEnvironmen
   // 2. Strict checks for production deployment readiness
   if (parsed.NODE_ENV === "production" || parsed.NODE_ENV === "staging") {
     // Check for missing crucial keys
-    if (!parsed.GEMINI_API_KEY || parsed.GEMINI_API_KEY.trim() === "") {
-      throw new Error(`Missing required GEMINI_API_KEY in ${parsed.NODE_ENV} environment`);
+    if (!parsed.PGPASSWORD || parsed.PGPASSWORD.trim() === "") {
+      throw new Error(`Missing required PGPASSWORD in ${parsed.NODE_ENV} environment`);
+    }
+    if (!parsed.CREDENTIALS_VAULT_KEY || Buffer.byteLength(parsed.CREDENTIALS_VAULT_KEY) !== 32) {
+      throw new Error(`CREDENTIALS_VAULT_KEY must be exactly 32 bytes in ${parsed.NODE_ENV} environment`);
+    }
+    if (!parsed.MINIMAX_API_KEY && !parsed.OPENROUTER_API_KEY) {
+      throw new Error(`MINIMAX_API_KEY or OPENROUTER_API_KEY is required in ${parsed.NODE_ENV} environment`);
     }
 
     // Check for placeholder secrets
     const placeholders = ["MY_GEMINI_API_KEY", "your-key", "placeholder", "REPLACE_ME", "mock-key", "MY_APP_URL"];
-    if (placeholders.some(p => parsed.GEMINI_API_KEY?.includes(p))) {
-      throw new Error(`Placeholder secret detected for GEMINI_API_KEY in ${parsed.NODE_ENV}`);
-    }
-
     if (parsed.OPENROUTER_API_KEY && placeholders.some(p => parsed.OPENROUTER_API_KEY?.includes(p))) {
       throw new Error(`Placeholder secret detected for OPENROUTER_API_KEY in ${parsed.NODE_ENV}`);
     }

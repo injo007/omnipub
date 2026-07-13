@@ -9,6 +9,20 @@ on:
 jobs:
   validate:
     runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: editorial_db
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: ci-postgres-password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d editorial_db"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - name: Checkout Code Repository
         uses: actions/checkout@v4
@@ -39,4 +53,9 @@ jobs:
         env:
           NODE_ENV: test
           VITEST: true
-          CREDENTIALS_VAULT_KEY: fb3ac64b732d4e7f9188a3b50c6d9bc5
+          TEST_POSTGRES: true
+          PGHOST: 127.0.0.1
+          PGPORT: 5432
+          PGDATABASE: editorial_db
+          PGUSER: postgres
+          PGPASSWORD: ci-postgres-password

@@ -10,16 +10,14 @@ import fs from "fs";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI, Type } from "@google/genai";
 import dotenv from "dotenv";
-import { initializeApp } from "firebase/app";
-import { getFirestore, collection, doc, getDocs, setDoc, deleteDoc, getDoc, terminate, disableNetwork, enableNetwork, writeBatch } from "firebase/firestore";
 import OpenAI from "openai";
-import admin from "firebase-admin";
-import { getFirestore as getAdminFirestore } from "firebase-admin/firestore";
 import rateLimit from "express-rate-limit";
 import crypto from "crypto";
 
 // --- PostgreSQL Database Helpers ---
-import { getPgPool, initPostgresSchema, persistToPostgres, removeFromPostgres } from "./server/db/postgres";
+import { getPgPool } from "./server/db/postgres";
+import { db as dbService, type LocalDB as DatabaseState } from "./server/db/database";
+import { getDocumentStore } from "./server/db/documentStore";
 
 // --- Editorial Core Imports ---
 import { validateEditorialBrief } from "./server/editorial/editorialBriefService";
@@ -1385,39 +1383,6 @@ declare global {
 // Production Safety Patch v1: Auth, Roles, Rate-Limits, Quotas
 // -------------------------------------------------------------
 
-// Initialize Firebase Admin SDK
-let isFirebaseAdminInitialized = false;
-try {
-  let fbProjectId = "gen-lang-client-0888306694";
-  const configPath = path.join(process.cwd(), "firebase-applet-config.json");
-  if (fs.existsSync(configPath)) {
-    const config = JSON.parse(fs.readFileSync(configPath, "utf-8"));
-    if (config.projectId) {
-      fbProjectId = config.projectId;
-    }
-  }
-  const adminAny = admin as any;
-  const apps = adminAny?.apps || adminAny?.default?.apps || [];
-  if (apps.length === 0) {
-    const initApp = adminAny?.initializeApp || adminAny?.default?.initializeApp;
-    if (initApp) {
-      initApp({
-        projectId: fbProjectId
-      });
-      isFirebaseAdminInitialized = true;
-    }
-  } else {
-    isFirebaseAdminInitialized = true;
-  }
-  if (isFirebaseAdminInitialized) {
-    console.log("🔥 Firebase Admin initialized with Project ID: " + fbProjectId);
-  } else {
-    console.warn("⚠️ Firebase Admin initialization bypassed: initializeApp not found");
-  }
-} catch (err: any) {
-  console.warn("⚠️ Firebase Admin initialization failed/bypass active:", err.message);
-}
-
 // User role mapper
 function getUserRole(uid: string, email?: string): "owner" | "admin" | "editor" | "viewer" {
   const db = readDB();
@@ -1428,12 +1393,8 @@ function getUserRole(uid: string, email?: string): "owner" | "admin" | "editor" 
     return foundUser.role || "viewer";
   }
   
-  if (email && email.toLowerCase() === "ahamjik.med@gmail.com") {
-    return "owner";
-  }
-  
-  // Safe default: To enable frictionless workspace development, treat the builder as owner
-  return "owner";
+  // Production default: unknown users get viewer-only access
+  return "viewer";
 }
 
 // Quota check and tracking engine
@@ -1486,12 +1447,9 @@ function addAuditLog(type: string, details: any) {
     }
     writeDB(db);
     
-    // Non-blocking firestore sync if connected
-    if (firestoreDb) {
-      safeSetDoc(doc(firestoreDb, "auditLogs", newLog.id), newLog).catch((err: any) => {
-        console.warn("⚠️ Failed to sync audit log to Firestore:", err.message);
-      });
-    }
+    persistRecord("auditLogs", newLog.id, newLog).catch((err: any) => {
+      console.warn("Failed to persist audit log to PostgreSQL:", err.message);
+    });
     
     console.log(`[AUDIT LOG] [${type}]`, JSON.stringify(details));
   } catch (err: any) {
@@ -1595,11 +1553,16 @@ function mergeSettingsSecrets(incoming: any, existing: any) {
 
 // Public endpoints list (Bypasses verification)
 const PUBLIC_ROUTES = [
-  "/api/health",
-  "/api/public/firebase-config"
+  "/api/health"
 ];
 
-// Express middleware: JWT Authentication via Firebase Auth ID Token
+function tokensMatch(received: string, expected: string): boolean {
+  const left = Buffer.from(received);
+  const right = Buffer.from(expected);
+  return left.length === right.length && crypto.timingSafeEqual(left, right);
+}
+
+// Optional self-hosted bearer-token authentication. Enable with AUTH_REQUIRED=true.
 const authMiddleware = async (req: any, res: any, next: any) => {
   const path = req.path;
   if (PUBLIC_ROUTES.some(p => path === p || path.startsWith(p))) {
@@ -1610,74 +1573,34 @@ const authMiddleware = async (req: any, res: any, next: any) => {
     return next();
   }
   
-  const authHeader = req.headers.authorization;
-  const isDev = process.env.NODE_ENV !== "production" || process.env.BYPASS_AUTH === "true" || !isFirebaseAdminInitialized;
+  const authRequired = process.env.AUTH_REQUIRED === "true" && process.env.BYPASS_AUTH !== "true";
+  if (!authRequired) {
+    req.user = { uid: "self-hosted-owner", role: "owner" };
+    return next();
+  }
 
-  if (!authHeader || !authHeader.startsWith("Bearer ")) {
-    if (isDev || !process.env.FIREBASE_AUTH_STRICT) {
-      // Graceful local development/sandbox bypass to prevent authentication blocks or UI data loss
-      req.user = {
-        uid: "dev-bypass-uid",
-        email: "Ahamjik.Med@gmail.com",
-        role: "owner"
-      };
-      return next();
-    }
+  const expectedToken = process.env.APP_API_TOKEN || process.env.DEV_BYPASS_TOKEN || "";
+  if (!expectedToken) {
+    return res.status(503).json({
+      ok: false,
+      error: { code: "AUTH_NOT_CONFIGURED", message: "AUTH_REQUIRED is enabled but APP_API_TOKEN is missing." }
+    });
+  }
+
+  const authHeader = req.headers.authorization || "";
+  const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : "";
+  if (!token || !tokensMatch(token, expectedToken)) {
     addAuditLog("UNAUTHENTICATED_REQUEST", { path: req.path, ip: req.ip });
     return res.status(401).json({
       ok: false,
       error: {
         code: "UNAUTHORIZED",
-        message: "Session token is missing or malformed. Please authenticate to access this endpoint."
+        message: "A valid self-hosted API bearer token is required."
       }
     });
   }
-  
-  const token = authHeader.split(" ")[1];
-  
-  // Developer backdoor token for ease of maintenance/syncing
-  if (process.env.DEV_BYPASS_TOKEN && token === process.env.DEV_BYPASS_TOKEN) {
-    req.user = {
-      uid: "dev-bypass-uid",
-      email: "Ahamjik.Med@gmail.com",
-      role: "owner"
-    };
-    return next();
-  }
-  
-  try {
-    const adminAny = admin as any;
-    const authFn = adminAny?.auth || adminAny?.default?.auth;
-    if (!authFn) {
-      throw new Error("Firebase Admin SDK Auth library is uninitialized or not loaded.");
-    }
-    const decoded = await authFn().verifyIdToken(token);
-    const email = decoded.email;
-    const uid = decoded.uid;
-    const role = getUserRole(uid, email);
-    
-    req.user = { uid, email, role };
-    next();
-  } catch (err: any) {
-    if (isDev) {
-      // In development mode, log the verification warning but allow graceful bypass context
-      console.warn("⚠️ Firebase ID token verification warning in dev mode: " + err.message);
-      req.user = {
-        uid: "dev-bypass-uid",
-        email: "Ahamjik.Med@gmail.com",
-        role: "owner"
-      };
-      return next();
-    }
-    addAuditLog("UNAUTHENTICATED_REQUEST", { path: req.path, ip: req.ip, error: err.message });
-    return res.status(401).json({
-      ok: false,
-      error: {
-        code: "UNAUTHORIZED",
-        message: "Your login session has expired or is invalid: " + err.message
-      }
-    });
-  }
+  req.user = { uid: "self-hosted-owner", role: "owner" };
+  return next();
 };
 
 // Express middleware: Role-Based Access Control (RBAC) Engine
@@ -1889,44 +1812,11 @@ appRouter.get("/api/health/readiness", async (req, res) => {
   const diagnostics: Record<string, any> = {};
   let isReady = true;
 
-  // 1. Check localDB storage file availability
-  try {
-    const dbPath = DB_PATH;
-    diagnostics.localDb = {
-      available: fs.existsSync(dbPath),
-      writable: false
-    };
-    if (diagnostics.localDb.available) {
-      fs.accessSync(dbPath, fs.constants.W_OK);
-      diagnostics.localDb.writable = true;
-    } else {
-      isReady = false;
-    }
-  } catch (err: any) {
-    isReady = false;
-    diagnostics.localDb = { available: false, writable: false, error: err.message };
-  }
-
-  // 2. Check Firestore connectivity
-  try {
-    if (isFirebaseAdminInitialized) {
-      const dbAdmin = getAdminFirestore();
-      const start = Date.now();
-      await dbAdmin.collection("saas").limit(1).get();
-      diagnostics.firestore = {
-        connected: true,
-        latencyMs: Date.now() - start
-      };
-    } else {
-      diagnostics.firestore = { connected: false, error: "Firebase Admin not initialized" };
-      if (process.env.NODE_ENV === "production" || process.env.NODE_ENV === "staging") {
-        isReady = false;
-      }
-    }
-  } catch (err: any) {
-    isReady = false;
-    diagnostics.firestore = { connected: false, error: err.message };
-  }
+  // 1. Check database backend
+  const dbHealth = await dbService.health();
+  diagnostics.database = dbHealth;
+  const postgresRequired = process.env.POSTGRES_REQUIRED === "true" || ["production", "staging"].includes(process.env.NODE_ENV || "");
+  if (postgresRequired && (dbHealth.backend !== "postgresql" || dbHealth.pg?.ok !== true)) isReady = false;
 
   if (!isReady) {
     writeStructuredLog("WARN", "Readiness probe failed", diagnostics);
@@ -1948,33 +1838,8 @@ appRouter.get("/api/health/dependencies", async (req, res) => {
   const diagnostics: Record<string, any> = {};
   const start = Date.now();
 
-  // localDB details
-  try {
-    const dbPath = DB_PATH;
-    diagnostics.localDb = {
-      exists: fs.existsSync(dbPath),
-      size: fs.existsSync(dbPath) ? fs.statSync(dbPath).size : 0
-    };
-  } catch (e: any) {
-    diagnostics.localDb = { error: e.message };
-  }
-
-  // Firestore latency
-  try {
-    if (isFirebaseAdminInitialized) {
-      const dbAdmin = getAdminFirestore();
-      const fStart = Date.now();
-      await dbAdmin.collection("saas").limit(1).get();
-      diagnostics.firestore = {
-        status: "healthy",
-        latencyMs: Date.now() - fStart
-      };
-    } else {
-      diagnostics.firestore = { status: "uninitialized" };
-    }
-  } catch (e: any) {
-    diagnostics.firestore = { status: "error", error: e.message };
-  }
+  // Database backend info
+  diagnostics.database = await dbService.health();
 
   // Sanitized WordPress Site URLs (no creds, no passwords)
   try {
@@ -2019,10 +1884,12 @@ appRouter.get("/api/health/dependencies", async (req, res) => {
   });
 });
 
-appRouter.get("/api/health", (req, res) => {
+appRouter.get("/api/health", async (req, res) => {
+  const dbHealth = await dbService.health();
   res.json({
     status: "healthy",
     timestamp: new Date().toISOString(),
+    database: dbHealth.backend,
     links: {
       liveness: "/api/health/liveness",
       readiness: "/api/health/readiness",
@@ -2031,283 +1898,39 @@ appRouter.get("/api/health", (req, res) => {
   });
 });
 
-appRouter.get("/api/public/firebase-config", (req, res) => {
-  try {
-    const configPath = path.join(process.cwd(), "firebase-applet-config.json");
-    if (fs.existsSync(configPath)) {
-      const config = JSON.parse(fs.readFileSync(configPath, "utf-8"));
-      res.json(config);
-    } else {
-      res.json({});
-    }
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
 // -------------------------------------------------------------
-// Firebase / Firestore Production Real-Time Sync Engine
+// PostgreSQL persistence compatibility helpers
 // -------------------------------------------------------------
-let firestoreDb: any = null;
-
-if (getPgPool()) {
-  console.log("🐘 PostgreSQL database is configured. Skipping Firestore/Firebase database initialization entirely to guarantee PostgreSQL-only operation.");
-} else {
-  try {
-    const configPath = path.join(process.cwd(), "firebase-applet-config.json");
-    if (fs.existsSync(configPath)) {
-      const firebaseConfig = JSON.parse(fs.readFileSync(configPath, "utf-8"));
-      const firebaseApp = initializeApp(firebaseConfig);
-      firestoreDb = getFirestore(firebaseApp, firebaseConfig.firestoreDatabaseId);
-      console.log("🔥 Firebase initialized on backend with databaseId: " + firebaseConfig.firestoreDatabaseId);
-    } else {
-      console.warn("⚠️ Firebase configuration file not found, running database in safe local mode.");
-    }
-  } catch (err: any) {
-    console.error("🔥 Failed to bootstrap Firebase on server-side:", err.message);
-  }
-}
-
-// Background persistence routines securely proxying transactions to Firestore
 function cleanUndefined(obj: any): any {
-  if (obj === null || obj === undefined) {
-    return null;
-  }
-  if (Array.isArray(obj)) {
-    return obj.map(item => cleanUndefined(item));
-  }
-  if (typeof obj === "object") {
-    const cleaned: any = {};
-    for (const key of Object.keys(obj)) {
-      const val = obj[key];
-      if (val !== undefined) {
-        cleaned[key] = cleanUndefined(val);
-      }
-    }
-    return cleaned;
-  }
-  return obj;
+  if (obj === null || obj === undefined) return null;
+  if (Array.isArray(obj)) return obj.map(cleanUndefined);
+  if (typeof obj !== "object") return obj;
+  return Object.fromEntries(
+    Object.entries(obj)
+      .filter(([, value]) => value !== undefined)
+      .map(([key, value]) => [key, cleanUndefined(value)])
+  );
 }
 
-enum OperationType {
-  CREATE = 'create',
-  UPDATE = 'update',
-  DELETE = 'delete',
-  LIST = 'list',
-  GET = 'get',
-  WRITE = 'write',
+async function persistRecord(collectionName: string, documentId: string, data: any): Promise<void> {
+  if (!data) return;
+  const item = { id: documentId, ...cleanUndefined(data) };
+  let persistedItem = item;
+  if (collectionName === "settings") {
+    const encrypted = encryptDB({ writers: [], feeds: [], articles: [], settings: item });
+    persistedItem = { id: documentId, ...encrypted.settings };
+  }
+  await dbService.upsert(collectionName as keyof DatabaseState, item, persistedItem);
 }
 
-interface FirestoreErrorInfo {
-  error: string;
-  operationType: OperationType;
-  path: string | null;
-  authInfo: {
-    userId?: string | null;
-    email?: string | null;
-    emailVerified?: boolean | null;
-    isAnonymous?: boolean | null;
-    tenantId?: string | null;
-    providerInfo?: {
-      providerId?: string | null;
-      email?: string | null;
-    }[];
-  }
+async function removeRecord(collectionName: string, documentId: string): Promise<void> {
+  await dbService.remove(collectionName as keyof DatabaseState, documentId);
 }
 
-function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
-  const errInfo: FirestoreErrorInfo = {
-    error: error instanceof Error ? error.message : String(error),
-    authInfo: {
-      userId: null,
-      email: null,
-      emailVerified: false,
-      isAnonymous: false,
-      tenantId: null,
-      providerInfo: []
-    },
-    operationType,
-    path
-  };
-  console.error('Firestore Error: ', JSON.stringify(errInfo));
-  throw new Error(JSON.stringify(errInfo));
+async function refreshDatabase(): Promise<void> {
+  await dbService.refresh();
 }
 
-let isFirestoreQuotaExceeded = false;
-let lastQuotaCheckTime = 0;
-const QUOTA_RECHECK_INTERVAL = 60000; // 1 minute in ms for prompt recovery from transient errors
-
-async function forceResetQuotaState() {
-  console.log("🔄 [Firestore Sync] Deletion/Clear event triggered. Force-resetting any active quota blocks...");
-  isFirestoreQuotaExceeded = false;
-  lastQuotaCheckTime = 0;
-  if (firestoreDb) {
-    try {
-      await enableNetwork(firestoreDb);
-      console.log("✅ [Firestore Sync] Switched network status back to ONLINE on Firestore client.");
-    } catch (err: any) {
-      console.warn("⚠️ [Firestore Sync] Note: Did not/could not enable network (maybe already online):", err.message);
-    }
-  }
-}
-
-function checkAndHandleFirestoreQuotaError(err: any): boolean {
-  if (!err) return false;
-  const msg = String(err.message || err).toLowerCase();
-  if (
-    msg.includes("resource_exhausted") ||
-    msg.includes("quota exceeded") ||
-    msg.includes("quota-exceeded") ||
-    msg.includes("over quota") ||
-    msg.includes("quota limit") ||
-    msg.includes("timeout") ||
-    msg.includes("network") ||
-    msg.includes("daily write units")
-  ) {
-    if (!isFirestoreQuotaExceeded) {
-      isFirestoreQuotaExceeded = true;
-      lastQuotaCheckTime = Date.now();
-      console.error("🚨 [CRITICAL] Firestore Daily Quota Exceeded detected on server!");
-      console.error("🚨 Switched server synchronizer to Local-Cache database mode to bypass connection delays.");
-      if (firestoreDb) {
-        disableNetwork(firestoreDb).catch((err: any) => console.error("Failed to disable network:", err));
-      }
-    }
-    return true;
-  }
-  return false;
-}
-
-async function safeGetDoc(docRef: any): Promise<any> {
-  if (isFirestoreQuotaExceeded) {
-    const elapsed = Date.now() - lastQuotaCheckTime;
-    if (elapsed < QUOTA_RECHECK_INTERVAL) {
-      throw new Error("resource_exhausted: active quota exceedance");
-    }
-    isFirestoreQuotaExceeded = false;
-  }
-  try {
-    return await Promise.race([
-      getDoc(docRef),
-      new Promise<any>((_, reject) => setTimeout(() => reject(new Error("Firestore getDoc timeout")), 25000))
-    ]);
-  } catch (err: any) {
-    checkAndHandleFirestoreQuotaError(err);
-    throw err;
-  }
-}
-
-async function safeGetDocs(collRef: any): Promise<any> {
-  if (isFirestoreQuotaExceeded) {
-    const elapsed = Date.now() - lastQuotaCheckTime;
-    if (elapsed < QUOTA_RECHECK_INTERVAL) {
-      throw new Error("resource_exhausted: active quota exceedance");
-    }
-    isFirestoreQuotaExceeded = false;
-  }
-  try {
-    return await Promise.race([
-      getDocs(collRef),
-      new Promise<any>((_, reject) => setTimeout(() => reject(new Error("Firestore getDocs timeout")), 25000))
-    ]);
-  } catch (err: any) {
-    checkAndHandleFirestoreQuotaError(err);
-    throw err;
-  }
-}
-
-async function safeSetDoc(docRef: any, data: any): Promise<void> {
-  if (isFirestoreQuotaExceeded) {
-    const elapsed = Date.now() - lastQuotaCheckTime;
-    if (elapsed < QUOTA_RECHECK_INTERVAL) {
-      // Skipped logging to prevent spam
-      return;
-    }
-    isFirestoreQuotaExceeded = false;
-  }
-  try {
-    await Promise.race([
-      setDoc(docRef, data),
-      new Promise<any>((_, reject) => setTimeout(() => reject(new Error("Firestore setDoc timeout")), 25000))
-    ]);
-  } catch (err: any) {
-    if (checkAndHandleFirestoreQuotaError(err)) {
-      console.warn(`[Firestore Sync Ignored] Quota exceeded for "${docRef?.path || 'document'}". Data is saved locally.`);
-      return;
-    }
-    throw err;
-  }
-}
-
-async function safeDeleteDoc(docRef: any): Promise<void> {
-  if (isFirestoreQuotaExceeded) {
-    const elapsed = Date.now() - lastQuotaCheckTime;
-    if (elapsed < QUOTA_RECHECK_INTERVAL) {
-      console.log(`⚠️ Firestore quota is exceeded. Skipped delete for "${docRef?.path || 'document'}"`);
-      return;
-    }
-    isFirestoreQuotaExceeded = false;
-  }
-  try {
-    await Promise.race([
-      deleteDoc(docRef),
-      new Promise<any>((_, reject) => setTimeout(() => reject(new Error("Firestore deleteDoc timeout")), 25000))
-    ]);
-  } catch (err: any) {
-    if (checkAndHandleFirestoreQuotaError(err)) {
-      console.warn(`[Firestore Sync Ignored] Quota exceeded for "${docRef?.path || 'document'}". Deletion failed, data remains.`);
-      return;
-    }
-    throw err;
-  }
-}
-
-async function persistToFirestore(col: string, docId: string, data: any) {
-  if (getPgPool()) {
-    await persistToPostgres(col, docId, data);
-    return;
-  }
-  if (!firestoreDb) return;
-  const pathForWrite = `${col}/${docId}`;
-  const cleanedData = cleanUndefined(data);
-  try {
-    await safeSetDoc(doc(firestoreDb, col, docId), cleanedData);
-    console.log(`[Firestore Sync] Saved ${pathForWrite} successfully`);
-  } catch (err: any) {
-    if (String(err.message || err).includes("resource_exhausted") || String(err.message || err).includes("quota exceeded")) {
-      console.warn(`[Firestore Sync Ignored] Quota exceeded for ${pathForWrite}. Data is saved locally.`);
-      return;
-    }
-    console.error(`[Firestore Error] Failed to write ${pathForWrite}:`, err.message);
-    try {
-      handleFirestoreError(err, OperationType.WRITE, pathForWrite);
-    } catch (e) {
-      // Avoid crashing background event loop if unhandled
-    }
-  }
-}
-
-async function removeFromFirestore(col: string, docId: string) {
-  if (getPgPool()) {
-    await removeFromPostgres(col, docId);
-    return;
-  }
-  if (!firestoreDb) return;
-  const pathForDelete = `${col}/${docId}`;
-  try {
-    await safeDeleteDoc(doc(firestoreDb, col, docId));
-    console.log(`[Firestore Sync] Deleted ${pathForDelete} successfully`);
-  } catch (err: any) {
-    console.error(`[Firestore Error] Failed to delete ${pathForDelete}:`, err.message);
-    try {
-      handleFirestoreError(err, OperationType.DELETE, pathForDelete);
-    } catch (e) {
-      // Avoid crashing background event loop if unhandled
-    }
-  }
-}
-
-// -------------------------------------------------------------
 // Database Setup (db.json for reliable local state persistence)
 // -------------------------------------------------------------
 
@@ -3189,631 +2812,42 @@ function classifyAndScheduleArticles(items: any[]): any[] {
 function ensureValidLink(url: string, title: string): string {
   if (!url) return `https://news.google.com/search?q=${encodeURIComponent(title)}`;
   const lowerUrl = url.toLowerCase();
-  const isGeneric = lowerUrl.includes('/s1') || lowerUrl.includes('/s2') || lowerUrl.includes('/s3') || 
-                    lowerUrl.includes('/s4') || lowerUrl.includes('/s5') || lowerUrl.includes('/s6') || 
+  const isGeneric = lowerUrl.includes('/s1') || lowerUrl.includes('/s2') || lowerUrl.includes('/s3') ||
+                    lowerUrl.includes('/s4') || lowerUrl.includes('/s5') || lowerUrl.includes('/s6') ||
                     lowerUrl.includes('/s7') || lowerUrl.includes('/s8') || lowerUrl.includes('/s9') ||
-                    url === 'https://www.tmz.com/' || url === 'https://www.theverge.com/' || 
-                    url === 'https://www.vogue.com/' || url === 'https://www.hollywoodreporter.com/c/news/' || 
-                    url === 'https://www.espn.com/' || url === 'https://www.mlb.com/news' || 
-                    url === 'https://www.nfl.com/news' || url === 'https://techcrunch.com/' || 
+                    url === 'https://www.tmz.com/' || url === 'https://www.theverge.com/' ||
+                    url === 'https://www.vogue.com/' || url === 'https://www.hollywoodreporter.com/c/news/' ||
+                    url === 'https://www.espn.com/' || url === 'https://www.mlb.com/news' ||
+                    url === 'https://www.nfl.com/news' || url === 'https://techcrunch.com/' ||
                     url === 'https://www.theverge.com/reviews' || url === '#';
   if (isGeneric && !url.includes('google.com/search')) {
     return `https://news.google.com/search?q=${encodeURIComponent(title)}`;
   }
   return url;
 }
-
-// Background Firestore syncing helper with Promise coalescing and query cooldown
-let activeSyncPromise: Promise<any> | null = null;
-let lastSyncTimestamp = 0;
-const SYNC_COOLDOWN_MS = 120000; // 2 minutes cooldown rate limit
-
-async function syncFromFirestore(): Promise<any> {
-  if (!firestoreDb) return;
-
-  if (isFirestoreQuotaExceeded) {
-    const elapsed = Date.now() - lastQuotaCheckTime;
-    if (elapsed < QUOTA_RECHECK_INTERVAL) {
-      return;
-    }
-    isFirestoreQuotaExceeded = false;
-  }
-
-  const now = Date.now();
-  if (now - lastSyncTimestamp < SYNC_COOLDOWN_MS) {
-    console.log("🔄 Firestore sync rate-limit cooldown active. Reusing cached state.");
-    return;
-  }
-
-  if (activeSyncPromise) {
-    return activeSyncPromise;
-  }
-
-  activeSyncPromise = (async () => {
-    try {
-      console.log("🔄 Initializing bidirectional sync with Firestore cloud database...");
-      const dbData = readDB();
-      let dirty = false;
-
-      // Helper function for secure, non-destructive bidirectional reconciliation
-      async function reconcileCollection<T extends { id: string }>(
-        collectionName: string,
-        localItems: T[],
-        cloudItems: T[]
-      ): Promise<{ merged: T[]; changed: boolean }> {
-        let changed = false;
-        const mergedMap = new Map<string, T>();
-
-        // 1. Load cloud items
-        for (const cloudItem of cloudItems) {
-          if (cloudItem && cloudItem.id) {
-            mergedMap.set(cloudItem.id, cloudItem);
-          }
-        }
-
-        // 2. Match with local items and prevent deletions/overwrites
-        for (const localItem of localItems) {
-          if (!localItem || !localItem.id) continue;
-          if (isFirestoreQuotaExceeded) {
-            continue;
-          }
-          const existingCloud = mergedMap.get(localItem.id);
-          if (!existingCloud) {
-            // Local-only custom item. Upload to Firestore so it is stored in the cloud.
-            mergedMap.set(localItem.id, localItem);
-            changed = true;
-            try {
-              await safeSetDoc(doc(firestoreDb!, collectionName, localItem.id), localItem);
-              console.log(`📤 Live sync: Synced new local item "${localItem.id}" to Firestore "${collectionName}"`);
-            } catch (err: any) {
-              console.warn(`⚠️ Live sync upload failure for "${localItem.id}" in "${collectionName}":`, err.message);
-            }
-          } else {
-            // Exists in both. Compare and do not lose state.
-            if (JSON.stringify(existingCloud) !== JSON.stringify(localItem)) {
-              // Compare complexity/fields. Prefer the one with more fields or keep local.
-              const localKeys = Object.keys(localItem).length;
-              const cloudKeys = Object.keys(existingCloud).length;
-              if (localKeys >= cloudKeys) {
-                // Keep local, update cloud
-                mergedMap.set(localItem.id, localItem);
-                changed = true;
-                try {
-                  await safeSetDoc(doc(firestoreDb!, collectionName, localItem.id), localItem);
-                } catch (err: any) {
-                  console.warn(`⚠️ Error updating item ${localItem.id} in live Firestore:`, err.message);
-                }
-              } else {
-                // Cloud version has more metadata or fields. Keep cloud version.
-                mergedMap.set(localItem.id, existingCloud);
-                changed = true;
-              }
-            }
-          }
-        }
-
-        const mergedList = Array.from(mergedMap.values());
-        if (mergedList.length !== localItems.length) {
-          changed = true;
-        }
-        return { merged: mergedList, changed };
-      }
-
-      // 1. Sync settings
-      try {
-        if (isFirestoreQuotaExceeded) return;
-        const settingsSnap = await safeGetDoc(doc(firestoreDb, "settings", "saas"));
-        if (settingsSnap && settingsSnap.exists()) {
-          const cloudSettings = settingsSnap.data();
-          if (JSON.stringify(cloudSettings) !== JSON.stringify(dbData.settings)) {
-            dbData.settings = cloudSettings;
-            dirty = true;
-            console.log("☁️ Settings synced from Firestore cloud");
-          }
-        } else if (dbData.settings) {
-          await safeSetDoc(doc(firestoreDb, "settings", "saas"), dbData.settings);
-        }
-      } catch (e: any) {
-        console.warn("⚠️ Syncing settings from Firestore warn:", e.message);
-      }
-
-      // 1.5. Sync Niches FIRST, so missing niches don't trigger deletion of valid feeds/articles
-      try {
-        if (isFirestoreQuotaExceeded) return;
-        const nichesSnap = await safeGetDocs(collection(firestoreDb, "niches"));
-        const firestoreNiches: any[] = [];
-        nichesSnap.forEach((doc: any) => {
-          firestoreNiches.push(doc.data());
-        });
-
-        const localNiches = dbData.niches || [];
-        const { merged: mergedNiches, changed: nichesChanged } = await reconcileCollection("niches", localNiches, firestoreNiches);
-        if (nichesChanged) {
-          dbData.niches = mergedNiches;
-          dirty = true;
-          console.log(`☁️ Synced & Reconciled ${mergedNiches.length} custom niches safely.`);
-        }
-      } catch (e: any) {
-        console.warn("⚠️ Syncing niches from Firestore warn:", e.message);
-      }
-
-      // 2. Sync writers
-      try {
-        if (isFirestoreQuotaExceeded) return;
-        const writersSnap = await safeGetDocs(collection(firestoreDb, "writers"));
-        const firestoreWriters: any[] = [];
-        writersSnap.forEach((doc: any) => {
-          firestoreWriters.push(doc.data());
-        });
-        
-        const localWriters = dbData.writers || [];
-        const { merged: mergedWriters, changed: writersChanged } = await reconcileCollection("writers", localWriters, firestoreWriters);
-        if (writersChanged) {
-          dbData.writers = mergedWriters;
-          dirty = true;
-          console.log(`☁️ Synced & Reconciled ${mergedWriters.length} digital writers safely.`);
-        }
-      } catch (e: any) {
-        console.warn("⚠️ Syncing writers from Firestore warn:", e.message);
-      }
-
-      // 3. Sync feeds
-      try {
-        if (isFirestoreQuotaExceeded) return;
-        const feedsSnap = await safeGetDocs(collection(firestoreDb, "feeds"));
-        const firestoreFeeds: any[] = [];
-        feedsSnap.forEach((doc: any) => {
-          firestoreFeeds.push(doc.data());
-        });
-
-        // Valid niches check
-        const rawCustomIds = dbData.niches?.map((n: any) => n.id) || [];
-        const validNiches = new Set([...GLOBAL_DEFAULT_NICHES.map(n => n.id), ...rawCustomIds]);
-
-        // Process firestore feeds to remove missing niches
-        const processedFirestoreFeeds = [];
-        for (const f of firestoreFeeds) {
-          if (validNiches.has(f.niche)) {
-            processedFirestoreFeeds.push(f);
-          } else {
-            console.log(`🧹 Cleaning up invalid feed from firestore (no matching active niche): ${f.url} [${f.niche}]`);
-            if (!isFirestoreQuotaExceeded && firestoreDb) {
-              safeDeleteDoc(doc(firestoreDb, "feeds", f.id)).catch((err: any) => console.error("Error deleting feed:", err.message));
-            }
-          }
-        }
-
-        const localFeeds = dbData.feeds || [];
-        const processedLocalFeeds = localFeeds.filter((f: any) => validNiches.has(f.niche));
-
-        const { merged: mergedFeeds, changed: feedsChanged } = await reconcileCollection("feeds", processedLocalFeeds, processedFirestoreFeeds);
-        let updatedFeeds = mergedFeeds;
-
-        // Auto-seed any missing DEFAULT_FEEDS entries into both database layers
-        let seededNew = false;
-        for (const defaultFeed of DEFAULT_FEEDS) {
-          if (isFirestoreQuotaExceeded) break;
-          const hasFeed = updatedFeeds.some((f: any) => f.id === defaultFeed.id || f.url === defaultFeed.url);
-          if (!hasFeed) {
-            await safeSetDoc(doc(firestoreDb, "feeds", defaultFeed.id), defaultFeed);
-            updatedFeeds.push(defaultFeed);
-            seededNew = true;
-            console.log(`🌱 Auto-seeded missing feed "${defaultFeed.name}" to Firestore`);
-          } else {
-            // Guarantee even existing feeds from database match default properties like niche
-            const idx = updatedFeeds.findIndex((f: any) => f.id === defaultFeed.id || f.url === defaultFeed.url);
-            if (idx !== -1 && updatedFeeds[idx].niche !== defaultFeed.niche) {
-              updatedFeeds[idx].niche = defaultFeed.niche;
-              await safeSetDoc(doc(firestoreDb, "feeds", updatedFeeds[idx].id), updatedFeeds[idx]);
-              seededNew = true;
-            }
-          }
-        }
-
-        if (feedsChanged || seededNew) {
-          dbData.feeds = updatedFeeds;
-          dirty = true;
-        }
-        console.log(`☁️ Reconciled feeds database: total ${dbData.feeds.length} feeds successfully loaded.`);
-      } catch (e: any) {
-        console.warn("⚠️ Syncing feeds from Firestore warn:", e.message);
-      }
-
-      // 4. Sync articles
-      try {
-        if (isFirestoreQuotaExceeded) return;
-        const rawCustomIds = dbData.niches?.map((n: any) => n.id) || [];
-        const validNiches = new Set([...GLOBAL_DEFAULT_NICHES.map(n => n.id), ...rawCustomIds]);
-        
-        const articlesSnap = await safeGetDocs(collection(firestoreDb, "articles"));
-        const firestoreArticles: any[] = [];
-        articlesSnap.forEach((docSnap: any) => {
-          const a = docSnap.data();
-          if (validNiches.has(a.niche)) {
-            firestoreArticles.push(a);
-          } else {
-            console.log(`🧹 Cleaning up invalid article from firestore (no matching active niche): ${a.title} [${a.niche}]`);
-            if (!isFirestoreQuotaExceeded && firestoreDb) {
-              safeDeleteDoc(doc(firestoreDb, "articles", a.id)).catch((err: any) => console.error("Error deleting article:", err.message));
-            }
-          }
-        });
-
-        const localArticles = (dbData.articles || []).filter((a: any) => validNiches.has(a.niche));
-        const { merged: mergedArticles, changed: articlesChanged } = await reconcileCollection("articles", localArticles, firestoreArticles);
-        if (articlesChanged) {
-          dbData.articles = mergedArticles.sort((a, b) => {
-            const timeA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
-            const timeB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
-            return timeB - timeA;
-          });
-          dirty = true;
-          console.log(`☁️ Synced & Reconciled ${mergedArticles.length} articles safely without loss.`);
-        }
-      } catch (e: any) {
-        console.warn("⚠️ Syncing articles from Firestore warn:", e.message);
-      }
-
-      // 5. Sync Suggested Sources (Article Opportunities)
-      try {
-        if (isFirestoreQuotaExceeded) return;
-        const rawCustomIds = dbData.niches?.map((n: any) => n.id) || [];
-        const validNiches = new Set([...GLOBAL_DEFAULT_NICHES.map(n => n.id), ...rawCustomIds]);
-
-        const sourcesSnap = await safeGetDocs(collection(firestoreDb, "suggestedSources"));
-        const firestoreSources: any[] = [];
-        sourcesSnap.forEach((docSnap: any) => {
-          const s = docSnap.data();
-          if (validNiches.has(s.niche)) {
-            firestoreSources.push(s);
-          } else {
-            console.log(`🧹 Cleaning up invalid source opportunity from firestore (no matching niche): ${s.title} [${s.niche}]`);
-            if (!isFirestoreQuotaExceeded && firestoreDb) {
-              safeDeleteDoc(doc(firestoreDb, "suggestedSources", s.id)).catch((err: any) => console.error("Error deleting source:", err.message));
-            }
-          }
-        });
-
-        const localSources = (dbData.suggestedSources || []).filter((s: any) => validNiches.has(s.niche));
-        const { merged: mergedSources, changed: sourcesChanged } = await reconcileCollection("suggestedSources", localSources, firestoreSources);
-        if (sourcesChanged) {
-          dbData.suggestedSources = mergedSources;
-          dirty = true;
-          console.log(`☁️ Synced & Reconciled ${mergedSources.length} suggested sources safely.`);
-        }
-      } catch (e: any) {
-        console.warn("⚠️ Syncing suggestedSources from Firestore warn:", e.message);
-      }
-
-      // 6. Sync Candidates
-      try {
-        if (isFirestoreQuotaExceeded) return;
-        const candSnap = await safeGetDocs(collection(firestoreDb, "candidates"));
-        const firestoreCands: any[] = [];
-        candSnap.forEach((doc: any) => {
-          firestoreCands.push(doc.data());
-        });
-
-        const localCands = dbData.candidates || [];
-        const { merged: mergedCands, changed: candsChanged } = await reconcileCollection("candidates", localCands, firestoreCands);
-        if (candsChanged) {
-          dbData.candidates = mergedCands;
-          dirty = true;
-          console.log(`☁️ Synced & Reconciled ${mergedCands.length} candidates safely.`);
-        }
-      } catch (e: any) {
-        console.warn("⚠️ Syncing candidates from Firestore warn:", e.message);
-      }
-
-      // 7. Sync Skills
-      try {
-        if (isFirestoreQuotaExceeded) return;
-        const skillsSnap = await safeGetDocs(collection(firestoreDb, "skills"));
-        const firestoreSkills: any[] = [];
-        skillsSnap.forEach((doc: any) => {
-          firestoreSkills.push(doc.data());
-        });
-
-        const localSkills = dbData.skills || [];
-        const { merged: mergedSkills, changed: skillsChanged } = await reconcileCollection("skills", localSkills, firestoreSkills);
-        if (skillsChanged) {
-          dbData.skills = mergedSkills;
-          dirty = true;
-          console.log(`☁️ Synced & Reconciled ${mergedSkills.length} skills safely.`);
-        }
-      } catch (e: any) {
-        console.warn("⚠️ Syncing skills from Firestore warn:", e.message);
-      }
-
-      // 8. Sync Notifications
-      try {
-        if (isFirestoreQuotaExceeded) return;
-        const notifsSnap = await safeGetDocs(collection(firestoreDb, "notifications"));
-        if (notifsSnap && !notifsSnap.empty) {
-          const firestoreNotifs: any[] = [];
-          notifsSnap.forEach((doc: any) => {
-            firestoreNotifs.push(doc.data());
-          });
-          dbData.notifications = firestoreNotifs.sort((a, b) => 
-            new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
-          ).slice(0, 50);
-          dirty = true;
-        }
-      } catch (e: any) {
-        console.warn("⚠️ Syncing notifications from Firestore warn:", e.message);
-      }
-
-      // 9. Enforce strict uniform validation
-      const normalizeNiche = (n: string) => n ? n.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "") : "general";
-      
-      if (dbData.niches) {
-        dbData.niches.forEach((n: any) => {
-          const norm = normalizeNiche(n.id);
-          if (n.id !== norm) { n.id = norm; dirty = true; if (!isFirestoreQuotaExceeded && firestoreDb) persistToFirestore("niches", n.id, n); }
-        });
-      }
-      if (dbData.feeds) {
-        dbData.feeds.forEach((f: any) => {
-          const norm = normalizeNiche(f.niche);
-          if (f.niche !== norm) { f.niche = norm; dirty = true; if (!isFirestoreQuotaExceeded && firestoreDb) persistToFirestore("feeds", f.id, f); }
-        });
-      }
-      if (dbData.writers) {
-        dbData.writers.forEach((w: any) => {
-          const norm = normalizeNiche(w.niche);
-          if (w.niche !== norm) { w.niche = norm; dirty = true; if (!isFirestoreQuotaExceeded && firestoreDb) persistToFirestore("writers", w.id, w); }
-        });
-      }
-      if (dbData.settings) {
-        let settingsDirty = false;
-        if (dbData.settings.wordpressSites) {
-          dbData.settings.wordpressSites.forEach((s: any) => {
-            const norm = normalizeNiche(s.niche);
-            if (s.niche !== norm) { s.niche = norm; dirty = true; settingsDirty = true; }
-          });
-        }
-        if (dbData.settings.wordpress) {
-          const newWp: any = {};
-          for (const key of Object.keys(dbData.settings.wordpress)) {
-            const norm = normalizeNiche(key);
-            newWp[norm] = dbData.settings.wordpress[key];
-            if (newWp[norm] && typeof newWp[norm] === 'object') {
-              newWp[norm].niche = norm;
-            }
-            if (key !== norm) { dirty = true; settingsDirty = true; }
-          }
-          dbData.settings.wordpress = newWp;
-        }
-        if (settingsDirty && !isFirestoreQuotaExceeded && firestoreDb) {
-           persistToFirestore("settings", "saas", dbData.settings);
-        }
-      }
-      if (dbData.suggestedSources) {
-        dbData.suggestedSources.forEach((s: any) => {
-          let sDirty = false;
-          const norm = normalizeNiche(s.niche);
-          if (s.niche !== norm) { s.niche = norm; dirty = true; sDirty = true; }
-          if (s.detectedNiche) {
-            const detNorm = normalizeNiche(s.detectedNiche);
-            if (s.detectedNiche !== detNorm) { s.detectedNiche = detNorm; dirty = true; sDirty = true; }
-          }
-          if (sDirty && !isFirestoreQuotaExceeded && firestoreDb) persistToFirestore("suggestedSources", s.id, s);
-        });
-      }
-      if (dbData.customDiscoveredFeeds) {
-        dbData.customDiscoveredFeeds.forEach((f: any) => {
-          const norm = normalizeNiche(f.niche);
-          if (f.niche !== norm) { f.niche = norm; dirty = true; if (!isFirestoreQuotaExceeded && firestoreDb) persistToFirestore("customDiscoveredFeeds", f.id, f); }
-        });
-      }
-      if (dbData.articles) {
-        dbData.articles.forEach((a: any) => {
-          const norm = normalizeNiche(a.niche);
-          if (a.niche !== norm) { a.niche = norm; dirty = true; if (!isFirestoreQuotaExceeded && firestoreDb) persistToFirestore("articles", a.id, a); }
-        });
-      }
-
-      if (dirty) {
-        writeDB(dbData);
-        console.log("✅ Local cache successfully reconciled with live Firestore cloud database!");
-      }
-      lastSyncTimestamp = Date.now();
-    } catch (err: any) {
-      console.error("❌ Firestore initial synchronization failure:", err.message);
-    } finally {
-      activeSyncPromise = null;
-    }
-  })();
-
-  return activeSyncPromise;
-}
-
-async function syncFromPostgres(): Promise<any> {
-  const pgPool = getPgPool();
-  if (!pgPool) return;
-
-  try {
-    console.log("🔄 Initializing bidirectional sync with PostgreSQL database...");
-    
-    // Check if PostgreSQL has any data. Let's count rows in settings or articles or writers.
-    let hasData = false;
-    const collections = [
-      "niches",
-      "writers",
-      "feeds",
-      "articles",
-      "suggestedSources",
-      "candidates",
-      "skills",
-      "customDiscoveredFeeds",
-      "deletedDiscoveryUrls",
-      "users",
-      "usageLogs",
-      "auditLogs",
-      "settings"
-    ];
-
-    function toSnakeCase(str: string): string {
-      return str.replace(/[A-Z]/g, letter => `_${letter.toLowerCase()}`);
-    }
-
-    for (const col of collections) {
-      const pgTable = toSnakeCase(col);
-      try {
-        const res = await pgPool.query(`SELECT COUNT(*) FROM ${pgTable}`);
-        if (parseInt(res.rows[0].count, 10) > 0) {
-          hasData = true;
-          break;
-        }
-      } catch (err: any) {
-        console.warn(`[PostgreSQL Check] Table ${pgTable} error:`, err.message);
-      }
-    }
-
-    if (hasData) {
-      console.log("📥 PostgreSQL database contains data. Loading persistent state into local cache...");
-      const db: LocalDB = {
-        writers: [],
-        feeds: [],
-        articles: [],
-        suggestedSources: [],
-        notifications: [],
-        candidates: [],
-        skills: [],
-        customDiscoveredFeeds: [],
-        deletedDiscoveryUrls: [],
-        niches: [],
-        users: [],
-        usageLogs: {},
-        auditLogs: [],
-        settings: undefined
-      };
-
-      for (const col of collections) {
-        const pgTable = toSnakeCase(col);
-        try {
-          const res = await pgPool.query(`SELECT id, data FROM ${pgTable}`);
-          const items = res.rows.map((row: any) => {
-            const item = row.data;
-            if (item && typeof item === 'object') {
-              item.id = row.id;
-            }
-            return item;
-          });
-
-          if (col === "settings") {
-            const saasRow = res.rows.find((r: any) => r.id === "saas");
-            if (saasRow) {
-              db.settings = saasRow.data;
-            }
-          } else if (col === "usageLogs") {
-            const logsRow = res.rows.find((r: any) => r.id === "global");
-            if (logsRow) {
-              db.usageLogs = logsRow.data;
-            }
-          } else if (col === "deletedDiscoveryUrls") {
-            db.deletedDiscoveryUrls = res.rows.map((r: any) => r.id);
-          } else {
-            (db as any)[col] = items;
-          }
-        } catch (err: any) {
-          console.error(`[PostgreSQL Load Error] Failed to read ${pgTable}:`, err.message);
-        }
-      }
-
-      // Read notifications
-      try {
-        const resNotif = await pgPool.query(`SELECT id, data FROM notifications`);
-        db.notifications = resNotif.rows.map((r: any) => {
-          const notif = r.data;
-          if (notif) notif.id = r.id;
-          return notif;
-        });
-      } catch (e) {}
-
-      // Ensure necessary defaults are restored if empty
-      if (!db.settings) db.settings = DEFAULT_SETTINGS;
-      if (!db.writers || db.writers.length === 0) db.writers = DEFAULT_WRITERS;
-      if (!db.feeds || db.feeds.length === 0) db.feeds = DEFAULT_FEEDS;
-      if (!db.skills || db.skills.length === 0) db.skills = DEFAULT_SKILLS;
-
-      writeDB(db);
-      console.log("✅ Local cache successfully initialized from live PostgreSQL database!");
-    } else {
-      console.log("📤 PostgreSQL database is empty. Migrating local cache to PostgreSQL...");
-      const db = readDB();
-
-      for (const niche of db.niches || []) {
-        await persistToPostgres("niches", niche.id, niche);
-      }
-      for (const writer of db.writers || []) {
-        await persistToPostgres("writers", writer.id, writer);
-      }
-      for (const feed of db.feeds || []) {
-        await persistToPostgres("feeds", feed.id, feed);
-      }
-      for (const article of db.articles || []) {
-        await persistToPostgres("articles", article.id, article);
-      }
-      for (const source of db.suggestedSources || []) {
-        await persistToPostgres("suggestedSources", source.id, source);
-      }
-      for (const cand of db.candidates || []) {
-        await persistToPostgres("candidates", cand.id, cand);
-      }
-      for (const skill of db.skills || []) {
-        await persistToPostgres("skills", skill.id, skill);
-      }
-      for (const cdf of db.customDiscoveredFeeds || []) {
-        await persistToPostgres("customDiscoveredFeeds", cdf.id, cdf);
-      }
-      for (const url of db.deletedDiscoveryUrls || []) {
-        await persistToPostgres("deletedDiscoveryUrls", url, { url });
-      }
-      for (const user of db.users || []) {
-        await persistToPostgres("users", user.id, user);
-      }
-      if (db.usageLogs) {
-        await persistToPostgres("usageLogs", "global", db.usageLogs);
-      }
-      for (const audit of db.auditLogs || []) {
-        await persistToPostgres("auditLogs", audit.id || `audit-${Date.now()}`, audit);
-      }
-      if (db.settings) {
-        await persistToPostgres("settings", "saas", db.settings);
-      }
-      for (const notif of db.notifications || []) {
-        await persistToPostgres("notifications", notif.id, notif);
-      }
-
-      console.log("✅ Migration from local cache to PostgreSQL completed successfully!");
-    }
-  } catch (err: any) {
-    console.error("❌ PostgreSQL sync error:", err.message);
-  }
-}
-
 // SECURE CREDENTIALS VAULT ENCRYPTION ENGINE
-const ENCRYPTION_KEY = process.env.CREDENTIALS_VAULT_KEY || "fb3ac64b732d4e7f9188a3b50c6d9bc5"; // Must be exactly 32 characters
+const ENCRYPTION_KEY = process.env.CREDENTIALS_VAULT_KEY; // Must be exactly 32 characters, set in env
 const IV_LENGTH = 16;
 
 function getEncryptionKey(): Buffer {
   // Always clean the key of literal surrounding quotes and outer spaces
   const cleanedKey = (ENCRYPTION_KEY || "").replace(/['"]/g, "").trim();
-  const finalKey = cleanedKey || "fb3ac64b732d4e7f9188a3b50c6d9bc5";
+  const finalKey = cleanedKey || "";
   const buf = Buffer.from(finalKey);
-  if (buf.length === 32) {
+  if (buf.length === 32 && finalKey.length > 0) {
     return buf;
   }
-  return crypto.createHash("sha256").update(finalKey).digest();
+  // No valid key configured — skip encryption
+  return Buffer.alloc(0);
 }
 
 function encrypt(text: string): string {
   if (!text) return "";
   if (text.startsWith("enc:")) return text; // Already encrypted
+  const keyBuf = getEncryptionKey();
+  if (keyBuf.length === 0) return text; // No key configured, store plaintext
   try {
     const iv = crypto.randomBytes(IV_LENGTH);
-    const keyBuf = getEncryptionKey();
     const cipher = crypto.createCipheriv("aes-256-cbc", keyBuf, iv);
     let encrypted = cipher.update(text);
     encrypted = Buffer.concat([encrypted, cipher.final()]);
@@ -3827,11 +2861,12 @@ function encrypt(text: string): string {
 function decrypt(text: string): string {
   if (!text) return "";
   if (!text.startsWith("enc:")) return text; // Plaintext or masked or invalid format
+  const keyBuf = getEncryptionKey();
+  if (keyBuf.length === 0) return text; // No key configured
   try {
     const parts = text.split(":");
     const iv = Buffer.from(parts[1], "hex");
     const encryptedText = Buffer.from(parts[2], "hex");
-    const keyBuf = getEncryptionKey();
     const decipher = crypto.createDecipheriv("aes-256-cbc", keyBuf, iv);
     let decrypted = decipher.update(encryptedText);
     decrypted = Buffer.concat([decrypted, decipher.final()]);
@@ -3869,6 +2904,9 @@ function encryptDB(db: LocalDB): LocalDB {
       if (copy.settings.modelSettings.openrouterApiKey) {
         copy.settings.modelSettings.openrouterApiKey = encrypt(copy.settings.modelSettings.openrouterApiKey);
       }
+      if (copy.settings.modelSettings.minimaxApiKey) {
+        copy.settings.modelSettings.minimaxApiKey = encrypt(copy.settings.modelSettings.minimaxApiKey);
+      }
       if (copy.settings.modelSettings.clarityApiKey) {
         copy.settings.modelSettings.clarityApiKey = encrypt(copy.settings.modelSettings.clarityApiKey);
       }
@@ -3903,6 +2941,9 @@ function decryptDB(db: LocalDB): LocalDB {
       if (db.settings.modelSettings.openrouterApiKey) {
         db.settings.modelSettings.openrouterApiKey = decrypt(db.settings.modelSettings.openrouterApiKey);
       }
+      if (db.settings.modelSettings.minimaxApiKey) {
+        db.settings.modelSettings.minimaxApiKey = decrypt(db.settings.modelSettings.minimaxApiKey);
+      }
       if (db.settings.modelSettings.clarityApiKey) {
         db.settings.modelSettings.clarityApiKey = decrypt(db.settings.modelSettings.clarityApiKey);
       }
@@ -3911,36 +2952,25 @@ function decryptDB(db: LocalDB): LocalDB {
   return db;
 }
 
-// Read from or write to DB
+// Read from or write to DB using DatabaseService (PostgreSQL-primary, JSON fallback)
 function readDB(): LocalDB {
   try {
-    if (!fs.existsSync(DB_PATH)) {
-      const initialDB: LocalDB = {
-        writers: DEFAULT_WRITERS,
-        feeds: DEFAULT_FEEDS,
-        articles: INITIAL_ARTICLES,
-        settings: DEFAULT_SETTINGS,
-        suggestedSources: classifyAndScheduleArticles(PRELOADED_FALLBACK_FEED_ITEMS),
-        skills: DEFAULT_SKILLS
-      };
-      fs.writeFileSync(DB_PATH, JSON.stringify(initialDB, null, 2));
-      return initialDB;
-    }
-    const data = fs.readFileSync(DB_PATH, "utf-8");
-    const parsed = JSON.parse(data);
-    const db = decryptDB(parsed);
-    
+    const cached = dbService.read();
+
+    // Decrypt any old-format encrypted fields (idempotent if already decrypted)
+    decryptDB(cached);
+
     // Auto-migrate if structure is older standard
     let dirty = false;
-    if (!db.settings) {
-      db.settings = DEFAULT_SETTINGS;
+    if (!cached.settings) {
+      cached.settings = DEFAULT_SETTINGS;
       dirty = true;
     }
 
-    if (db.settings && db.settings.modelSettings) {
+    if (cached.settings && cached.settings.modelSettings) {
       // Ensure fallback is only healed if undefined
-      if (db.settings.modelSettings.fallbackEnabled === undefined) {
-        db.settings.modelSettings.fallbackEnabled = true;
+      if (cached.settings.modelSettings.fallbackEnabled === undefined) {
+        cached.settings.modelSettings.fallbackEnabled = true;
         dirty = true;
       }
       
@@ -3959,20 +2989,20 @@ function readDB(): LocalDB {
       ];
       
       keysToMigrate.forEach((key) => {
-        const val = db.settings.modelSettings[key];
+        const val = cached.settings.modelSettings[key];
         if (!val || val.includes("gemini") || val.includes("imagen") || val === "custom-openrouter" || val === "openrouter/owl-alpha" || val === "openai/gpt-oss-120b:free") {
-          db.settings.modelSettings[key] = "MiniMax-M3";
+          cached.settings.modelSettings[key] = "MiniMax-M3";
           dirty = true;
         }
       });
 
-      if (!db.settings.modelSettings.globalFallbackModel || db.settings.modelSettings.globalFallbackModel.includes("gemini") || db.settings.modelSettings.globalFallbackModel === "openrouter/owl-alpha") {
-        db.settings.modelSettings.globalFallbackModel = "cohere/north-mini-code:free";
+      if (!cached.settings.modelSettings.globalFallbackModel || cached.settings.modelSettings.globalFallbackModel.includes("gemini") || cached.settings.modelSettings.globalFallbackModel === "openrouter/owl-alpha") {
+        cached.settings.modelSettings.globalFallbackModel = "cohere/north-mini-code:free";
         dirty = true;
       }
 
-      if (db.settings.modelSettings.pipelines) {
-        const p = db.settings.modelSettings.pipelines;
+      if (cached.settings.modelSettings.pipelines) {
+        const p = cached.settings.modelSettings.pipelines;
         ["cheap", "balanced", "premium"].forEach((plName) => {
           if (p[plName]) {
             ["research", "draft", "editing", "validation", "seo"].forEach((step) => {
@@ -3992,20 +3022,20 @@ function readDB(): LocalDB {
     }
     
     // Ensure we have Perez, Simmons, Marques in database list if older ones are there
-    if (!db.writers || db.writers.length === 0 || db.writers.some((w: any) => w.id === "gigi-glam")) {
-      db.writers = DEFAULT_WRITERS;
+    if (!cached.writers || cached.writers.length === 0 || cached.writers.some((w: any) => w.id === "gigi-glam")) {
+      cached.writers = DEFAULT_WRITERS;
       dirty = true;
     }
 
     // Ensure candidates array exists in local cache
-    if (!db.candidates || db.candidates.length === 0) {
-      db.candidates = DEFAULT_CANDIDATES;
+    if (!cached.candidates || cached.candidates.length === 0) {
+      cached.candidates = DEFAULT_CANDIDATES;
       dirty = true;
     }
 
     // Force-clean names that contain 'Clone' or low-trust branding
-    if (db.writers) {
-      db.writers = db.writers.map((writer: any) => {
+    if (cached.writers) {
+      cached.writers = cached.writers.map((writer: any) => {
         let wrDirty = false;
         
         // Match with DEFAULT_WRITERS to pull the newest polished, fictionalized, brand-safe properties
@@ -4033,20 +3063,20 @@ function readDB(): LocalDB {
         }
         if (wrDirty) {
           dirty = true;
-          persistToFirestore("writers", writer.id, writer);
+          persistRecord("writers", writer.id, writer);
         }
         return writer;
       });
     }
 
-    if (!db.suggestedSources) {
-      db.suggestedSources = classifyAndScheduleArticles(PRELOADED_FALLBACK_FEED_ITEMS);
+    if (!cached.suggestedSources) {
+      cached.suggestedSources = classifyAndScheduleArticles(PRELOADED_FALLBACK_FEED_ITEMS);
       dirty = true;
     }
 
     // Ensure link validation (overcoming 404 links) are fully migrated on load
-    if (db.suggestedSources) {
-      db.suggestedSources = db.suggestedSources.map((source: any) => {
+    if (cached.suggestedSources) {
+      cached.suggestedSources = cached.suggestedSources.map((source: any) => {
         const valid = ensureValidLink(source.url, source.title);
         if (valid !== source.url) {
           source.url = valid;
@@ -4056,8 +3086,8 @@ function readDB(): LocalDB {
       });
     }
 
-    if (db.articles) {
-      db.articles = db.articles.map((art: any) => {
+    if (cached.articles) {
+      cached.articles = cached.articles.map((art: any) => {
         const valid = ensureValidLink(art.sourceLink, art.sourceTitle || art.title);
         if (valid !== art.sourceLink) {
           art.sourceLink = valid;
@@ -4067,35 +3097,35 @@ function readDB(): LocalDB {
       });
       
       // Ensure articles are kept and sorted by newest first
-      db.articles.sort((a: any, b: any) => {
+      cached.articles.sort((a: any, b: any) => {
         const timeA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
         const timeB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
         return timeB - timeA;
       });
     }
 
-    if (!db.notifications) {
-      db.notifications = [];
+    if (!cached.notifications) {
+      cached.notifications = [];
       dirty = true;
     }
 
-    if (!db.skills || db.skills.length === 0) {
-      db.skills = DEFAULT_SKILLS;
+    if (!cached.skills || cached.skills.length === 0) {
+      cached.skills = DEFAULT_SKILLS;
       dirty = true;
     }
 
-    if (!db.niches) {
-      db.niches = [];
+    if (!cached.niches) {
+      cached.niches = [];
       dirty = true;
     }
 
     if (dirty) {
-      writeDB(db);
+      writeDB(cached);
     }
 
-    return db;
+    return cached;
   } catch (error) {
-    console.error("Error reading db.json, returning defaults:", error);
+    console.error("Error reading database, returning defaults:", error);
     return {
       writers: DEFAULT_WRITERS,
       feeds: DEFAULT_FEEDS,
@@ -4106,15 +3136,11 @@ function readDB(): LocalDB {
   }
 }
 
-function writeDB(db: LocalDB) {
+function writeDB(data: LocalDB) {
   try {
-    const encrypted = encryptDB(db);
-    const content = JSON.stringify(encrypted, null, 2);
-    const tempPath = DB_PATH + ".tmp";
-    fs.writeFileSync(tempPath, content, "utf-8");
-    fs.renameSync(tempPath, DB_PATH);
+    dbService.write(data, encryptDB(data));
   } catch (error) {
-    console.error("Error writing db.json atomically & securely:", error);
+    console.error("Error writing database:", error);
   }
 }
 
@@ -4143,7 +3169,7 @@ function addNotification(type: 'info' | 'warning' | 'error' | 'success', title: 
     }
     
     writeDB(db);
-    persistToFirestore("notifications", newNotification.id, newNotification);
+    persistRecord("notifications", newNotification.id, newNotification);
     console.log(`[Notification] [${type.toUpperCase()}] ${title}: ${message}`);
   } catch (err) {
     console.error("Failed to add notification:", err);
@@ -5188,9 +4214,9 @@ function getRecommendedWriterIdForNiche(db: any, niche: string, offset: number =
 appRouter.get("/api/config", async (req, res) => {
   try {
     if (getPgPool()) {
-      syncFromPostgres().catch(e => console.warn("⚠️ Background PostgreSQL sync notice:", e.message));
+      dbService.refresh().catch(e => console.warn("⚠️ Background PostgreSQL sync notice:", e.message));
     } else {
-      syncFromFirestore().catch(e => console.warn("⚠️ Background sync notice:", e.message));
+      refreshDatabase().catch(e => console.warn("⚠️ Background sync notice:", e.message));
     }
     const db = readDB();
     
@@ -5203,17 +4229,6 @@ appRouter.get("/api/config", async (req, res) => {
       ...(db.niches || []).filter((n: any) => !globalIds.has(n.id))
     ];
 
-    let firebaseProjectId = "gen-lang-client-0888306694";
-    let firestoreDatabaseId = "ai-studio-767d7b73-69cd-4989-abdf-e59b01aaad79";
-    try {
-      const configPath = path.join(process.cwd(), "firebase-applet-config.json");
-      if (fs.existsSync(configPath)) {
-        const firebaseConfig = JSON.parse(fs.readFileSync(configPath, "utf-8"));
-        if (firebaseConfig.projectId) firebaseProjectId = firebaseConfig.projectId;
-        if (firebaseConfig.firestoreDatabaseId) firestoreDatabaseId = firebaseConfig.firestoreDatabaseId;
-      }
-    } catch (e) {}
-
     res.json({
       niches: allNiches,
       writers: db.writers,
@@ -5221,9 +4236,7 @@ appRouter.get("/api/config", async (req, res) => {
       suggestedSources: db.suggestedSources || PRELOADED_FALLBACK_FEED_ITEMS,
       candidates: db.candidates || [],
       skills: db.skills || [],
-      isFirestoreQuotaExceeded,
-      firebaseProjectId,
-      firestoreDatabaseId
+      databaseBackend: dbService.isPgAvailable() ? "postgresql" : "json-file"
     });
   } catch (err: any) {
     console.error("Failed to fetch config:", err);
@@ -5261,7 +4274,7 @@ appRouter.put("/api/niches/:id", async (req, res) => {
 
     db.niches[idx] = updatedNiche;
     writeDB(db);
-    await persistToFirestore("niches", id, updatedNiche);
+    await persistRecord("niches", id, updatedNiche);
 
     addNotification("info", "Niche Updated Successfully", `Niche "${name.trim()}" settings have been edited.`);
     res.json(updatedNiche);
@@ -5286,7 +4299,7 @@ appRouter.delete("/api/niches/:id", async (req, res) => {
     const removedName = db.niches[idx].name;
     db.niches.splice(idx, 1);
     writeDB(db);
-    await removeFromFirestore("niches", id);
+    await removeRecord("niches", id);
 
     addNotification("warning", "Niche Removed", `Niche "${removedName}" has been deleted.`);
     res.json({ success: true, message: `Niche ${removedName} removed successfully.` });
@@ -5392,9 +4405,9 @@ Output exactly a RAW JSON object (no markdown formatting, no markdown codeblocks
 
     writeDB(db);
 
-    // Sync to Firestore
-    await persistToFirestore("niches", cleanId, newNiche);
-    await persistToFirestore("writers", writerId, seedWriter);
+    // Persist to PostgreSQL.
+    await persistRecord("niches", cleanId, newNiche);
+    await persistRecord("writers", writerId, seedWriter);
 
     // Seed starting suggested sources for the new niche!
     const startingSources: any[] = [];
@@ -5495,9 +4508,9 @@ Do not return any explanations or markdown wrappers, only valid JSON.`;
     db.suggestedSources = [...scheduledStarting, ...db.suggestedSources];
     writeDB(db);
 
-    // Persist seeded sources to Firestore
+    // Persist seeded sources to PostgreSQL.
     for (const source of scheduledStarting) {
-      await persistToFirestore("suggestedSources", source.id, source);
+      await persistRecord("suggestedSources", source.id, source);
     }
 
     // Create a beautiful dashboard notification
@@ -5665,7 +4678,7 @@ appRouter.post("/api/niches/discover", async (req, res) => {
 // =============================================================
 
 // GET /api/skills
-appRouter.post("/api/skills", (req, res) => {
+appRouter.get("/api/skills", (req, res) => {
   const db = readDB();
   res.json(db.skills || []);
 });
@@ -5705,7 +4718,7 @@ appRouter.post("/api/skills", (req, res) => {
   }
 
   writeDB(db);
-  persistToFirestore("skills", targetSkill.id, targetSkill);
+  persistRecord("skills", targetSkill.id, targetSkill);
   addNotification("success", "Dynamic Skill Updated", `Skill "${name}" has been mapped and compiled to the Workspace engine.`);
 
   res.status(201).json({ success: true, skill: targetSkill });
@@ -5719,7 +4732,7 @@ appRouter.delete("/api/skills/:id", async (req, res) => {
     const targetSkill = (db.skills || []).find((s: any) => s.id === id);
 
     if (targetSkill) {
-      await removeFromFirestore("skills", id);
+      await removeRecord("skills", id);
       db.skills = (db.skills || []).filter((s: any) => s.id !== id);
       writeDB(db);
       addNotification("info", "Skill Decommissioned", `Skill "${targetSkill.name}" has been successfully decommissioned.`);
@@ -5966,8 +4979,8 @@ appRouter.post("/api/feeds/discovery/delete", (req, res) => {
   res.json({ success: true, count: urls.length, deletedUrls: db.deletedDiscoveryUrls });
 });
 
-// Manage digital writers
-appRouter.post("/api/writers", (req, res) => {
+// GET /api/writers
+appRouter.get("/api/writers", (req, res) => {
   const db = readDB();
   res.json(db.writers);
 });
@@ -6006,7 +5019,7 @@ appRouter.post("/api/writers", (req, res) => {
   }
 
   writeDB(db);
-  persistToFirestore("writers", newWriter.id, newWriter);
+  persistRecord("writers", newWriter.id, newWriter);
   res.status(201).json(newWriter);
 });
 
@@ -6032,7 +5045,7 @@ appRouter.put("/api/writers/:id", (req, res) => {
 
   db.writers[writerIndex] = updatedWriter;
   writeDB(db);
-  persistToFirestore("writers", id, updatedWriter);
+  persistRecord("writers", id, updatedWriter);
   res.json(updatedWriter);
 });
 
@@ -6048,8 +5061,8 @@ appRouter.delete("/api/writers/:id", async (req, res) => {
   db.writers.splice(writerIndex, 1);
   writeDB(db);
   
-  // Try deleting from firestore
-  await removeFromFirestore("writers", id);
+  // Delete from PostgreSQL.
+  await removeRecord("writers", id);
   res.json({ success: true });
 });
 
@@ -6122,9 +5135,9 @@ Respond ONLY with the JSON array, no formatting wrappers except valid JSON.`;
       db.candidates.push(...parsed);
       writeDB(db);
       
-      // Persist to firestore if needed
+      // Persist the updated record.
       for (const cand of parsed) {
-        persistToFirestore("candidates", cand.id, cand);
+        persistRecord("candidates", cand.id, cand);
       }
       return res.json({ success: true, candidates: parsed });
     }
@@ -6175,7 +5188,7 @@ Respond ONLY with the JSON array, no formatting wrappers except valid JSON.`;
   db.candidates = (db.candidates || []).filter((c: any) => c.niche !== niche);
   db.candidates.push(backup);
   writeDB(db);
-  persistToFirestore("candidates", backup.id, backup);
+  persistRecord("candidates", backup.id, backup);
 
   res.json({ success: true, candidates: [backup] });
 });
@@ -6386,7 +5399,7 @@ appRouter.post("/api/feeds", (req, res) => {
   
   db.feeds.push(newFeed);
   writeDB(db);
-  persistToFirestore("feeds", newFeed.id, newFeed);
+  persistRecord("feeds", newFeed.id, newFeed);
   res.status(201).json(newFeed);
 });
 
@@ -6419,7 +5432,7 @@ appRouter.post("/api/feeds/bulk", async (req, res) => {
         const existingFeed = db.feeds[existingFeedIndex];
         if (existingFeed.niche !== niche) {
           existingFeed.niche = niche;
-          added.push(existingFeed); // Repurpose 'added' to also sync updates to firestore
+          added.push(existingFeed); // Include updates in the PostgreSQL upsert batch.
         } else {
           skipped.push({ name, url, error: "Duplicate feed link already exists within the same niche" });
         }
@@ -6443,25 +5456,7 @@ appRouter.post("/api/feeds/bulk", async (req, res) => {
 
     if (added.length > 0) {
       writeDB(db);
-      if (firestoreDb && !isFirestoreQuotaExceeded) {
-         try {
-             // Commit up to 500 at once using writeBatch
-             for (let i = 0; i < added.length; i += 400) {
-                 const chunk = added.slice(i, i + 400);
-                 const batch = writeBatch(firestoreDb);
-                 chunk.forEach(feed => {
-                     batch.set(doc(firestoreDb, "feeds", feed.id), cleanUndefined(feed));
-                 });
-                 await Promise.race([
-                     batch.commit(),
-                     new Promise((_, r) => setTimeout(() => r(new Error("Firestore batch config timeout")), 15000))
-                 ]);
-             }
-         } catch (e: any) {
-             checkAndHandleFirestoreQuotaError(e);
-             console.error("Bulk feeds batch commit failed:", e.message);
-         }
-      }
+      await Promise.all(added.map((feed) => persistRecord("feeds", feed.id, feed)));
     }
 
     res.status(200).json({
@@ -6481,7 +5476,7 @@ appRouter.patch("/api/feeds/:id", (req, res) => {
   if (index !== -1) {
     db.feeds[index] = { ...db.feeds[index], ...req.body };
     writeDB(db);
-    persistToFirestore("feeds", db.feeds[index].id, db.feeds[index]);
+    persistRecord("feeds", db.feeds[index].id, db.feeds[index]);
     return res.json(db.feeds[index]);
   }
   res.status(404).json({ error: "Feed not found" });
@@ -6490,7 +5485,7 @@ appRouter.patch("/api/feeds/:id", (req, res) => {
 appRouter.delete("/api/feeds/:id", async (req, res) => {
   try {
     const { id } = req.params;
-    await removeFromFirestore("feeds", id);
+    await removeRecord("feeds", id);
 
     const db = readDB();
     db.feeds = db.feeds.filter(f => f.id !== id);
@@ -6731,9 +5726,9 @@ Do not return any markdown wraps except valid JSON inside. Keep it clean.`;
   db.suggestedSources = mergedSources;
   writeDB(db);
 
-  // Background sync all newly discovered items to Firestore cloud
+  // Persist all newly discovered items to PostgreSQL.
   scheduledNew.forEach(item => {
-    persistToFirestore("suggestedSources", item.id, item);
+    persistRecord("suggestedSources", item.id, item);
   });
 
   res.json(scheduledNew);
@@ -7970,7 +6965,7 @@ setPushToWordPressAdapter(pushToWordPress);
 
 // Helper to convert an article draft to a complete FinalArticlePackage and save it
 async function createPackageFromArticle(article: any, siteId: string, scheduledPublishAt?: string | null): Promise<FinalArticlePackage> {
-  const adminDb = getAdminFirestore();
+  const adminDb = getDocumentStore();
   const packageId = `pkg_${article.id}_${Date.now()}`;
   const wordCount = (article.content || "").split(/\s+/).filter((w: string) => w.length > 0).length;
   const readingTime = Math.ceil(wordCount / 200);
@@ -8058,7 +7053,7 @@ async function createPackageFromArticle(article: any, siteId: string, scheduledP
 // Queue API routes
 appRouter.get("/api/publishing-queue/jobs", async (req, res) => {
   try {
-    const adminDb = getAdminFirestore();
+    const adminDb = getDocumentStore();
     const snapshot = await adminDb.collection("publishing_queue")
       .orderBy("nextRunAt", "desc")
       .get();
@@ -8110,7 +7105,7 @@ appRouter.post("/api/publishing-queue/enqueue", async (req, res) => {
       error: `In publishing queue (Status: ${job.status})`
     };
     writeDB(db);
-    persistToFirestore("articles", article.id, db.articles[articleIndex]);
+    persistRecord("articles", article.id, db.articles[articleIndex]);
 
     res.json({ success: true, job });
   } catch (err: any) {
@@ -8142,7 +7137,7 @@ appRouter.post("/api/publishing-queue/jobs/:jobId/resolve", async (req, res) => 
     
     // Sync status back to draft
     const db = readDB();
-    const pkgSnap = await getAdminFirestore().collection("phase_d_packages").doc(updatedJob.packageId).get();
+    const pkgSnap = await getDocumentStore().collection("phase_d_packages").doc(updatedJob.packageId).get();
     if (pkgSnap.exists) {
       const pkg = pkgSnap.data() as FinalArticlePackage;
       const index = db.articles.findIndex((a: any) => a.id === pkg.articleId);
@@ -8155,7 +7150,7 @@ appRouter.post("/api/publishing-queue/jobs/:jobId/resolve", async (req, res) => 
         };
         db.articles[index].status = "published";
         writeDB(db);
-        persistToFirestore("articles", db.articles[index].id, db.articles[index]);
+        persistRecord("articles", db.articles[index].id, db.articles[index]);
       }
     }
 
@@ -8177,7 +7172,7 @@ appRouter.post("/api/publishing-queue/jobs/:jobId/abort", async (req, res) => {
     
     // Sync status back to draft
     const db = readDB();
-    const pkgSnap = await getAdminFirestore().collection("phase_d_packages").doc(updatedJob.packageId).get();
+    const pkgSnap = await getDocumentStore().collection("phase_d_packages").doc(updatedJob.packageId).get();
     if (pkgSnap.exists) {
       const pkg = pkgSnap.data() as FinalArticlePackage;
       const index = db.articles.findIndex((a: any) => a.id === pkg.articleId);
@@ -8188,7 +7183,7 @@ appRouter.post("/api/publishing-queue/jobs/:jobId/abort", async (req, res) => {
           pushedAt: new Date().toISOString()
         };
         writeDB(db);
-        persistToFirestore("articles", db.articles[index].id, db.articles[index]);
+        persistRecord("articles", db.articles[index].id, db.articles[index]);
       }
     }
 
@@ -8206,8 +7201,8 @@ appRouter.post("/api/publishing-queue/worker/run", async (req, res) => {
     
     // For each completed/published job during this cycle, sync its status to our memory DB
     const db = readDB();
-    const adminDb = getAdminFirestore();
-    const queueSnap = await adminDb.collection("publishing_queue").where("status", "==", "published").get();
+    const adminDb = getDocumentStore();
+    const queueSnap = await adminDb.collection("publishing_queue").where("status", "in", ["PUBLISHED", "published"]).get();
     
     let dbUpdated = false;
     for (const qDoc of queueSnap.docs) {
@@ -8224,7 +7219,7 @@ appRouter.post("/api/publishing-queue/worker/run", async (req, res) => {
             pushedAt: new Date().toISOString()
           };
           db.articles[index].status = "published";
-          persistToFirestore("articles", db.articles[index].id, db.articles[index]);
+          persistRecord("articles", db.articles[index].id, db.articles[index]);
           dbUpdated = true;
         }
       }
@@ -8265,12 +7260,12 @@ appRouter.get("/api/saas-stats", (req, res) => {
 
 appRouter.get("/api/saas-settings", async (req, res) => {
   try {
-    syncFromFirestore().catch(e => console.warn("⚠️ Background sync notice:", e.message));
+    refreshDatabase().catch(e => console.warn("⚠️ Background sync notice:", e.message));
     const db = readDB();
     const settings = db.settings || DEFAULT_SETTINGS;
     res.json({
       ...getMaskedSettings(settings),
-      isFirestoreQuotaExceeded
+      databaseBackend: dbService.isPgAvailable() ? "postgresql" : "json-file"
     });
   } catch (err: any) {
     console.error("Failed to fetch saas settings:", err);
@@ -8280,7 +7275,7 @@ appRouter.get("/api/saas-settings", async (req, res) => {
 
 appRouter.get("/api/notifications", async (req, res) => {
   try {
-    syncFromFirestore().catch(e => console.warn("⚠️ Background sync notice:", e.message));
+    refreshDatabase().catch(e => console.warn("⚠️ Background sync notice:", e.message));
     const db = readDB();
     res.json(db.notifications || []);
   } catch (err: any) {
@@ -8333,7 +7328,7 @@ appRouter.post("/api/saas-settings", (req, res) => {
         : (db.settings?.wordpressSites || DEFAULT_SETTINGS.wordpressSites || [])
     };
     writeDB(db);
-    persistToFirestore("settings", "saas", db.settings);
+    persistRecord("settings", "saas", db.settings);
     
     // Log the update action
     addAuditLog("SECRET_ACCESS_ATTEMPT", { action: "update_settings" });
@@ -8576,7 +7571,7 @@ appRouter.post("/api/articles/:id/push-wp", async (req, res) => {
     status: "pushing"
   };
   writeDB(db);
-  persistToFirestore("articles", db.articles[index].id, db.articles[index]);
+  persistRecord("articles", db.articles[index].id, db.articles[index]);
 
   const result = await pushToWordPress(article, wpConfig);
 
@@ -8612,7 +7607,7 @@ appRouter.post("/api/articles/:id/push-wp", async (req, res) => {
   }
 
   writeDB(updatedDb);
-  persistToFirestore("articles", updatedDb.articles[index].id, updatedDb.articles[index]);
+  persistRecord("articles", updatedDb.articles[index].id, updatedDb.articles[index]);
   res.json(updatedDb.articles[index]);
 });
 
@@ -8620,7 +7615,7 @@ appRouter.post("/api/articles/:id/push-wp", async (req, res) => {
 appRouter.get("/api/articles", async (req, res) => {
   try {
     const { niche } = req.query;
-    syncFromFirestore().catch(e => console.warn("⚠️ Background sync notice:", e.message));
+    refreshDatabase().catch(e => console.warn("⚠️ Background sync notice:", e.message));
     const db = readDB();
     
     let list = db.articles || [];
@@ -10890,12 +9885,12 @@ For a comprehensive overview of the situation and the detailed timeline, consult
 
     // Save into database
     db.articles.push(newArticle);
-    persistToFirestore("articles", newArticle.id, newArticle);
+    persistRecord("articles", newArticle.id, newArticle);
     
     db.writers = db.writers.map(w => {
       if (w.id === writer.id) {
         const uWriter = { ...w, totalArticles: (w.totalArticles || 0) + 1 };
-        persistToFirestore("writers", w.id, uWriter);
+        persistRecord("writers", w.id, uWriter);
         return uWriter;
       }
       return w;
@@ -11091,7 +10086,7 @@ appRouter.post("/api/articles/:id/optimize", async (req, res) => {
   db.articles[index] = optimizedArticle;
 
   writeDB(db);
-  persistToFirestore("articles", db.articles[index].id, db.articles[index]);
+  persistRecord("articles", db.articles[index].id, db.articles[index]);
   res.json(db.articles[index]);
 });
 
@@ -11121,7 +10116,7 @@ appRouter.post("/api/articles/generate-image", async (req, res) => {
     });
     writeDB(db);
     if (targetArt) {
-      persistToFirestore("articles", targetArt.id, targetArt);
+      persistRecord("articles", targetArt.id, targetArt);
     }
 
     return res.json({ 
@@ -11245,7 +10240,7 @@ ${article.content.slice(0, 1200)}`;
     // Save back to article to persist
     db.articles[index].audioBriefing = audioBriefing;
     writeDB(db);
-    persistToFirestore("articles", db.articles[index].id, db.articles[index]);
+    persistRecord("articles", db.articles[index].id, db.articles[index]);
 
     return res.json(audioBriefing);
   } catch (err: any) {
@@ -11266,7 +10261,7 @@ appRouter.patch("/api/articles/:id", (req, res) => {
     db.articles[index] = optimizedArticle;
     
     writeDB(db);
-    persistToFirestore("articles", db.articles[index].id, db.articles[index]);
+    persistRecord("articles", db.articles[index].id, db.articles[index]);
     return res.json(db.articles[index]);
   }
   res.status(404).json({ error: "Article not found" });
@@ -11339,161 +10334,36 @@ appRouter.post("/api/articles/sandbox", (req, res) => {
 
   db.articles.push(sandboxArticle);
   writeDB(db);
-  persistToFirestore("articles", sandboxArticle.id, sandboxArticle);
+  persistRecord("articles", sandboxArticle.id, sandboxArticle);
   res.json(sandboxArticle);
 });
 
 appRouter.post("/api/articles/clear", async (req, res) => {
   try {
-    await forceResetQuotaState();
-    const db = readDB();
-
-    // 1. Articles Clear (both local and Firestore/PostgreSQL)
-    if (firestoreDb) {
-      try {
-        const snap = await safeGetDocs(collection(firestoreDb, "articles"));
-        const deletePromises: Promise<any>[] = [];
-        snap.forEach((doc: any) => {
-          deletePromises.push(removeFromFirestore("articles", doc.id));
-        });
-        await Promise.all(deletePromises);
-      } catch (err: any) {
-        console.warn("⚠️ Failed to wipe Firestore articles collection directly:", err.message);
-      }
+    await refreshDatabase();
+    const state = readDB();
+    const collectionsToClear: (keyof DatabaseState)[] = [
+      "articles", "suggestedSources", "candidates", "notifications",
+      "customDiscoveredFeeds", "deletedDiscoveryUrls", "auditLogs", "usageLogs", "skills"
+    ];
+    for (const collectionName of collectionsToClear) {
+      await dbService.clearCollection(collectionName);
     }
-    const pgPool = getPgPool();
-    if (pgPool) {
-      try {
-        await pgPool.query("DELETE FROM articles");
-      } catch (err: any) {
-        console.warn("⚠️ Failed to wipe PostgreSQL articles table directly:", err.message);
-      }
-    }
-    db.articles = [];
-
-    // 2. Suggested Sources Clear
-    if (firestoreDb) {
-      try {
-        const snap = await safeGetDocs(collection(firestoreDb, "suggestedSources"));
-        const deletePromises: Promise<any>[] = [];
-        snap.forEach((doc: any) => {
-          deletePromises.push(removeFromFirestore("suggestedSources", doc.id));
-        });
-        await Promise.all(deletePromises);
-      } catch (err: any) {
-        console.warn("⚠️ Failed to wipe Firestore suggestedSources collection directly:", err.message);
-      }
-    }
-    if (pgPool) {
-      try {
-        await pgPool.query("DELETE FROM suggested_sources");
-      } catch (err: any) {
-        console.warn("⚠️ Failed to wipe PostgreSQL suggested_sources table directly:", err.message);
-      }
-    }
-    db.suggestedSources = [];
-
-    // 3. Editorial Board Candidates Clear
-    if (firestoreDb) {
-      try {
-        const snap = await safeGetDocs(collection(firestoreDb, "candidates"));
-        const deletePromises: Promise<any>[] = [];
-        snap.forEach((doc: any) => {
-          deletePromises.push(removeFromFirestore("candidates", doc.id));
-        });
-        await Promise.all(deletePromises);
-      } catch (err: any) {
-        console.warn("⚠️ Failed to wipe Firestore candidates collection directly:", err.message);
-      }
-    }
-    if (pgPool) {
-      try {
-        await pgPool.query("DELETE FROM candidates");
-      } catch (err: any) {
-        console.warn("⚠️ Failed to wipe PostgreSQL candidates table directly:", err.message);
-      }
-    }
-    db.candidates = [];
-
-    // 4. Notifications Clear
-    if (firestoreDb) {
-      try {
-        const snap = await safeGetDocs(collection(firestoreDb, "notifications"));
-        const deletePromises: Promise<any>[] = [];
-        snap.forEach((doc: any) => {
-          deletePromises.push(removeFromFirestore("notifications", doc.id));
-        });
-        await Promise.all(deletePromises);
-      } catch (err: any) {
-        console.warn("⚠️ Failed to wipe Firestore notifications collection directly:", err.message);
-      }
-    }
-    if (pgPool) {
-      try {
-        await pgPool.query("DELETE FROM notifications");
-      } catch (err: any) {
-        console.warn("⚠️ Failed to wipe PostgreSQL notifications table directly:", err.message);
-      }
-    }
-    db.notifications = [];
-
-    // 5. EXCLUDE ENTIRELY: writers (editorial profiles), niches (categories), feeds (RSS sources), settings, and users
-    // Writers, niches, and RSS feeds must be fully excluded and preserved per user specification.
-    // We leave db.writers, db.feeds, db.niches, db.settings, and db.users intact.
-
-    // 6. Custom Skills Clear (Reset skills back to DEFAULT_SKILLS and clean custom skill ids from Firestore/PostgreSQL)
-    const defaultSkillIds = new Set(DEFAULT_SKILLS.map(s => s.id));
-    if (firestoreDb) {
-      try {
-        const snap = await safeGetDocs(collection(firestoreDb, "skills"));
-        const deletePromises: Promise<any>[] = [];
-        snap.forEach((doc: any) => {
-          if (!defaultSkillIds.has(doc.id)) {
-            deletePromises.push(removeFromFirestore("skills", doc.id));
-          }
-        });
-        await Promise.all(deletePromises);
-      } catch (err: any) {
-        console.warn("⚠️ Failed to wipe Firestore custom skills collection directly:", err.message);
-      }
-    }
-    if (pgPool) {
-      try {
-        await pgPool.query("DELETE FROM skills");
-        for (const skill of DEFAULT_SKILLS) {
-          await persistToPostgres("skills", skill.id, skill);
-        }
-      } catch (err: any) {
-        console.warn("⚠️ Failed to wipe PostgreSQL custom skills directly:", err.message);
-      }
-    }
-    db.skills = JSON.parse(JSON.stringify(DEFAULT_SKILLS));
-
-    // 7. General Discovery Cache Clear
-    db.customDiscoveredFeeds = [];
-    db.deletedDiscoveryUrls = [];
-    if (pgPool) {
-      try {
-        await pgPool.query("DELETE FROM custom_discovered_feeds");
-        await pgPool.query("DELETE FROM deleted_discovery_urls");
-      } catch (e) {}
-    }
-
-    // 8. Telemetry Logs Clear
-    db.auditLogs = [];
-    db.usageLogs = {};
-    if (pgPool) {
-      try {
-        await pgPool.query("DELETE FROM audit_logs");
-        await pgPool.query("DELETE FROM usage_logs");
-      } catch (e) {}
-    }
-
-    writeDB(db);
-    res.json({ success: true, articles: [], writers: db.writers, suggestedSources: [], candidates: [], skills: db.skills });
+    state.articles = [];
+    state.suggestedSources = [];
+    state.candidates = [];
+    state.notifications = [];
+    state.customDiscoveredFeeds = [];
+    state.deletedDiscoveryUrls = [];
+    state.auditLogs = [];
+    state.usageLogs = {};
+    state.skills = JSON.parse(JSON.stringify(DEFAULT_SKILLS));
+    for (const skill of state.skills) await dbService.upsert("skills", skill);
+    writeDB(state);
+    res.json({ success: true, articles: [], writers: state.writers, suggestedSources: [], candidates: [], skills: state.skills });
   } catch (err: any) {
-    console.error("Failed to perform Full Database Reset:", err);
-    res.status(500).json({ error: err.message || "Failed to perform database reset." });
+    console.error("Failed to clear editorial data:", err);
+    res.status(500).json({ error: err.message || "Failed to clear editorial data." });
   }
 });
 
@@ -11506,141 +10376,50 @@ const isPushedToWP = (a: any) => {
 
 appRouter.post("/api/articles/clear-except-pushed", async (req, res) => {
   try {
-    await forceResetQuotaState();
-    const db = readDB();
-
-    // 1. Fetch articles directly from Firestore and delete non-pushed ones
-    if (firestoreDb) {
-      try {
-        const snap = await safeGetDocs(collection(firestoreDb, "articles"));
-        const deletePromises: Promise<any>[] = [];
-        snap.forEach((doc: any) => {
-          const a = doc.data();
-          if (a && !isPushedToWP(a)) {
-            deletePromises.push(removeFromFirestore("articles", doc.id));
-          }
-        });
-        await Promise.all(deletePromises);
-      } catch (err: any) {
-        console.warn("⚠️ Failed to clear non-pushed articles from Firestore directly:", err.message);
-      }
-    }
-
-    const pgPool = getPgPool();
-    if (pgPool) {
-      try {
-        const resPg = await pgPool.query("SELECT id, data FROM articles");
-        for (const row of resPg.rows) {
-          const a = typeof row.data === "string" ? JSON.parse(row.data) : row.data;
-          if (a && !isPushedToWP(a)) {
-            await pgPool.query("DELETE FROM articles WHERE id = $1", [row.id]);
-          }
-        }
-      } catch (err: any) {
-        console.warn("⚠️ Failed to clear non-pushed articles from PostgreSQL:", err.message);
-      }
-    }
-
-    // 2. Also clear non-pushed articles from local state to maintain consistency
-    db.articles = (db.articles || []).filter(a => isPushedToWP(a));
-    writeDB(db);
-    res.json({ success: true, articles: db.articles });
+    await refreshDatabase();
+    const state = readDB();
+    const removed = (state.articles || []).filter((article) => !isPushedToWP(article));
+    await Promise.all(removed.map((article) => dbService.remove("articles", article.id)));
+    state.articles = (state.articles || []).filter(isPushedToWP);
+    writeDB(state);
+    res.json({ success: true, articles: state.articles });
   } catch (err: any) {
-    console.error("Failed to clear non-pushed articles:", err);
+    console.error("Failed to clear non-published articles:", err);
     res.status(500).json({ error: err.message || "Failed to clear articles" });
   }
 });
 
 appRouter.post("/api/articles/clear-pushed", async (req, res) => {
   try {
-    await forceResetQuotaState();
-    const db = readDB();
-
-    // 1. Fetch articles directly from Firestore and delete pushed ones
-    if (firestoreDb) {
-      try {
-        const snap = await safeGetDocs(collection(firestoreDb, "articles"));
-        const deletePromises: Promise<any>[] = [];
-        snap.forEach((doc: any) => {
-          const a = doc.data();
-          if (a && isPushedToWP(a)) {
-            deletePromises.push(removeFromFirestore("articles", doc.id));
-          }
-        });
-        await Promise.all(deletePromises);
-      } catch (err: any) {
-        console.warn("⚠️ Failed to clear pushed articles from Firestore directly:", err.message);
-      }
-    }
-
-    const pgPool = getPgPool();
-    if (pgPool) {
-      try {
-        const resPg = await pgPool.query("SELECT id, data FROM articles");
-        for (const row of resPg.rows) {
-          const a = typeof row.data === "string" ? JSON.parse(row.data) : row.data;
-          if (a && isPushedToWP(a)) {
-            await pgPool.query("DELETE FROM articles WHERE id = $1", [row.id]);
-          }
-        }
-      } catch (err: any) {
-        console.warn("⚠️ Failed to clear pushed articles from PostgreSQL:", err.message);
-      }
-    }
-
-    // 2. Also clear pushed articles from local state
-    db.articles = (db.articles || []).filter(a => !isPushedToWP(a));
-    writeDB(db);
-    res.json({ success: true, articles: db.articles });
+    await refreshDatabase();
+    const state = readDB();
+    const removed = (state.articles || []).filter(isPushedToWP);
+    await Promise.all(removed.map((article) => dbService.remove("articles", article.id)));
+    state.articles = (state.articles || []).filter((article) => !isPushedToWP(article));
+    writeDB(state);
+    res.json({ success: true, articles: state.articles });
   } catch (err: any) {
-    console.error("Failed to clear pushed articles:", err);
+    console.error("Failed to clear published articles:", err);
     res.status(500).json({ error: err.message || "Failed to clear articles" });
   }
 });
 
 appRouter.post("/api/articles/clear-all", async (req, res) => {
   try {
-    await forceResetQuotaState();
+    await refreshDatabase();
+    const collectionsToWipe: (keyof DatabaseState)[] = [
+      "articles", "suggestedSources", "candidates", "notifications",
+      "customDiscoveredFeeds", "deletedDiscoveryUrls", "usageLogs",
+      "auditLogs", "skills", "niches", "writers", "feeds", "settings", "users"
+    ];
+    for (const collectionName of collectionsToWipe) await dbService.clearCollection(collectionName);
 
-    // 1. Clear Firestore collections (if active)
-    if (firestoreDb) {
-      const collectionsToWipe = [
-        "articles", "suggestedSources", "candidates", "notifications",
-        "skills", "customDiscoveredFeeds", "deletedDiscoveryUrls",
-        "auditLogs", "usageLogs", "niches", "writers", "feeds", "settings", "users"
-      ];
-      for (const col of collectionsToWipe) {
-        try {
-          const snap = await safeGetDocs(collection(firestoreDb, col));
-          const deletePromises: Promise<any>[] = [];
-          snap.forEach((doc: any) => {
-            deletePromises.push(removeFromFirestore(col, doc.id));
-          });
-          await Promise.all(deletePromises);
-        } catch (err: any) {
-          console.warn(`⚠️ Failed to wipe Firestore collection ${col}:`, err.message);
-        }
-      }
+    const documentStore = getDocumentStore();
+    for (const collectionName of ["publishing_queue", "phase_d_packages", "phase_d_audits"]) {
+      const snapshot = await documentStore.collection(collectionName).get();
+      await Promise.all(snapshot.docs.map((document) => documentStore.collection(collectionName).doc(document.id).delete()));
     }
 
-    // 2. Clear PostgreSQL tables (if active)
-    const pgPool = getPgPool();
-    if (pgPool) {
-      const tablesToWipe = [
-        "articles", "suggested_sources", "candidates", "notifications",
-        "custom_discovered_feeds", "deleted_discovery_urls", "usage_logs",
-        "audit_logs", "skills", "niches", "writers", "feeds", "settings", "users"
-      ];
-      for (const table of tablesToWipe) {
-        try {
-          await pgPool.query(`DELETE FROM ${table}`);
-        } catch (err: any) {
-          console.warn(`⚠️ Failed to wipe PostgreSQL table ${table}:`, err.message);
-        }
-      }
-    }
-
-    // 3. Reconstruct the pristine LocalDB
     const pristineDB: LocalDB = {
       writers: JSON.parse(JSON.stringify(DEFAULT_WRITERS)),
       feeds: JSON.parse(JSON.stringify(DEFAULT_FEEDS)),
@@ -11648,112 +10427,20 @@ appRouter.post("/api/articles/clear-all", async (req, res) => {
       settings: JSON.parse(JSON.stringify(DEFAULT_SETTINGS)),
       suggestedSources: classifyAndScheduleArticles(PRELOADED_FALLBACK_FEED_ITEMS),
       skills: JSON.parse(JSON.stringify(DEFAULT_SKILLS)),
-      niches: [],
-      users: [],
-      customDiscoveredFeeds: [],
-      deletedDiscoveryUrls: [],
-      auditLogs: [],
-      usageLogs: {},
-      notifications: []
+      niches: [], users: [], customDiscoveredFeeds: [], deletedDiscoveryUrls: [],
+      auditLogs: [], usageLogs: {}, notifications: [], candidates: []
     };
-
-    // 4. Persist the pristine state to Firestore or PostgreSQL
-    if (firestoreDb) {
-      try {
-        await safeSetDoc(doc(firestoreDb, "settings", "saas"), pristineDB.settings);
-        for (const w of pristineDB.writers) {
-          await safeSetDoc(doc(firestoreDb, "writers", w.id), cleanUndefined(w));
-        }
-        for (const f of pristineDB.feeds) {
-          await safeSetDoc(doc(firestoreDb, "feeds", f.id), cleanUndefined(f));
-        }
-        for (const s of pristineDB.skills) {
-          await safeSetDoc(doc(firestoreDb, "skills", s.id), cleanUndefined(s));
-        }
-        for (const src of pristineDB.suggestedSources || []) {
-          await safeSetDoc(doc(firestoreDb, "suggestedSources", src.id), cleanUndefined(src));
-        }
-        for (const a of pristineDB.articles) {
-          await safeSetDoc(doc(firestoreDb, "articles", a.id), cleanUndefined(a));
-        }
-      } catch (err: any) {
-        console.error("Failed to seed Firestore with pristine state:", err.message);
-      }
-    }
-
-    if (pgPool) {
-      try {
-        // Settings
-        await pgPool.query(`
-          INSERT INTO settings (id, data, updated_at)
-          VALUES ('saas', $1, CURRENT_TIMESTAMP)
-          ON CONFLICT (id) DO UPDATE SET data = $1, updated_at = CURRENT_TIMESTAMP
-        `, [JSON.stringify(pristineDB.settings)]);
-
-        // Writers
-        for (const w of pristineDB.writers) {
-          await pgPool.query(`
-            INSERT INTO writers (id, data, updated_at)
-            VALUES ($1, $2, CURRENT_TIMESTAMP)
-            ON CONFLICT (id) DO UPDATE SET data = $2, updated_at = CURRENT_TIMESTAMP
-          `, [w.id, JSON.stringify(w)]);
-        }
-
-        // Feeds
-        for (const f of pristineDB.feeds) {
-          await pgPool.query(`
-            INSERT INTO feeds (id, data, updated_at)
-            VALUES ($1, $2, CURRENT_TIMESTAMP)
-            ON CONFLICT (id) DO UPDATE SET data = $2, updated_at = CURRENT_TIMESTAMP
-          `, [f.id, JSON.stringify(f)]);
-        }
-
-        // Skills
-        for (const s of pristineDB.skills) {
-          await pgPool.query(`
-            INSERT INTO skills (id, data, updated_at)
-            VALUES ($1, $2, CURRENT_TIMESTAMP)
-            ON CONFLICT (id) DO UPDATE SET data = $2, updated_at = CURRENT_TIMESTAMP
-          `, [s.id, JSON.stringify(s)]);
-        }
-
-        // Suggested Sources
-        for (const src of pristineDB.suggestedSources || []) {
-          await pgPool.query(`
-            INSERT INTO suggested_sources (id, data, updated_at)
-            VALUES ($1, $2, CURRENT_TIMESTAMP)
-            ON CONFLICT (id) DO UPDATE SET data = $2, updated_at = CURRENT_TIMESTAMP
-          `, [src.id, JSON.stringify(src)]);
-        }
-
-        // Articles
-        for (const a of pristineDB.articles) {
-          await pgPool.query(`
-            INSERT INTO articles (id, data, updated_at)
-            VALUES ($1, $2, CURRENT_TIMESTAMP)
-            ON CONFLICT (id) DO UPDATE SET data = $2, updated_at = CURRENT_TIMESTAMP
-          `, [a.id, JSON.stringify(a)]);
-        }
-      } catch (err: any) {
-        console.error("Failed to seed PostgreSQL with pristine state:", err.message);
-      }
-    }
-
-    // 5. Write to local file DB
     writeDB(pristineDB);
+    await dbService.updateCollection("writers", pristineDB.writers);
+    await dbService.updateCollection("feeds", pristineDB.feeds);
+    await dbService.updateCollection("articles", pristineDB.articles);
+    await dbService.updateCollection("skills", pristineDB.skills || []);
+    await dbService.updateCollection("suggestedSources", pristineDB.suggestedSources || []);
+    await dbService.upsert("settings", { id: "saas", ...pristineDB.settings });
 
-    res.json({
-      success: true,
-      articles: pristineDB.articles,
-      writers: pristineDB.writers,
-      feeds: pristineDB.feeds,
-      niches: pristineDB.niches,
-      suggestedSources: pristineDB.suggestedSources,
-      skills: pristineDB.skills,
-      settings: pristineDB.settings
-    });
+    res.json({ success: true, ...pristineDB });
   } catch (err: any) {
-    console.error("Failed to perform Full Database Factory Reset:", err);
+    console.error("Failed to perform PostgreSQL factory reset:", err);
     res.status(500).json({ error: err.message || "Failed to perform database factory reset." });
   }
 });
@@ -11761,9 +10448,9 @@ appRouter.post("/api/articles/clear-all", async (req, res) => {
 appRouter.delete("/api/articles/:id", async (req, res) => {
   try {
     const { id } = req.params;
-    await forceResetQuotaState();
-    // Delete from Firestore FIRST so the background sync won't resurrect it
-    await removeFromFirestore("articles", id);
+    await refreshDatabase();
+    // Delete from PostgreSQL before updating the in-memory view.
+    await removeRecord("articles", id);
 
     const db = readDB();
     db.articles = db.articles.filter(a => a.id !== id);
@@ -11923,7 +10610,7 @@ appRouter.post("/api/suggested-sources/:id/analyze", async (req, res) => {
 
     db.suggestedSources![sourceIndex] = updatedSource;
     writeDB(db);
-    persistToFirestore("suggestedSources", updatedSource.id, updatedSource);
+    persistRecord("suggestedSources", updatedSource.id, updatedSource);
 
     res.json({ success: true, item: updatedSource });
   } catch (err: any) {
@@ -11944,7 +10631,7 @@ appRouter.get("/api/suggested-sources/:id/approve", (req, res) => {
 
   db.suggestedSources![index].processingStatus = "Approved for rewriting";
   writeDB(db);
-  persistToFirestore("suggestedSources", id, db.suggestedSources![index]);
+  persistRecord("suggestedSources", id, db.suggestedSources![index]);
 
   res.json({ success: true, item: db.suggestedSources![index] });
 });
@@ -11961,7 +10648,7 @@ appRouter.put("/api/suggested-sources/:id/reject", (req, res) => {
 
   db.suggestedSources![index].processingStatus = "Rejected / skipped";
   writeDB(db);
-  persistToFirestore("suggestedSources", id, db.suggestedSources![index]);
+  persistRecord("suggestedSources", id, db.suggestedSources![index]);
 
   res.json({ success: true, item: db.suggestedSources![index] });
 });
@@ -11992,7 +10679,7 @@ appRouter.post("/api/suggested-sources", async (req, res) => {
 
     db.suggestedSources.unshift(enriched);
     writeDB(db);
-    await persistToFirestore("suggestedSources", enriched.id, enriched);
+    await persistRecord("suggestedSources", enriched.id, enriched);
 
     addNotification("info", "Custom Source Opportunity Added", `Manually logged news opportunity "${title}" under Niche: ${niche}.`);
 
@@ -12030,7 +10717,7 @@ appRouter.patch("/api/suggested-sources/:id", async (req, res) => {
 
     db.suggestedSources![index] = enriched;
     writeDB(db);
-    await persistToFirestore("suggestedSources", id, enriched);
+    await persistRecord("suggestedSources", id, enriched);
 
     res.json({ success: true, item: enriched });
   } catch (err: any) {
@@ -12058,18 +10745,7 @@ appRouter.delete("/api/suggested-sources/clear", async (req, res) => {
     }
     
     writeDB(db);
-    
-    // Firestore delete if active
-    if (firestoreDb && toDelete.length > 0) {
-      try {
-        const { deleteDoc, doc } = await import("firebase/firestore");
-        for (const item of toDelete) {
-          await deleteDoc(doc(firestoreDb, "suggestedSources", item.id));
-        }
-      } catch (err: any) {
-        console.error("Firestore batch delete suggested sources error:", err.message);
-      }
-    }
+    await Promise.all(toDelete.map((item) => removeRecord("suggestedSources", item.id)));
     
     res.json({ success: true, count: toDelete.length });
   } catch (err: any) {
@@ -12091,16 +10767,7 @@ appRouter.delete("/api/suggested-sources/:id", async (req, res) => {
 
     db.suggestedSources.splice(index, 1);
     writeDB(db);
-    
-    // Firestore delete if firestore is active
-    if (firestoreDb) {
-      try {
-        const { deleteDoc, doc } = require("firebase/firestore");
-        await deleteDoc(doc(firestoreDb, "suggestedSources", id));
-      } catch (fErr) {
-        console.warn("Firestore delete failed:", fErr);
-      }
-    }
+    await removeRecord("suggestedSources", id);
 
     res.json({ success: true });
   } catch (err: any) {
@@ -12229,7 +10896,7 @@ Generate a single high-engagement headline opportunity for this keyword in JSON 
   }
   db.suggestedSources.unshift(newSource);
   writeDB(db);
-  persistToFirestore("suggestedSources", newSource.id, newSource);
+  persistRecord("suggestedSources", newSource.id, newSource);
 
   res.json(newSource);
 });
@@ -12584,22 +11251,32 @@ async function startServer() {
     });
   }
 
-  // Initialize and sync PostgreSQL if configured; otherwise fallback to Firestore
-  if (getPgPool()) {
-    try {
-      console.log("🐘 PostgreSQL environment detected. Setting up tables and loading state...");
-      await initPostgresSchema();
-      await syncFromPostgres();
-    } catch (e: any) {
-      console.error("❌ Failed to initialize or sync with PostgreSQL:", e.message);
+  // Initialize PostgreSQL-backed DatabaseService.
+  try {
+    await dbService.initialize({
+      writers: DEFAULT_WRITERS,
+      feeds: DEFAULT_FEEDS,
+      articles: INITIAL_ARTICLES,
+      settings: DEFAULT_SETTINGS,
+      skills: DEFAULT_SKILLS,
+      niches: GLOBAL_DEFAULT_NICHES,
+      suggestedSources: classifyAndScheduleArticles(PRELOADED_FALLBACK_FEED_ITEMS),
+    });
+
+    if (dbService.isPgAvailable()) {
+      console.log("🐘 PostgreSQL is the primary database backend.");
+    } else {
+      const postgresRequired = process.env.POSTGRES_REQUIRED === "true" || ["production", "staging"].includes(process.env.NODE_ENV || "");
+      if (postgresRequired) throw new Error("PostgreSQL is required but PGPASSWORD is not configured.");
+      console.warn("PostgreSQL is not configured; local JSON mode is allowed only for development and tests.");
     }
-  } else {
-    // Fetch data live from Firestore at boot time to reconcile cache securely & asynchronously
-    syncFromFirestore().catch(e => console.error("⚠️ Initial background Firestore sync failed:", e));
+  } catch (e: any) {
+    console.error("❌ Database initialization failed:", e.message);
+    if (process.env.POSTGRES_REQUIRED === "true" || ["production", "staging"].includes(process.env.NODE_ENV || "")) throw e;
   }
 
   try {
-    const localDb = readDB();
+    const localDb = dbService.read();
     let dbChanged = false;
 
     // Startup Validation: Ensure uniform niche naming conventions
@@ -12698,7 +11375,9 @@ async function startServer() {
         });
       }
     });
-    if (dbChanged) writeDB(localDb);
+    if (dbChanged) {
+      writeDB(localDb);
+    }
   } catch(e) {
     console.error("DB cleaner error:", e);
   }
@@ -12765,22 +11444,19 @@ async function startServer() {
         }
 
         try {
-          if (isFirebaseAdminInitialized) {
-            const adminAny = admin as any;
-            const apps = adminAny?.apps || adminAny?.default?.apps || [];
-            await Promise.all(apps.map((app: any) => app?.delete()));
-            writeStructuredLog("INFO", "Firestore network and client connections closed cleanly.");
-          }
-        } catch (e: any) {
-          writeStructuredLog("ERROR", `Error closing database client during shutdown: ${e.message}`);
-        }
-
-        try {
           writeStructuredLog("INFO", "Flushing cache data memory buffers to disk storage...");
-          const dbInstance = readDB();
+          const dbInstance = dbService.read();
           writeDB(dbInstance);
         } catch (e: any) {
           writeStructuredLog("ERROR", `Error flushing local cache during shutdown: ${e.message}`);
+        }
+
+        // Close PostgreSQL pool
+        try {
+          await dbService.shutdown();
+          writeStructuredLog("INFO", "PostgreSQL pool closed.");
+        } catch (e: any) {
+          writeStructuredLog("ERROR", `Error closing PostgreSQL pool: ${e.message}`);
         }
 
         clearTimeout(timeout);

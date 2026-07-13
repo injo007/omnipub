@@ -64,5 +64,5 @@
 
 12. **Database Persistence & Telemetry**
     * Function: `addLog()` memory push, then written directly via `writeDB()`.
-    * Sync: Async `syncFromFirestore` running periodically on state changes.
+    * Persistence: Serialized PostgreSQL upserts through the shared database service.
     * Status: **VERIFIED**

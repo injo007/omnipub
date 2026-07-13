@@ -14,7 +14,7 @@ data.feeds.forEach(f => {
   if (customUrls[f.url] && f.niche !== customUrls[f.url]) {
     console.log(`Fixing niche for ${f.name} from ${f.niche} to ${customUrls[f.url]}`);
     f.niche = customUrls[f.url];
-    // Bump timestamp so it overrides firestore when quota is back
+    // Bump timestamp so the PostgreSQL migration treats this repair as newest.
     f.lastSyncedAt = new Date(Date.now() + 1000 * 60 * 60 * 24 * 30).toISOString(); 
     updated++;
   }

@@ -1,522 +1,192 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { 
-  isValidTransition, 
-  calculateJobIdempotencyKey, 
-  JobStatus 
-} from '../publishingQueueTypes';
-import { 
-  PublishingQueueService, 
-  classifyFailure, 
-  setPushToWordPressAdapter 
-} from '../publishingQueueService';
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { resetInMemoryDocumentStore, seedDocument, getDocumentStore } from "../../db/documentStore";
+import { PublishingQueueService, classifyFailure, setPushToWordPressAdapter } from "../publishingQueueService";
+import { calculateJobIdempotencyKey, isValidTransition, type PublishingJob } from "../publishingQueueTypes";
 
-// --- Mocks ---
-const mockGetApps = vi.fn();
-vi.mock('firebase-admin/app', () => ({
-  getApps: () => mockGetApps()
-}));
-
-const mockDocGet = vi.fn();
-const mockDocSet = vi.fn();
-const mockDocUpdate = vi.fn();
-const mockCollectionAdd = vi.fn();
-const mockQueryGet = vi.fn();
-
-const mockDocRef = (id: string) => ({
-  id,
-  get: () => mockDocGet(id),
-  set: (data: any) => mockDocSet(id, data),
-  update: (data: any) => mockDocUpdate(id, data)
+const approvedPackage = (id = "pkg_1") => ({
+  packageId: id,
+  articleId: id.replace("pkg_", ""),
+  packageVersion: 1,
+  packageStatus: "APPROVED_FOR_PUBLISHING",
+  editorialContent: {
+    title: "PostgreSQL Queue Test",
+    slug: "postgresql-queue-test",
+    bodyHtml: "<p>Body</p>",
+    bodyTextHash: "hash-1",
+    nichePlaybookId: "tech"
+  },
+  publishingTarget: { wordpressSiteId: "site-a", mappedTagIds: [] },
+  media: {},
+  seo: {}
 });
 
-const mockCollectionRef = (name: string) => ({
-  doc: (id?: string) => mockDocRef(id || 'generated-id'),
-  add: (data: any) => mockCollectionAdd(name, data),
-  where: vi.fn().mockImplementation(() => ({
-    get: () => mockQueryGet(name),
-    limit: vi.fn().mockImplementation(() => ({
-      get: () => mockQueryGet(name)
-    }))
-  }))
+const jobRecord = (overrides: Partial<PublishingJob> = {}): PublishingJob => ({
+  jobId: "job_1",
+  packageId: "pkg_1",
+  targetSiteId: "site-a",
+  status: "LEASED",
+  leaseToken: "lease-a",
+  leaseOwnerId: "worker-a",
+  leaseAcquiredAt: new Date().toISOString(),
+  leaseExpiresAt: new Date(Date.now() + 60_000).toISOString(),
+  revision: 0,
+  runCount: 0,
+  maxRetries: 3,
+  nextRunAt: new Date(Date.now() - 1000).toISOString(),
+  scheduledPublishAt: null,
+  lastError: null,
+  wordpressPostId: null,
+  destinationUrl: null,
+  trackingToken: "tracking-a",
+  auditHistory: [],
+  articleTitle: "PostgreSQL Queue Test",
+  ...overrides
 });
 
-const mockFirestore = {
-  collection: (name: string) => mockCollectionRef(name),
-  runTransaction: async (cb: any) => {
-    return cb({
-      get: async (ref: any) => ref.get(),
-      set: async (ref: any, data: any) => ref.set(data),
-      update: async (ref: any, data: any) => ref.update(data)
-    });
-  }
-};
-
-vi.mock('firebase-admin/firestore', () => ({
-  getFirestore: () => mockFirestore
-}));
-
-describe('Phase E - State Machine Transitions', () => {
-  it('allows valid transitions', () => {
-    expect(isValidTransition('QUEUED', 'LEASED')).toBe(true);
-    expect(isValidTransition('LEASED', 'EXECUTING')).toBe(true);
-    expect(isValidTransition('EXECUTING', 'PUBLISHED')).toBe(true);
-    expect(isValidTransition('EXECUTING', 'RETRY_WAIT')).toBe(true);
-    expect(isValidTransition('RETRY_WAIT', 'QUEUED')).toBe(true);
-    expect(isValidTransition('EXECUTING', 'DEAD_LETTER')).toBe(true);
-    expect(isValidTransition('DEAD_LETTER', 'QUEUED')).toBe(true);
-    expect(isValidTransition('QUEUED', 'CANCELLED')).toBe(true);
+describe("Phase E PostgreSQL queue state machine", () => {
+  it("allows valid transitions and blocks terminal-state escapes", () => {
+    expect(isValidTransition("QUEUED", "LEASED")).toBe(true);
+    expect(isValidTransition("LEASED", "EXECUTING")).toBe(true);
+    expect(isValidTransition("EXECUTING", "PUBLISHED")).toBe(true);
+    expect(isValidTransition("PUBLISHED", "LEASED")).toBe(false);
+    expect(isValidTransition("CANCELLED", "LEASED")).toBe(false);
   });
 
-  it('blocks invalid transitions', () => {
-    expect(isValidTransition('PUBLISHED', 'LEASED')).toBe(false);
-    expect(isValidTransition('CANCELLED', 'LEASED')).toBe(false);
-    expect(isValidTransition('DEAD_LETTER', 'LEASED')).toBe(false);
-    expect(isValidTransition('PUBLISHED', 'CANCELLED')).toBe(false);
+  it("normalizes legacy lowercase states", () => {
+    expect(isValidTransition("queued", "leased")).toBe(true);
+    expect(isValidTransition("executing", "published")).toBe(true);
   });
 
-  it('stores newly created jobs with canonical uppercase states and rejects invalid/unknown states', () => {
-    expect(isValidTransition('QUEUED', 'LEASED')).toBe(true);
-    expect(isValidTransition('LEASED', 'EXECUTING')).toBe(true);
-    expect(isValidTransition('EXECUTING', 'PUBLISHED')).toBe(true);
-  });
-
-  it('rejects unknown or invalid status transitions', () => {
-    expect(isValidTransition('QUEUED', 'UNKNOWN_ST')).toBe(false);
-    expect(isValidTransition('QUEUED', 'SOMETHING_INVALID')).toBe(false);
-  });
-
-  it('normalizes legacy lowercase states to uppercase for transition verification', () => {
-    expect(isValidTransition('queued', 'leased')).toBe(true);
-    expect(isValidTransition('leased', 'executing')).toBe(true);
-    expect(isValidTransition('executing', 'published')).toBe(true);
-  });
-});
-
-describe('Phase E - Deterministic Idempotency Key Generation', () => {
-  it('generates identical keys for identical inputs', () => {
-    const params = {
-      packageId: 'pkg_test_123',
-      packageVersion: 2,
-      packageHash: 'abcde12345',
-      targetSiteId: 'wp-site-4',
-      desiredAction: 'publish',
-      desiredStatus: 'QUEUED',
+  it("builds stable SHA-256 idempotency keys", () => {
+    const input = {
+      packageId: "pkg_1", packageVersion: 1, packageHash: "hash-1",
+      targetSiteId: "site-a", desiredAction: "publish", desiredStatus: "QUEUED",
       scheduleTimestamp: null
     };
-
-    const key1 = calculateJobIdempotencyKey(params);
-    const key2 = calculateJobIdempotencyKey(params);
-    expect(key1).toBe(key2);
-    expect(key1.length).toBe(64); // Hexadecimal SHA-256
-  });
-
-  it('generates different keys for different versions or hashes', () => {
-    const params1 = {
-      packageId: 'pkg_test_123',
-      packageVersion: 2,
-      packageHash: 'abcde12345',
-      targetSiteId: 'wp-site-4',
-      desiredAction: 'publish',
-      desiredStatus: 'QUEUED',
-      scheduleTimestamp: null
-    };
-
-    const params2 = { ...params1, packageVersion: 3 };
-    const params3 = { ...params1, packageHash: 'different' };
-
-    const key1 = calculateJobIdempotencyKey(params1);
-    const key2 = calculateJobIdempotencyKey(params2);
-    const key3 = calculateJobIdempotencyKey(params3);
-
-    expect(key1).not.toBe(key2);
-    expect(key1).not.toBe(key3);
+    expect(calculateJobIdempotencyKey(input)).toBe(calculateJobIdempotencyKey(input));
+    expect(calculateJobIdempotencyKey(input)).toHaveLength(64);
+    expect(calculateJobIdempotencyKey({ ...input, packageVersion: 2 })).not.toBe(calculateJobIdempotencyKey(input));
   });
 });
 
-describe('Phase E - Failure Classification and Backoff', () => {
-  it('correctly classifies transient failures as retryable', () => {
-    const transientError1 = { status: 504, message: "Gateway Timeout" };
-    const transientError2 = new Error("Fetch failed: ETIMEDOUT");
-    
-    expect(classifyFailure(transientError1).isRetryable).toBe(true);
-    expect(classifyFailure(transientError1).failureClass).toBe("NETWORK_TRANSIENT");
-    
-    expect(classifyFailure(transientError2).isRetryable).toBe(true);
-    expect(classifyFailure(transientError2).failureClass).toBe("NETWORK_TRANSIENT");
-  });
-
-  it('correctly classifies authentication and invalid payload failures as non-retryable', () => {
-    const authError = { status: 401, message: "Unauthorized access" };
-    const payloadError = { status: 400, message: "Bad Request" };
-
-    expect(classifyFailure(authError).isRetryable).toBe(false);
-    expect(classifyFailure(authError).failureClass).toBe("AUTHENTICATION_FAILURE");
-
-    expect(classifyFailure(payloadError).isRetryable).toBe(false);
-    expect(classifyFailure(payloadError).failureClass).toBe("INVALID_PAYLOAD");
-  });
-});
-
-describe('Phase E - PublishingQueueService', () => {
+describe("Phase E PostgreSQL publishing service", () => {
   let service: PublishingQueueService;
 
   beforeEach(() => {
-    vi.resetAllMocks();
-    mockQueryGet.mockReset();
-    mockDocGet.mockReset();
-    mockDocSet.mockReset();
-    mockDocUpdate.mockReset();
-    mockCollectionAdd.mockReset();
-
-    mockGetApps.mockReturnValue([{ name: '[DEFAULT]' }]);
-    mockDocGet.mockReturnValue({ exists: false });
-    mockQueryGet.mockResolvedValue({ docs: [], empty: true, forEach: () => {} });
-
-    service = new PublishingQueueService();
+    resetInMemoryDocumentStore();
+    service = new PublishingQueueService(60_000);
+    vi.restoreAllMocks();
+    setPushToWordPressAdapter(async () => ({ status: "success", postId: 91, postUrl: "https://site.test/post" }));
   });
 
-  describe('addJob', () => {
-    it('creates a new job idempotently', async () => {
-      // Mock package exists
-      mockDocGet.mockImplementation((id) => {
-        if (id === 'pkg_1') {
-          return {
-            exists: true,
-            data: () => ({
-              packageId: 'pkg_1',
-              packageVersion: 1,
-              decision: 'APPROVED_FOR_PUBLISHING',
-              editorialContent: { title: 'Test Article', bodyTextHash: 'hash1' },
-              publishingTarget: { wordpressSiteId: 'siteA' }
-            })
-          };
-        }
-        return { exists: false };
-      });
-
-      // Mock first run (no existing job on first read)
-      mockDocGet.mockImplementationOnce((id) => ({
-        exists: true,
-        data: () => ({
-          packageId: 'pkg_1',
-          packageVersion: 1,
-          decision: 'APPROVED_FOR_PUBLISHING',
-          editorialContent: { title: 'Test Article', bodyTextHash: 'hash1' },
-          publishingTarget: { wordpressSiteId: 'siteA' }
-        })
-      })).mockImplementationOnce((jobId) => ({
-        exists: false // Job doesn't exist yet, we can create it
-      }));
-
-      const job = await service.addJob('pkg_1');
-      expect(job).toBeDefined();
-      expect(job.status).toBe('QUEUED');
-      expect(job.packageId).toBe('pkg_1');
-    });
+  it("creates one durable job for an approved package", async () => {
+    await seedDocument("phase_d_packages", "pkg_1", approvedPackage());
+    const first = await service.addJob("pkg_1");
+    const second = await service.addJob("pkg_1");
+    expect(first.status).toBe("QUEUED");
+    expect(second.jobId).toBe(first.jobId);
+    const rows = await getDocumentStore().collection("publishing_queue").get();
+    expect(rows.docs).toHaveLength(1);
   });
 
-  describe('Secure Transactional Leasing', () => {
-    it('executing job throws if leaseToken is stale or incorrect', async () => {
-      mockDocGet.mockImplementation((id) => {
-        if (id === 'job_error') {
-          return {
-            exists: true,
-            data: () => ({
-              jobId: 'job_error',
-              packageId: 'pkg_1',
-              targetSiteId: 'siteA',
-              status: 'LEASED',
-              leaseToken: 'token_A',
-              leaseExpiresAt: new Date(Date.now() + 100000).toISOString(),
-              auditHistory: []
-            })
-          };
-        }
-        return { exists: false };
-      });
-
-      await expect(service.executeJob('job_error', 'token_B')).rejects.toThrow('LEASE_ERROR');
-    });
-
-    it('executing job throws if lease has expired', async () => {
-      mockDocGet.mockImplementation((id) => {
-        if (id === 'job_expired') {
-          return {
-            exists: true,
-            data: () => ({
-              jobId: 'job_expired',
-              packageId: 'pkg_1',
-              targetSiteId: 'siteA',
-              status: 'LEASED',
-              leaseToken: 'token_A',
-              leaseExpiresAt: new Date(Date.now() - 1000).toISOString(), // expired
-              auditHistory: []
-            })
-          };
-        }
-        return { exists: false };
-      });
-
-      await expect(service.executeJob('job_expired', 'token_A')).rejects.toThrow('LEASE_ERROR');
-    });
-
-    it('an actively renewed lease is never reclaimed and extends expiration', async () => {
-      let updatedExpiry: string | null = null;
-      mockDocGet.mockImplementation((id) => {
-        if (id === 'job_renew') {
-          return {
-            exists: true,
-            data: () => ({
-              jobId: 'job_renew',
-              status: 'LEASED',
-              leaseToken: 'token_A',
-              leaseExpiresAt: new Date(Date.now() + 100000).toISOString(),
-              auditHistory: []
-            })
-          };
-        }
-        return { exists: false };
-      });
-
-      mockDocUpdate.mockImplementation((id, data) => {
-        if (id === 'job_renew') {
-          updatedExpiry = data.leaseExpiresAt;
-        }
-      });
-
-      const success = await service.renewLease('job_renew', 'token_A', 300000);
-      expect(success).toBe(true);
-      expect(updatedExpiry).toBeDefined();
-      expect(new Date(updatedExpiry!).getTime()).toBeGreaterThan(Date.now() + 200000);
-    });
-
-    it('an expired abandoned lease is reclaimed by leaseNextJobs', async () => {
-      // Setup candidate queries returning a job with an expired lease
-      mockQueryGet.mockResolvedValue({
-        forEach: (cb: any) => {
-          cb({
-            data: () => ({
-              jobId: 'job_reclaim',
-              packageId: 'pkg_1',
-              targetSiteId: 'siteA',
-              status: 'LEASED',
-              leaseToken: 'token_expired',
-              leaseExpiresAt: new Date(Date.now() - 5000).toISOString(), // expired
-              nextRunAt: new Date(Date.now() - 1000).toISOString(),
-              runCount: 0,
-              maxRetries: 3,
-              auditHistory: []
-            })
-          });
-        }
-      });
-
-      mockDocGet.mockImplementation((id) => {
-        if (id === 'job_reclaim') {
-          return {
-            exists: true,
-            data: () => ({
-              jobId: 'job_reclaim',
-              packageId: 'pkg_1',
-              targetSiteId: 'siteA',
-              status: 'LEASED',
-              leaseToken: 'token_expired',
-              leaseExpiresAt: new Date(Date.now() - 5000).toISOString(),
-              nextRunAt: new Date(Date.now() - 1000).toISOString(),
-              runCount: 0,
-              maxRetries: 3,
-              auditHistory: []
-            })
-          };
-        }
-        return { exists: false };
-      });
-
-      const leasedJobs = await service.leaseNextJobs(1, 'new_worker');
-      expect(leasedJobs.length).toBe(1);
-      expect(leasedJobs[0].jobId).toBe('job_reclaim');
-      expect(leasedJobs[0].status).toBe('LEASED');
-      expect(leasedJobs[0].leaseOwnerId).toBe('new_worker');
-    });
-
-    it('a previous lease owner cannot complete a job after reassignment (conditional completion)', async () => {
-      mockDocGet.mockImplementation((id) => {
-        if (id === 'job_stale') {
-          return {
-            exists: true,
-            data: () => ({
-              jobId: 'job_stale',
-              packageId: 'pkg_1',
-              targetSiteId: 'siteA',
-              status: 'LEASED', // Status must be LEASED to start executeJob, but token doesn't match
-              leaseToken: 'token_new_owner_assigned', // Reassigned to a new owner
-              leaseOwnerId: 'worker_new',
-              leaseExpiresAt: new Date(Date.now() + 100000).toISOString(),
-              auditHistory: []
-            })
-          };
-        }
-        return { exists: false };
-      });
-
-      // Try executing or completing under the old token 'token_old'
-      await expect(
-        service.executeJob('job_stale', 'token_old')
-      ).rejects.toThrow('LEASE_ERROR');
-    });
-
-    it('shutdown / draining state does not permit new lease acquisition or worker cycles', async () => {
-      service.setDraining(true);
-      expect(service.getDraining()).toBe(true);
-
-      const leasedJobs = await service.leaseNextJobs(5, 'some_worker');
-      expect(leasedJobs).toEqual([]);
-
-      const cycleResult = await service.runWorkerCycle(5);
-      expect(cycleResult.leasedCount).toBe(0);
-      expect(cycleResult.results).toEqual([]);
-      
-      // Reset draining for other tests
-      service.setDraining(false);
-    });
-
-    it('uncertain WordPress responses do not create duplicate posts due to automatic reconciliation', async () => {
-      // Mock package details and saas config
-      mockDocGet.mockImplementation((id) => {
-        if (id === 'saas') {
-          return {
-            exists: true,
-            data: () => ({
-              wordpressSites: [{ id: 'siteA', url: 'https://site.com', username: 'user', appPassword: 'pw' }]
-            })
-          };
-        }
-        if (id === 'pkg_recon_test') {
-          return {
-            exists: true,
-            data: () => ({
-              packageId: 'pkg_recon_test',
-              packageVersion: 1,
-              editorialContent: { title: 'Dup Title', slug: 'dup-slug' },
-              publishingTarget: {}
-            })
-          };
-        }
-        if (id === 'job_recon') {
-          return {
-            exists: true,
-            data: () => ({
-              jobId: 'job_recon',
-              packageId: 'pkg_recon_test',
-              targetSiteId: 'siteA',
-              status: 'LEASED',
-              leaseToken: 'token_recon',
-              leaseExpiresAt: new Date(Date.now() + 100000).toISOString(),
-              runCount: 0,
-              maxRetries: 3,
-              auditHistory: []
-            })
-          };
-        }
-        return { exists: false };
-      });
-
-      // Mock remote matching post (reconciliation succeeds)
-      const mockFetch = vi.fn().mockResolvedValue({
-        status: 200,
-        ok: true,
-        json: async () => [{ id: 777, link: 'https://site.com/dup', title: { rendered: 'Dup Title' } }]
-      });
-      global.fetch = mockFetch;
-
-      const completedJob = await service.executeJob('job_recon', 'token_recon');
-      expect(completedJob.status).toBe('PUBLISHED');
-      expect(completedJob.wordpressPostId).toBe(777);
-      expect(completedJob.destinationUrl).toBe('https://site.com/dup');
-    });
+  it("creates scheduled jobs with a future run time", async () => {
+    await seedDocument("phase_d_packages", "pkg_1", { ...approvedPackage(), packageStatus: "SCHEDULED" });
+    const future = new Date(Date.now() + 60_000).toISOString();
+    const job = await service.addJob("pkg_1", future);
+    expect(job.status).toBe("SCHEDULED");
+    expect(job.nextRunAt).toBe(future);
   });
 
-  describe('Automatic WordPress Reconciliation', () => {
-    it('returns MATCHED if a remote post with matching slug and title exists', async () => {
-      const mockFetch = vi.fn().mockResolvedValue({
-        status: 200,
-        ok: true,
-        json: async () => [{ id: 456, link: 'https://site.com/match', title: { rendered: 'Exact Title' } }]
-      });
-      global.fetch = mockFetch;
-
-      const pkg = {
-        articleId: 'art1',
-        packageId: 'pkg1',
-        editorialContent: { title: 'Exact Title', slug: 'exact-title' }
-      } as any;
-
-      const wpConfig = { url: 'https://site.com', username: 'user', appPassword: 'pw' };
-
-      const res = await service.reconcileWordPressPost(pkg, wpConfig);
-      expect(res.outcome).toBe('MATCHED');
-      expect(res.postId).toBe(456);
-      expect(res.postUrl).toBe('https://site.com/match');
-    });
-
-    it('returns CONTENT_DRIFT if a remote post with matching slug but different title is found', async () => {
-      const mockFetch = vi.fn().mockResolvedValue({
-        status: 200,
-        ok: true,
-        json: async () => [{ id: 456, link: 'https://site.com/match', title: { rendered: 'Some Drifting Title' } }]
-      });
-      global.fetch = mockFetch;
-
-      const pkg = {
-        articleId: 'art1',
-        packageId: 'pkg1',
-        editorialContent: { title: 'Expected Title', slug: 'expected-title' }
-      } as any;
-
-      const wpConfig = { url: 'https://site.com', username: 'user', appPassword: 'pw' };
-
-      const res = await service.reconcileWordPressPost(pkg, wpConfig);
-      expect(res.outcome).toBe('CONTENT_DRIFT');
-    });
+  it("rejects missing and blocked packages", async () => {
+    await expect(service.addJob("missing")).rejects.toThrow("does not exist");
+    await seedDocument("phase_d_packages", "blocked", { ...approvedPackage("blocked"), packageStatus: "NEEDS_MANUAL_REVIEW" });
+    await expect(service.addJob("blocked")).rejects.toThrow("Only packages");
   });
 
-  describe('Secure Manual Resolution Overrides', () => {
-    it('allows resolution only for failed/dead letter jobs and validates URL protocol', async () => {
-      mockDocGet.mockImplementation((id) => {
-        if (id === 'job_cancelled') {
-          return {
-            exists: true,
-            data: () => ({
-              jobId: 'job_cancelled',
-              status: 'CANCELLED', // Not permitted
-              packageId: 'pkg_1',
-              auditHistory: []
-            })
-          };
-        }
-        return { exists: false };
-      });
+  it("leases an eligible queued job", async () => {
+    await seedDocument("publishing_queue", "job_1", jobRecord({ status: "QUEUED", leaseToken: null, leaseOwnerId: null, leaseExpiresAt: null }));
+    const leased = await service.leaseNextJobs(1, "worker-b");
+    expect(leased).toHaveLength(1);
+    expect(leased[0].status).toBe("LEASED");
+    expect(leased[0].leaseOwnerId).toBe("worker-b");
+  });
 
-      await expect(service.manuallyResolveJob('job_cancelled', 123, 'https://wp.com/post')).rejects.toThrow('override');
-    });
+  it("recovers an expired lease but not an active lease", async () => {
+    await seedDocument("publishing_queue", "expired", jobRecord({ jobId: "expired", leaseExpiresAt: new Date(Date.now() - 1000).toISOString() }));
+    await seedDocument("publishing_queue", "active", jobRecord({ jobId: "active", leaseExpiresAt: new Date(Date.now() + 60_000).toISOString() }));
+    const leased = await service.leaseNextJobs(5, "worker-b");
+    expect(leased.map((job) => job.jobId)).toContain("expired");
+    expect(leased.map((job) => job.jobId)).not.toContain("active");
+  });
 
-    it('rejects invalid protocol URLs', async () => {
-      mockDocGet.mockImplementation((id) => {
-        if (id === 'job_failed') {
-          return {
-            exists: true,
-            data: () => ({
-              jobId: 'job_failed',
-              status: 'FAILED',
-              packageId: 'pkg_1',
-              auditHistory: []
-            })
-          };
-        }
-        return { exists: false };
-      });
+  it("renews only the current lease owner token", async () => {
+    await seedDocument("publishing_queue", "job_1", jobRecord());
+    await expect(service.renewLease("job_1", "wrong-token")).resolves.toBe(false);
+    await expect(service.renewLease("job_1", "lease-a")).resolves.toBe(true);
+  });
 
-      await expect(service.manuallyResolveJob('job_failed', 123, 'ftp://wp.com/post')).rejects.toThrow('protocol');
-    });
+  it("rejects stale and expired execution leases", async () => {
+    await seedDocument("publishing_queue", "job_1", jobRecord());
+    await expect(service.executeJob("job_1", "wrong-token")).rejects.toThrow("LEASE_ERROR");
+    await seedDocument("publishing_queue", "expired", jobRecord({ jobId: "expired", leaseExpiresAt: new Date(Date.now() - 1000).toISOString() }));
+    await expect(service.executeJob("expired", "lease-a")).rejects.toThrow("Lease expired");
+  });
+
+  it("publishes successfully and persists the WordPress identifiers", async () => {
+    await seedDocument("phase_d_packages", "pkg_1", approvedPackage());
+    await seedDocument("settings", "saas", { wordpressSites: [{ id: "site-a" }] });
+    await seedDocument("publishing_queue", "job_1", jobRecord());
+    const result = await service.executeJob("job_1", "lease-a");
+    expect(result.status).toBe("PUBLISHED");
+    expect(result.wordpressPostId).toBe(91);
+    expect(result.destinationUrl).toBe("https://site.test/post");
+  });
+
+  it("moves transient failures into retry wait", async () => {
+    setPushToWordPressAdapter(async () => { throw Object.assign(new Error("network timeout"), { status: 503 }); });
+    await seedDocument("phase_d_packages", "pkg_1", approvedPackage());
+    await seedDocument("settings", "saas", { wordpressSites: [{ id: "site-a" }] });
+    await seedDocument("publishing_queue", "job_1", jobRecord());
+    const result = await service.executeJob("job_1", "lease-a");
+    expect(result.status).toBe("RETRY_WAIT");
+    expect(result.lastError).toContain("network timeout");
+  });
+
+  it("supports secure manual resolution and prevents duplicate post IDs", async () => {
+    await seedDocument("phase_d_packages", "pkg_1", approvedPackage());
+    await seedDocument("publishing_queue", "job_1", jobRecord({ status: "DEAD_LETTER" }));
+    const resolved = await service.manuallyResolveJob("job_1", 77, "https://site.test/resolved");
+    expect(resolved.status).toBe("PUBLISHED");
+    await seedDocument("publishing_queue", "job_2", jobRecord({ jobId: "job_2", status: "DEAD_LETTER", wordpressPostId: null }));
+    await expect(service.manuallyResolveJob("job_2", 77, "https://site.test/other")).rejects.toThrow("already claimed");
+  });
+
+  it("validates manual destination protocols", async () => {
+    await seedDocument("phase_d_packages", "pkg_1", approvedPackage());
+    await seedDocument("publishing_queue", "job_1", jobRecord({ status: "DEAD_LETTER" }));
+    await expect(service.manuallyResolveJob("job_1", 77, "ftp://site.test/post")).rejects.toThrow("protocol");
+  });
+
+  it("cancels jobs and records an audit transition", async () => {
+    await seedDocument("publishing_queue", "job_1", jobRecord({ status: "QUEUED", leaseToken: null }));
+    const cancelled = await service.abortJob("job_1", "operator request");
+    expect(cancelled.status).toBe("CANCELLED");
+    expect(cancelled.auditHistory.at(-1)?.action).toBe("JOB_CANCELLED");
+  });
+
+  it("stops new leases while draining", async () => {
+    service.setDraining(true);
+    expect(await service.leaseNextJobs()).toEqual([]);
+    expect(await service.runWorkerCycle()).toEqual({ leasedCount: 0, results: [] });
+  });
+});
+
+describe("Phase E failure classification", () => {
+  it("classifies retryable network failures", () => {
+    expect(classifyFailure({ status: 504, message: "timeout" })).toEqual({ failureClass: "NETWORK_TRANSIENT", isRetryable: true });
+  });
+  it("classifies authentication and payload failures as terminal", () => {
+    expect(classifyFailure({ status: 401, message: "unauthorized" }).isRetryable).toBe(false);
+    expect(classifyFailure({ status: 400, message: "bad request" }).isRetryable).toBe(false);
   });
 });

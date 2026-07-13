@@ -619,9 +619,6 @@ export default function App() {
   const [manualDestUrl, setManualDestUrl] = useState<string>("");
   const [abortJobId, setAbortJobId] = useState<string | null>(null);
   const [abortReason, setAbortReason] = useState<string>("");
-  const [isFirestoreQuotaExceeded, setIsFirestoreQuotaExceeded] = useState<boolean>(false);
-  const [firebaseProjectId, setFirebaseProjectId] = useState<string>("gen-lang-client-0888306694");
-  const [firestoreDatabaseId, setFirestoreDatabaseId] = useState<string>("ai-studio-767d7b73-69cd-4989-abdf-e59b01aaad79");
   const [editingWpSite, setEditingWpSite] = useState<any>(null);
   const [editName, setEditName] = useState("");
   const [editUrl, setEditUrl] = useState("");
@@ -1325,9 +1322,6 @@ export default function App() {
       const res = await fetch("/api/saas-settings");
       if (res.ok) {
         const data = await res.json();
-        if (data.isFirestoreQuotaExceeded !== undefined) {
-          setIsFirestoreQuotaExceeded(!!data.isFirestoreQuotaExceeded);
-        }
         setSaasConfig((prev: any) => {
           const merged = { ...data };
           if (!merged.wordpress) merged.wordpress = {};
@@ -1424,15 +1418,6 @@ export default function App() {
         setBoardApplicants(data.candidates || []);
         setSkills(data.skills || []);
 
-        if (data.isFirestoreQuotaExceeded !== undefined) {
-          setIsFirestoreQuotaExceeded(!!data.isFirestoreQuotaExceeded);
-        }
-        if (data.firebaseProjectId) {
-          setFirebaseProjectId(data.firebaseProjectId);
-        }
-        if (data.firestoreDatabaseId) {
-          setFirestoreDatabaseId(data.firestoreDatabaseId);
-        }
       }
     } catch (err) {
       console.error("Error loading config:", err);
@@ -3419,50 +3404,6 @@ export default function App() {
           </div>
         </header>
 
-        {isFirestoreQuotaExceeded && (
-          <div className="mx-6 mt-4 p-5 bg-gradient-to-r from-amber-500/10 via-amber-600/5 to-transparent border border-amber-500/20 rounded-2xl flex flex-col md:flex-row md:items-center justify-between gap-5 shadow-sm text-left animate-in fade-in slide-in-from-top-4 duration-300">
-            <div className="space-y-2 max-w-4xl">
-              <div className="flex items-center gap-2">
-                <span className="text-[10px] font-black tracking-widest text-amber-600 dark:text-amber-400 uppercase font-mono px-2 py-0.5 bg-amber-500/10 border border-amber-500/20 rounded-full inline-block">
-                  ⚠️ CLOUD DATA NOTIFICATION
-                </span>
-                <span className="text-[10px] font-bold text-slate-400 font-mono">
-                  Database ID: {firestoreDatabaseId}
-                </span>
-              </div>
-              <h4 className="text-sm font-black text-slate-800 dark:text-amber-100 uppercase tracking-wider font-sans">
-                Firestore Daily Write Quota Exhausted
-              </h4>
-              <p className="text-[11.5px] leading-relaxed text-slate-600 dark:text-slate-300">
-                Your Firebase project <code className="font-mono text-amber-600 dark:text-amber-400 bg-amber-500/5 px-1 py-0.5 rounded">{firebaseProjectId}</code> has hit its free-tier daily write limit (20,000 writes/day). 
-                <span className="font-semibold block mt-1.5 text-slate-700 dark:text-emerald-400">
-                  🛡️ Reassurance Guard: Your drafts, writers, and automated RSS engines remain 100% functional! 
-                </span>
-                We have automatically engaged our secondary self-contained backup storage (<code className="font-mono">db.json</code>) so that all edits persist locally. Your autonomous workflows and remote WordPress connections are completely unimpeded.
-              </p>
-            </div>
-            <div className="flex flex-wrap items-center gap-2 shrink-0">
-              <a
-                href={`https://console.firebase.google.com/project/${firebaseProjectId}/firestore/databases/${firestoreDatabaseId}/data?openUpgradeDialog=true`}
-                target="_blank"
-                referrerPolicy="no-referrer"
-                className="text-[11.5px] font-black uppercase tracking-wider text-slate-900 bg-amber-400 hover:bg-amber-300 px-4 py-2 rounded-xl transition duration-150 inline-flex items-center gap-1.5 shadow-sm select-none"
-              >
-                <span>🚀 Lift Quota / Enable Billing</span>
-              </a>
-              <button
-                type="button"
-                onClick={async () => {
-                  await fetchConfig();
-                  await fetchSaaSSettings();
-                }}
-                className="text-[11.5px] font-bold uppercase tracking-wider text-slate-700 dark:text-slate-300 hover:text-white bg-slate-200 dark:bg-slate-900 hover:bg-slate-300 dark:hover:bg-slate-800 border border-slate-300 dark:border-slate-800 px-4 py-2 rounded-xl transition duration-150 shadow-sm cursor-pointer"
-              >
-                🔄 Recheck Status
-              </button>
-            </div>
-          </div>
-        )}
 
         {/* Main Dashboard Interactive Area */}
         <main className="max-w-[1680px] mx-auto p-4 md:p-6 w-full flex-grow">
@@ -7679,7 +7620,7 @@ export default function App() {
                                   💥 Factory Hard Reset
                                 </span>
                                 <span className="text-[9.5px] text-slate-500 dark:text-slate-400 leading-relaxed mt-1 font-sans">
-                                  Purges absolutely everything (articles, sources, candidate pools, metrics, notifications, custom skills, <strong className="text-rose-600 dark:text-rose-400 font-bold">plus all Niches, Writers, RSS feeds, settings, and users</strong>) across local file caches, Firestore, and PostgreSQL. Restores pristine installer state.
+                                  Purges absolutely everything (articles, sources, candidate pools, metrics, notifications, custom skills, <strong className="text-rose-600 dark:text-rose-400 font-bold">plus all Niches, Writers, RSS feeds, settings, and users</strong>) from PostgreSQL. Restores pristine installer state.
                                 </span>
                               </div>
                             </div>
@@ -7688,7 +7629,7 @@ export default function App() {
                               {showFactoryResetConfirm ? (
                                 <div className="space-y-2 p-2.5 bg-rose-600/10 border border-rose-500/30 rounded-lg text-left">
                                   <p className="text-[9.5px] text-rose-600 dark:text-rose-400 font-bold leading-normal">
-                                    🛑 ABSOLUTE DANGER! This will wipe every single data table/collection on the active PostgreSQL database, local cache, and Firestore instance. This is irreversible and destroys your complete profile structure. Reset now?
+                                    🛑 ABSOLUTE DANGER! This will wipe every application table in PostgreSQL. This is irreversible and destroys your complete profile structure. Reset now?
                                   </p>
                                   <div className="flex gap-2">
                                     <button
@@ -8352,7 +8293,7 @@ export default function App() {
                             {/* Main Jobs Listing */}
                             {isLoadingQueue && queueJobs.length === 0 ? (
                               <div className="p-8 text-center text-slate-400 font-mono text-[9.5px]">
-                                Loading queue state from Firestore...
+                                Loading queue state from PostgreSQL...
                               </div>
                             ) : queueJobs.length === 0 ? (
                               <div className="p-8 text-center bg-slate-50 dark:bg-slate-950/20 border border-slate-100 dark:border-slate-800/60 rounded-xl space-y-2">
@@ -11579,8 +11520,7 @@ export default function App() {
                         </div>
 
                         <div className="text-[11px] font-sans font-medium text-slate-400">
-                          Live interactive rendering • Instant database &
-                          Firestore sync
+                          Live interactive rendering • PostgreSQL persistence
                         </div>
                       </div>
 

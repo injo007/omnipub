@@ -11,7 +11,7 @@ Connecting to remote WordPress sites requires absolute security and encryption t
 
 *   **SSL Protocol Strictness**: All remote WordPress target URLs must use `https://` protocol schema. Secure sockets prevent sniffing of API credentials.
 *   **Authentication Mechanism**: Authorized requests utilize Application Passwords (standard CJS-secured base64 headers) instead of primary account passwords.
-*   **Encrypted Storage**: Connection credentials are symmetrically encrypted using AES-256-GCM under the `CREDENTIALS_VAULT_KEY` before persisting in Firestore.
+*   **Encrypted Storage**: Connection credentials are encrypted under `CREDENTIALS_VAULT_KEY` before PostgreSQL persistence.
 
 ---
 

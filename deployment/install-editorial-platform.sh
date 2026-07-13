@@ -6,7 +6,6 @@
 # ==============================================================================
 
 set -Eeuo pipefail
-trap cleanup_lock INT TERM EXIT
 
 # --- Global Variables & Constants ---
 APP_NAME="editorial-platform"
@@ -30,7 +29,7 @@ BLUE='\033[0;34m'
 NC='\033[0m'
 
 # --- Ensure we are root ---
-if [[ $EUID -ne 0 ]]; then
+if [[ $EUID -ne 0 && "${1:-}" != "help" && "${1:-}" != "-h" && "${1:-}" != "--help" ]]; then
     echo -e "${RED}Error: This script must be run with sudo or as root.${NC}" >&2
     exit 1
 fi
@@ -51,6 +50,7 @@ function acquire_lock() {
 function cleanup_lock() {
     rm -f "$LOCK_FILE"
 }
+trap cleanup_lock INT TERM EXIT
 
 # --- Initialization of log and directory layout ---
 function init_layout() {
@@ -229,7 +229,9 @@ function collect_config() {
     local prod_domain="${PRODUCTION_DOMAIN:-editorial-intelligence.com}"
     local admin_email="${ADMIN_EMAIL:-admin@editorial-intelligence.com}"
     local gemini_key="${GEMINI_API_KEY:-}"
-    local vault_key="${CREDENTIALS_VAULT_KEY:-fb3ac64b732d4e7f9188a3b50c6d9bc5}"
+    local openrouter_key="${OPENROUTER_API_KEY:-}"
+    local minimax_key="${MINIMAX_API_KEY:-}"
+    local vault_key="${CREDENTIALS_VAULT_KEY:-}"
     
     local pg_user="${PGUSER:-postgres}"
     local pg_password="${PGPASSWORD:-}"
@@ -262,6 +264,16 @@ function collect_config() {
         else
             GEMINI_API_KEY="$gemini_key"
         fi
+
+        echo -n "Enter OPENROUTER_API_KEY for MiniMax-M3 and fallback routing (hidden, optional if native MiniMax is configured): "
+        read -r -s input_openrouter_key
+        echo ""
+        OPENROUTER_API_KEY="${input_openrouter_key:-$openrouter_key}"
+
+        echo -n "Enter native MINIMAX_API_KEY (hidden, optional if OpenRouter is configured): "
+        read -r -s input_minimax_key
+        echo ""
+        MINIMAX_API_KEY="${input_minimax_key:-$minimax_key}"
 
         echo -n "Enter CREDENTIALS_VAULT_KEY (exactly 32 chars): "
         read -r -s input_vault
@@ -324,6 +336,8 @@ function collect_config() {
         PRODUCTION_DOMAIN="$prod_domain"
         ADMIN_EMAIL="$admin_email"
         GEMINI_API_KEY="$gemini_key"
+        OPENROUTER_API_KEY="$openrouter_key"
+        MINIMAX_API_KEY="$minimax_key"
         CREDENTIALS_VAULT_KEY="$vault_key"
         PGUSER="$pg_user"
         PGPASSWORD="$pg_password"
@@ -336,8 +350,16 @@ function collect_config() {
         AWS_SECRET_ACCESS_KEY="$aws_secret"
     fi
 
-    if [[ -z "$GEMINI_API_KEY" ]]; then
-        log "ERROR" "Mandatory GEMINI_API_KEY is not configured. Setup cannot proceed."
+    if [[ -z "$OPENROUTER_API_KEY" && -z "$MINIMAX_API_KEY" ]]; then
+        log "ERROR" "Configure OPENROUTER_API_KEY or MINIMAX_API_KEY for the MiniMax-M3 primary model."
+        exit 4
+    fi
+    if [[ -z "$PGPASSWORD" ]]; then
+        log "ERROR" "PostgreSQL password is mandatory. Setup cannot proceed."
+        exit 4
+    fi
+    if [[ ${#CREDENTIALS_VAULT_KEY} -ne 32 ]]; then
+        log "ERROR" "CREDENTIALS_VAULT_KEY must contain exactly 32 characters."
         exit 4
     fi
 
@@ -359,6 +381,8 @@ EOF
 NODE_ENV=production
 PORT=3000
 GEMINI_API_KEY="${GEMINI_API_KEY}"
+OPENROUTER_API_KEY="${OPENROUTER_API_KEY}"
+MINIMAX_API_KEY="${MINIMAX_API_KEY}"
 CREDENTIALS_VAULT_KEY="${CREDENTIALS_VAULT_KEY}"
 APP_URL="https://${PRODUCTION_DOMAIN}"
 WORKER_CONCURRENCY=5
@@ -369,6 +393,8 @@ PGPORT="${PGPORT}"
 PGDATABASE="${PGDATABASE}"
 PGUSER="${PGUSER}"
 PGPASSWORD="${PGPASSWORD}"
+POSTGRES_REQUIRED=true
+AUTH_REQUIRED=false
 EOF
     chmod 600 "${ETC_DIR}/production.env"
 
@@ -376,6 +402,8 @@ EOF
 NODE_ENV=staging
 PORT=3000
 GEMINI_API_KEY="${GEMINI_API_KEY}"
+OPENROUTER_API_KEY="${OPENROUTER_API_KEY}"
+MINIMAX_API_KEY="${MINIMAX_API_KEY}"
 CREDENTIALS_VAULT_KEY="${CREDENTIALS_VAULT_KEY}"
 APP_URL="https://${STAGING_DOMAIN}"
 WORKER_CONCURRENCY=5
@@ -386,6 +414,8 @@ PGPORT="${PGPORT}"
 PGDATABASE="${PGDATABASE}"
 PGUSER="${PGUSER}"
 PGPASSWORD="${PGPASSWORD}"
+POSTGRES_REQUIRED=true
+AUTH_REQUIRED=false
 EOF
     chmod 600 "${ETC_DIR}/staging.env"
 
@@ -478,6 +508,12 @@ services:
       POSTGRES_USER: "${PGUSER}"
       POSTGRES_PASSWORD: "${PGPASSWORD}"
       POSTGRES_DB: "${PGDATABASE}"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${PGUSER} -d ${PGDATABASE}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
     volumes:
       - pg-data:/var/lib/postgresql/data
     networks:
@@ -498,10 +534,12 @@ services:
     image: editorial-platform:production
     restart: always
     depends_on:
-      - db
+      db:
+        condition: service_healthy
     environment:
       - NODE_ENV=production
       - PORT=3000
+      - POSTGRES_REQUIRED=true
     env_file:
       - /etc/editorial-platform/production.env
     expose:
@@ -572,6 +610,12 @@ services:
       POSTGRES_USER: "${PGUSER}"
       POSTGRES_PASSWORD: "${PGPASSWORD}"
       POSTGRES_DB: "${PGDATABASE}"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${PGUSER} -d ${PGDATABASE}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
     volumes:
       - pg-staging-data:/var/lib/postgresql/data
     networks:
@@ -592,10 +636,12 @@ services:
     image: editorial-platform:staging
     restart: always
     depends_on:
-      - db
+      db:
+        condition: service_healthy
     environment:
       - NODE_ENV=staging
       - PORT=3000
+      - POSTGRES_REQUIRED=true
     env_file:
       - /etc/editorial-platform/staging.env
     expose:
@@ -824,6 +870,18 @@ fi
 
 # Run restic backup against configuration and state directories
 echo "[RESTIC] Starting encrypted remote backup..."
+set -a
+# shellcheck disable=SC1091
+source "${ETC_DIR}/production.env"
+set +a
+docker exec editorial-production-db pg_dump \
+    --username "${PGUSER}" \
+    --dbname "${PGDATABASE}" \
+    --format custom \
+    --no-owner \
+    --file /tmp/editorial-platform.dump
+docker cp editorial-production-db:/tmp/editorial-platform.dump "${BASE_DIR}/backups/postgres-latest.dump"
+docker exec editorial-production-db rm -f /tmp/editorial-platform.dump
 restic backup \
     "${ETC_DIR}" \
     "${BASE_DIR}" \
@@ -1023,9 +1081,19 @@ function create_backup() {
         tar -czf "${bkp_path}/etc-config.tar.gz" -C "$ETC_DIR" .
     fi
 
-    # Backup local db.json if present
-    if [[ -f "db.json" ]]; then
-        cp db.json "${bkp_path}/db.json"
+    # Create a consistent PostgreSQL custom-format dump.
+    if docker ps --format '{{.Names}}' | grep -qx 'editorial-production-db'; then
+        docker exec editorial-production-db pg_dump \
+            --username "${PGUSER}" \
+            --dbname "${PGDATABASE}" \
+            --format custom \
+            --no-owner \
+            --file /tmp/editorial-platform.dump
+        docker cp editorial-production-db:/tmp/editorial-platform.dump "${bkp_path}/postgres.dump"
+        docker exec editorial-production-db rm -f /tmp/editorial-platform.dump
+    else
+        log "ERROR" "Production PostgreSQL container is not running; refusing to create an incomplete backup."
+        exit 6
     fi
 
     # Pack metadata
@@ -1109,11 +1177,24 @@ function restore_backup() {
         if [[ -f "${bkp_dir}/etc-config.tar.gz" ]]; then
             tar -xzf "${bkp_dir}/etc-config.tar.gz" -C "$ETC_DIR"
         fi
-        if [[ -f "${bkp_dir}/db.json" ]]; then
-            cp "${bkp_dir}/db.json" "db.json"
-        fi
-        log "INFO" "SaaS backup restored successfully. Restarting service nodes..."
+        log "INFO" "Configuration restored. Restarting service nodes before PostgreSQL recovery..."
         deploy_application
+        if [[ -f "${bkp_dir}/postgres.dump" ]]; then
+            docker cp "${bkp_dir}/postgres.dump" editorial-production-db:/tmp/editorial-platform.dump
+            docker exec editorial-production-db pg_restore \
+                --username "${PGUSER}" \
+                --dbname "${PGDATABASE}" \
+                --clean \
+                --if-exists \
+                --no-owner \
+                /tmp/editorial-platform.dump
+            docker exec editorial-production-db rm -f /tmp/editorial-platform.dump
+            docker restart editorial-production-app >/dev/null
+        else
+            log "ERROR" "Backup contains no PostgreSQL dump. Restore aborted."
+            exit 6
+        fi
+        log "INFO" "PostgreSQL backup restored successfully."
     else
         log "ERROR" "Corrupted backup archive. Restore cancelled."
         exit 6
@@ -1286,6 +1367,11 @@ function compile_diagnostics() {
 }
 
 # --- Main Entry Point Route ---
+if [[ "${1:-}" == "help" || "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+    show_help
+    exit 0
+fi
+
 init_layout
 acquire_lock
 
