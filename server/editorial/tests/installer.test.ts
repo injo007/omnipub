@@ -47,8 +47,11 @@ describe("Ubuntu installer packaging contract", () => {
     expect(installer).toContain('^[A-Za-z0-9_-]{16,128}$');
     expect(installer).toContain("will be synchronized with the private managed PostgreSQL role");
     expect(installer).toContain("psql --host 127.0.0.1 --username postgres --dbname editorial_db");
+    expect(installer).toContain('--env "PGPASSWORD=$PGPASSWORD"');
+    expect(installer).toContain('PGPASSWORD: "${PGPASSWORD}"');
     expect(productionCompose).toContain('$${POSTGRES_PASSWORD}');
     expect(productionCompose).toContain("--command 'SELECT 1'");
+    expect(productionCompose).toContain("PGPASSWORD: ${PGPASSWORD}");
   });
 
   it("bundles the migration executable into the production build", () => {

@@ -785,9 +785,14 @@ services:
       db:
         condition: service_healthy
     environment:
-      - NODE_ENV=production
-      - PORT=3000
-      - POSTGRES_REQUIRED=true
+      NODE_ENV: production
+      PORT: "3000"
+      POSTGRES_REQUIRED: "true"
+      PGHOST: "${PGHOST}"
+      PGPORT: "${PGPORT}"
+      PGDATABASE: "${PGDATABASE}"
+      PGUSER: "${PGUSER}"
+      PGPASSWORD: "${PGPASSWORD}"
     env_file:
       - /etc/editorial-platform/production.env
     expose:
@@ -887,9 +892,14 @@ services:
       db:
         condition: service_healthy
     environment:
-      - NODE_ENV=staging
-      - PORT=3000
-      - POSTGRES_REQUIRED=true
+      NODE_ENV: staging
+      PORT: "3000"
+      POSTGRES_REQUIRED: "true"
+      PGHOST: "${PGHOST}"
+      PGPORT: "${PGPORT}"
+      PGDATABASE: "${PGDATABASE}"
+      PGUSER: "${PGUSER}"
+      PGPASSWORD: "${PGPASSWORD}"
     env_file:
       - /etc/editorial-platform/staging.env
     expose:
@@ -1279,7 +1289,7 @@ function wait_for_postgres_server() {
     local timeout_seconds="${2:-120}"
     local elapsed=0
     while (( elapsed < timeout_seconds )); do
-        if docker exec "$container" pg_isready --timeout=2 >/dev/null 2>&1; then
+        if docker exec "$container" pg_isready --username postgres --dbname postgres --timeout=2 >/dev/null 2>&1; then
             return 0
         fi
         if [[ "$(docker inspect --format '{{.State.Status}}' "$container" 2>/dev/null || echo missing)" =~ ^(exited|dead|missing)$ ]]; then
@@ -1354,7 +1364,13 @@ function initialize_postgres_schema() {
 
     log "INFO" "Initializing the $environment_name PostgreSQL schema before application startup..."
     local bootstrap_output=""
-    if ! bootstrap_output=$(docker compose -f "$compose_file" run --rm --no-deps -T app node dist/migrate-json-to-postgres.cjs --init-only 2>&1); then
+    if ! bootstrap_output=$(docker compose -f "$compose_file" run --rm --no-deps -T \
+        --env "PGHOST=$PGHOST" \
+        --env "PGPORT=$PGPORT" \
+        --env "PGDATABASE=$PGDATABASE" \
+        --env "PGUSER=$PGUSER" \
+        --env "PGPASSWORD=$PGPASSWORD" \
+        app node dist/migrate-json-to-postgres.cjs --init-only 2>&1); then
         while IFS= read -r bootstrap_line; do
             log "ERROR" "[$environment_name-schema-bootstrap] $bootstrap_line"
         done <<< "$bootstrap_output"

@@ -41,9 +41,14 @@ services:
       db:
         condition: service_healthy
     environment:
-      - NODE_ENV=staging
-      - PORT=3000
-      - POSTGRES_REQUIRED=true
+      NODE_ENV: staging
+      PORT: "3000"
+      POSTGRES_REQUIRED: "true"
+      PGHOST: ${PGHOST:-db}
+      PGPORT: ${PGPORT:-5432}
+      PGDATABASE: ${PGDATABASE:-editorial_db}
+      PGUSER: ${PGUSER:-postgres}
+      PGPASSWORD: ${PGPASSWORD}
     env_file:
       - /etc/editorial-platform/staging.env
     expose:
