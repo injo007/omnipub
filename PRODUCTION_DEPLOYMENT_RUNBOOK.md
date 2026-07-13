@@ -22,11 +22,14 @@ To trigger a new production rollout:
 
 1.  **Draft a GitHub Release**: Create and publish a semantic release tag (e.g., `v1.0.0`).
 2.  **Approve Gate**: Ensure manual approval is completed in GitHub Actions environment gates.
-3.  **Deploy Release**:
+3.  **Deploy Release From a Checked-Out Tag**:
     ```bash
-    sudo ./deployment/install-editorial-platform.sh update --version v1.0.0
+    git checkout v1.0.0
+    sudo ./deployment/install-editorial-platform.sh install --source "$PWD" --ref v1.0.0
     ```
 4.  **Post-Rollout Verification**:
     ```bash
     sudo ./deployment/install-editorial-platform.sh verify
     ```
+
+The verification command fails unless both application containers are healthy, their readiness endpoints confirm PostgreSQL, the production schema exists, and no internal application ports are publicly exposed.

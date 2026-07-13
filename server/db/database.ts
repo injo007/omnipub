@@ -508,6 +508,7 @@ class DatabaseService {
   }
 
   private writeJsonBackup(db: LocalDB): void {
+    if (process.env.VITEST || process.env.NODE_ENV === "test") return;
     if (this.pgAvailable && process.env.ENABLE_JSON_BACKUP !== "true") return;
     try {
       const content = JSON.stringify(db, null, 2);

@@ -1,0 +1,15 @@
+.git
+.github
+.env
+.env.*
+!.env.example
+node_modules
+dist
+coverage
+*.log
+db.json
+db.json.*
+deployment
+docs
+*.md
+PHASE_*

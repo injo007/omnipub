@@ -32,6 +32,7 @@ const ALLOWED_TABLES = new Set([
   "phase_d_packages",
   "publishing_queue",
   "phase_d_audits",
+  "deployment_migrations",
 ]);
 
 function assertAllowedTable(table: string): void {
@@ -270,6 +271,14 @@ export async function initSchema(): Promise<void> {
       CREATE UNIQUE INDEX IF NOT EXISTS idx_phase_d_packages_idempotency
       ON phase_d_packages ((data->>'idempotencyKey'))
       WHERE data ? 'idempotencyKey'
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS deployment_migrations (
+        id VARCHAR(255) PRIMARY KEY,
+        data JSONB NOT NULL,
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      )
     `);
 
     // Upgrade databases created by earlier PostgreSQL previews.

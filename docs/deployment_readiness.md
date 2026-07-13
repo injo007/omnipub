@@ -20,5 +20,6 @@ PostgreSQL has no published host port. Secrets live in `/etc/editorial-platform/
 3. `npm test`
 4. `npm run build`
 5. `bash -n deployment/install-editorial-platform.sh`
-6. Deploy staging and verify `/api/health/readiness` reports PostgreSQL healthy.
-7. Promote the same image to production and create a verified `pg_dump` backup.
+6. Start PostgreSQL first and, during a first cutover, import the snapshot with `--legacy-db` before either application starts.
+7. Verify both in-container `/api/health/readiness` responses report `database.backend=postgresql` and `database.pg.ok=true`.
+8. Promote the same image to production and create a verified `pg_dump` backup.

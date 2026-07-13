@@ -1,7 +1,7 @@
 #!/bin/bash
 # ==============================================================================
 # Enterprise Autonomous Editorial Intelligence Platform
-# One-File Master Production & Staging Installer with Embedded Templates
+# Standalone Production & Staging Bootstrap Installer with Embedded Templates
 # Target OS: Ubuntu Server 24.04 LTS (x86_64/AMD64)
 # ==============================================================================
 
@@ -15,6 +15,14 @@ BASE_DIR="/opt/${APP_NAME}"
 ETC_DIR="/etc/${APP_NAME}"
 LOG_DIR="/var/log/${APP_NAME}"
 LOG_FILE="${LOG_DIR}/installer.log"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+SOURCE_DIR="${BASE_DIR}/current"
+APP_REPOSITORY_URL="${APP_REPOSITORY_URL:-https://github.com/injo007/omnipub.git}"
+APP_REF="${APP_REF:-main}"
+APP_SOURCE_DIR="${APP_SOURCE_DIR:-}"
+LEGACY_DB_PATH="${LEGACY_DB_PATH:-}"
+APP_SOURCE_COMMIT="unknown"
+LEGACY_MIGRATION_STATUS="not-requested"
 
 # Default Minimum Host Requirements (Configurable)
 MIN_CPU=4
@@ -125,12 +133,90 @@ Commands:
 
 Options:
   --non-interactive            Execute commands without prompt inquiries using defaults or configs.
+  --source <directory>         Build from a local application checkout.
+  --repo <git-url>             Clone the application when the installer is used standalone.
+  --ref <branch-tag-or-sha>    Git revision to install (default: main).
+  --legacy-db <file>           Import a db.json snapshot when PostgreSQL is empty.
 
 Examples:
   sudo ./install-editorial-platform.sh install
+  sudo ./install-editorial-platform.sh install --source /srv/omnipub --legacy-db /srv/omnipub/db.json
+  sudo ./install-editorial-platform.sh install --repo https://github.com/injo007/omnipub.git --ref main
   sudo ./install-editorial-platform.sh update --digest sha256:49fbc0d633391d8487779774619d8bf84260f85cdbd6bf957ad7efd18d4073bb
   sudo ./install-editorial-platform.sh remote-restore --snapshot latest
 EOF
+}
+
+function validate_application_source() {
+    local candidate="$1"
+    [[ -f "${candidate}/Dockerfile" ]] && \
+    [[ -f "${candidate}/package.json" ]] && \
+    [[ -f "${candidate}/package-lock.json" ]] && \
+    [[ -f "${candidate}/server.ts" ]] && \
+    [[ -f "${candidate}/scripts/migrate-json-to-postgres.ts" ]]
+}
+
+function prepare_application_source() {
+    log "INFO" "Preparing a deterministic application source tree..."
+
+    local bundled_candidate
+    bundled_candidate="$(cd "${SCRIPT_DIR}/.." 2>/dev/null && pwd -P || true)"
+    local source_candidate=""
+    local temporary_checkout=""
+
+    if [[ -n "$APP_SOURCE_DIR" ]]; then
+        source_candidate="$(cd "$APP_SOURCE_DIR" 2>/dev/null && pwd -P || true)"
+        if [[ -z "$source_candidate" ]] || ! validate_application_source "$source_candidate"; then
+            log "ERROR" "--source does not contain a complete application checkout: $APP_SOURCE_DIR"
+            exit 4
+        fi
+        log "INFO" "Using explicitly supplied local application source."
+    elif [[ -n "$bundled_candidate" ]] && validate_application_source "$bundled_candidate"; then
+        source_candidate="$bundled_candidate"
+        log "INFO" "Using the application checkout located beside the installer."
+    else
+        temporary_checkout="$(mktemp -d)"
+        log "INFO" "Standalone mode: fetching requested application revision '$APP_REF'."
+        git -C "$temporary_checkout" init --quiet
+        git -C "$temporary_checkout" remote add origin "$APP_REPOSITORY_URL"
+        if ! git -C "$temporary_checkout" fetch --quiet --depth 1 origin "$APP_REF"; then
+            log "ERROR" "Unable to fetch APP_REF '$APP_REF'. Check APP_REPOSITORY_URL and repository credentials."
+            exit 4
+        fi
+        git -C "$temporary_checkout" checkout --quiet --detach FETCH_HEAD
+        source_candidate="$temporary_checkout"
+        if ! validate_application_source "$source_candidate"; then
+            log "ERROR" "Fetched revision does not contain the required application and migration files."
+            exit 4
+        fi
+    fi
+
+    APP_SOURCE_COMMIT="$(git -C "$source_candidate" rev-parse HEAD 2>/dev/null || echo local-uncommitted)"
+    if [[ "$(cd "$source_candidate" && pwd -P)" != "$(cd "$SOURCE_DIR" && pwd -P)" ]]; then
+        rsync -a --delete \
+            --exclude '.git/' \
+            --exclude 'node_modules/' \
+            --exclude 'dist/' \
+            --exclude '.env' \
+            --exclude '*.log' \
+            "$source_candidate/" "$SOURCE_DIR/"
+    fi
+
+    if [[ -n "$temporary_checkout" ]]; then
+        rm -rf "$temporary_checkout"
+    fi
+
+    if ! validate_application_source "$SOURCE_DIR"; then
+        log "ERROR" "Staged application source failed validation under $SOURCE_DIR."
+        exit 4
+    fi
+
+    if [[ -n "$LEGACY_DB_PATH" && ! -r "$LEGACY_DB_PATH" ]]; then
+        log "ERROR" "Legacy database snapshot is not readable: $LEGACY_DB_PATH"
+        exit 4
+    fi
+
+    log "INFO" "Application source staged at $SOURCE_DIR (revision: $APP_SOURCE_COMMIT)."
 }
 
 # --- Preflight Validation ---
@@ -215,6 +301,19 @@ function install_dependencies() {
 }
 
 # --- Secure Config Collection ---
+function read_stored_env_value() {
+    local file="$1"
+    local key="$2"
+    [[ -f "$file" ]] || return 0
+    (
+        set +u
+        # Files are root-owned and written by this installer.
+        # shellcheck disable=SC1090
+        source "$file"
+        printf '%s' "${!key:-}"
+    )
+}
+
 function collect_config() {
     log "INFO" "Collecting application secrets and domain configs..."
     
@@ -228,10 +327,10 @@ function collect_config() {
     local staging_domain="${STAGING_DOMAIN:-staging.editorial-intelligence.com}"
     local prod_domain="${PRODUCTION_DOMAIN:-editorial-intelligence.com}"
     local admin_email="${ADMIN_EMAIL:-admin@editorial-intelligence.com}"
-    local gemini_key="${GEMINI_API_KEY:-}"
-    local openrouter_key="${OPENROUTER_API_KEY:-}"
-    local minimax_key="${MINIMAX_API_KEY:-}"
-    local vault_key="${CREDENTIALS_VAULT_KEY:-}"
+    local gemini_key="${GEMINI_API_KEY:-$(read_stored_env_value "${ETC_DIR}/production.env" GEMINI_API_KEY)}"
+    local openrouter_key="${OPENROUTER_API_KEY:-$(read_stored_env_value "${ETC_DIR}/production.env" OPENROUTER_API_KEY)}"
+    local minimax_key="${MINIMAX_API_KEY:-$(read_stored_env_value "${ETC_DIR}/production.env" MINIMAX_API_KEY)}"
+    local vault_key="${CREDENTIALS_VAULT_KEY:-$(read_stored_env_value "${ETC_DIR}/production.env" CREDENTIALS_VAULT_KEY)}"
     
     local pg_user="${PGUSER:-postgres}"
     local pg_password="${PGPASSWORD:-}"
@@ -239,10 +338,12 @@ function collect_config() {
     local pg_host="${PGHOST:-db}"
     local pg_port="${PGPORT:-5432}"
 
-    local restic_repo="${RESTIC_REPOSITORY:-s3:https://s3.amazonaws.com/editorial-backups}"
-    local restic_pass="${RESTIC_PASSWORD:-super-secure-restic-vault-pass-123}"
-    local aws_id="${AWS_ACCESS_KEY_ID:-}"
-    local aws_secret="${AWS_SECRET_ACCESS_KEY:-}"
+    local restic_repo="${RESTIC_REPOSITORY:-$(read_stored_env_value "${ETC_DIR}/secrets/restic.env" RESTIC_REPOSITORY)}"
+    local restic_pass="${RESTIC_PASSWORD:-$(read_stored_env_value "${ETC_DIR}/secrets/restic.env" RESTIC_PASSWORD)}"
+    local aws_id="${AWS_ACCESS_KEY_ID:-$(read_stored_env_value "${ETC_DIR}/secrets/restic.env" AWS_ACCESS_KEY_ID)}"
+    local aws_secret="${AWS_SECRET_ACCESS_KEY:-$(read_stored_env_value "${ETC_DIR}/secrets/restic.env" AWS_SECRET_ACCESS_KEY)}"
+    restic_repo="${restic_repo:-s3:https://s3.amazonaws.com/editorial-backups}"
+    restic_pass="${restic_pass:-super-secure-restic-vault-pass-123}"
 
     if [[ "${NON_INTERACTIVE:-false}" == "false" ]]; then
         echo -e "${YELLOW}--- Secure Platform Setup Inquiries ---${NC}"
@@ -358,6 +459,10 @@ function collect_config() {
         log "ERROR" "PostgreSQL password is mandatory. Setup cannot proceed."
         exit 4
     fi
+    if [[ "$PGHOST" != "db" ]]; then
+        log "ERROR" "This installer provisions internal PostgreSQL containers, so PGHOST must be 'db'. Use the manual deployment runbook for an external PostgreSQL service."
+        exit 4
+    fi
     if [[ ${#CREDENTIALS_VAULT_KEY} -ne 32 ]]; then
         log "ERROR" "CREDENTIALS_VAULT_KEY must contain exactly 32 characters."
         exit 4
@@ -428,7 +533,7 @@ export AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY}"
 EOF
     chmod 600 "${ETC_DIR}/secrets/restic.env"
 
-    # Write EMBEDDED TEMPLATES directly (ensures TRUE ONE-FILE installation)
+    # Write deployment templates directly; application source is staged separately.
     write_embedded_templates
 }
 
@@ -989,7 +1094,79 @@ function apply_hardening() {
 }
 
 # --- Teardown & Docker Deploy ---
+function wait_for_container_health() {
+    local container="$1"
+    local timeout_seconds="${2:-120}"
+    local elapsed=0
+    while (( elapsed < timeout_seconds )); do
+        local status
+        status=$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$container" 2>/dev/null || echo missing)
+        if [[ "$status" == "healthy" || "$status" == "running" ]]; then
+            return 0
+        fi
+        if [[ "$status" == "unhealthy" || "$status" == "exited" || "$status" == "dead" ]]; then
+            log "ERROR" "Container $container entered terminal state: $status"
+            return 1
+        fi
+        sleep 2
+        elapsed=$((elapsed + 2))
+    done
+    log "ERROR" "Timed out waiting for container health: $container"
+    return 1
+}
+
+function postgres_has_application_data() {
+    local container="$1"
+    local schema_exists
+    schema_exists=$(docker exec "$container" psql --username "$PGUSER" --dbname "$PGDATABASE" --tuples-only --no-align \
+        --command "SELECT to_regclass('public.articles') IS NOT NULL" 2>/dev/null || echo f)
+    [[ "$schema_exists" == "t" ]] || return 1
+
+    local count
+    count=$(docker exec "$container" psql --username "$PGUSER" --dbname "$PGDATABASE" --tuples-only --no-align \
+        --command "SELECT (SELECT COUNT(*) FROM articles) + (SELECT COUNT(*) FROM writers) + (SELECT COUNT(*) FROM settings)" 2>/dev/null || echo 0)
+    [[ "$count" =~ ^[0-9]+$ ]] && (( count > 0 ))
+}
+
+function legacy_migration_applied() {
+    local container="$1"
+    local applied
+    applied=$(docker exec "$container" psql --username "$PGUSER" --dbname "$PGDATABASE" --tuples-only --no-align \
+        --command "SELECT EXISTS (SELECT 1 FROM deployment_migrations WHERE id = 'legacy-json-v1')" 2>/dev/null || echo f)
+    [[ "$applied" == "t" ]]
+}
+
+function migrate_legacy_database_if_needed() {
+    if [[ -z "$LEGACY_DB_PATH" ]]; then
+        LEGACY_MIGRATION_STATUS="not-requested"
+        log "INFO" "No legacy db.json snapshot supplied; PostgreSQL will initialize with application defaults."
+        return
+    fi
+    if legacy_migration_applied "editorial-production-db"; then
+        LEGACY_MIGRATION_STATUS="already-applied"
+        log "INFO" "Legacy PostgreSQL migration marker already exists; import will not be repeated."
+        return
+    fi
+    if postgres_has_application_data "editorial-production-db"; then
+        LEGACY_MIGRATION_STATUS="skipped-existing-data"
+        log "WARN" "Production PostgreSQL already contains application data. Legacy import skipped to prevent overwriting live records."
+        return
+    fi
+
+    log "INFO" "Importing legacy state into the empty production PostgreSQL database..."
+    docker compose -f "${BASE_DIR}/compose.production.yml" run --rm --no-deps \
+        --volume "${LEGACY_DB_PATH}:/migration/db.json:ro" \
+        app node dist/migrate-json-to-postgres.cjs /migration/db.json
+    if ! legacy_migration_applied "editorial-production-db"; then
+        log "ERROR" "Legacy import completed without recording its PostgreSQL migration marker."
+        exit 5
+    fi
+    LEGACY_MIGRATION_STATUS="imported"
+    log "INFO" "Legacy state import completed and was recorded in PostgreSQL."
+}
+
 function deploy_application() {
+    local image_mode="${1:-build}"
     log "INFO" "Tearing down active instances & deploying containers..."
     
     if [[ "${BYPASS_PREFLIGHTS:-false}" == "true" ]]; then
@@ -997,14 +1174,23 @@ function deploy_application() {
         return
     fi
 
-    # Setup isolated networks
-    docker network create editorial-production-proxy || true
-    docker network create editorial-staging-proxy || true
+    docker compose -f "${BASE_DIR}/compose.production.yml" config --quiet
+    docker compose -f "${BASE_DIR}/compose.staging.yml" config --quiet
 
-    # Build or pull exact immutable release images
-    log "INFO" "Building immutable application image..."
-    docker build -t editorial-platform:production -f Dockerfile .
-    docker tag editorial-platform:production editorial-platform:staging
+    if [[ "$image_mode" == "build" ]]; then
+        log "INFO" "Building immutable application image from $SOURCE_DIR..."
+        docker build --pull -t editorial-platform:production -f "${SOURCE_DIR}/Dockerfile" "$SOURCE_DIR"
+        docker tag editorial-platform:production editorial-platform:staging
+    else
+        log "INFO" "Using the already selected immutable application image."
+    fi
+
+    # Start PostgreSQL before the application so legacy import cannot race startup seeding.
+    docker compose -f "${BASE_DIR}/compose.production.yml" up -d db
+    docker compose -f "${BASE_DIR}/compose.staging.yml" up -d db
+    wait_for_container_health "editorial-production-db" 120
+    wait_for_container_health "editorial-staging-db" 120
+    migrate_legacy_database_if_needed
 
     # Production Deploy
     log "INFO" "Starting Production Stack via Docker Compose..."
@@ -1016,7 +1202,7 @@ function deploy_application() {
 
     # Record Metadata
     local deploy_sha
-    deploy_sha=$(git rev-parse HEAD 2>/dev/null || echo "untracked-dev")
+    deploy_sha="$APP_SOURCE_COMMIT"
     local deploy_time
     deploy_time=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
     
@@ -1025,9 +1211,11 @@ function deploy_application() {
   "application": "${APP_NAME}",
   "version": "1.0.0",
   "commit": "${deploy_sha}",
+  "requested_ref": "${APP_REF}",
   "timestamp": "${deploy_time}",
   "production_domain": "${PRODUCTION_DOMAIN}",
-  "staging_domain": "${STAGING_DOMAIN}"
+  "staging_domain": "${STAGING_DOMAIN}",
+  "legacy_migration": "${LEGACY_MIGRATION_STATUS}"
 }
 EOF
     chmod 644 "${BASE_DIR}/metadata/deployment.json"
@@ -1048,7 +1236,45 @@ function verify_installation() {
         passed=false
     fi
 
-    # 2. Check public listener leaks
+    # 2. Verify PostgreSQL and application containers are healthy.
+    for container in editorial-production-db editorial-staging-db editorial-production-app editorial-staging-app; do
+        if ! wait_for_container_health "$container" 120; then
+            passed=false
+        fi
+    done
+
+    # 3. Readiness must confirm PostgreSQL from inside each application container.
+    for container in editorial-production-app editorial-staging-app; do
+        if ! docker exec "$container" node -e '
+          fetch("http://127.0.0.1:3000/api/health/readiness")
+            .then(async (response) => {
+              const body = await response.json();
+              const database = body?.diagnostics?.database;
+              if (!response.ok || body.status !== "ready" || database?.backend !== "postgresql" || database?.pg?.ok !== true) process.exit(1);
+            })
+            .catch(() => process.exit(1));
+        '; then
+            log "ERROR" "Application readiness did not confirm a healthy PostgreSQL backend: $container"
+            passed=false
+        fi
+    done
+
+    # 4. Confirm the PostgreSQL schema was initialized.
+    local schema_ready
+    schema_ready=$(docker exec editorial-production-db psql --username "$PGUSER" --dbname "$PGDATABASE" --tuples-only --no-align \
+        --command "SELECT to_regclass('public.articles') IS NOT NULL" 2>/dev/null || echo f)
+    if [[ "$schema_ready" != "t" ]]; then
+        log "ERROR" "Production PostgreSQL schema is not initialized."
+        passed=false
+    fi
+    if [[ "$LEGACY_MIGRATION_STATUS" == "imported" || "$LEGACY_MIGRATION_STATUS" == "already-applied" ]]; then
+        if ! legacy_migration_applied "editorial-production-db"; then
+            log "ERROR" "Expected legacy migration marker is missing from production PostgreSQL."
+            passed=false
+        fi
+    fi
+
+    # 5. Check public listener leaks
     if command -v ss &>/dev/null; then
         local public_listeners
         public_listeners=$(ss -tuln | grep -E '(0\.0\.0\.0|\[::\]|\*):(3000|8080|8443)\b' || true)
@@ -1178,7 +1404,7 @@ function restore_backup() {
             tar -xzf "${bkp_dir}/etc-config.tar.gz" -C "$ETC_DIR"
         fi
         log "INFO" "Configuration restored. Restarting service nodes before PostgreSQL recovery..."
-        deploy_application
+        deploy_application "reuse-image"
         if [[ -f "${bkp_dir}/postgres.dump" ]]; then
             docker cp "${bkp_dir}/postgres.dump" editorial-production-db:/tmp/editorial-platform.dump
             docker exec editorial-production-db pg_restore \
@@ -1292,7 +1518,7 @@ function update_release() {
         sed -i "s|image: editorial-platform@sha256:[a-fA-F0-9]\{64\}|image: editorial-platform@$identifier|g" "${BASE_DIR}/compose.production.yml"
 
         # Deploy updated containers
-        deploy_application
+        deploy_application "reuse-image"
     else
         log "INFO" "[SIMULATED] Successfully deployed release $identifier with full zero-downtime rollover checks."
     fi
@@ -1387,15 +1613,58 @@ shift
 NON_INTERACTIVE=false
 BYPASS_PREFLIGHTS=false
 
-if [[ -n "${VITEST:-}" ]] || [[ "${NODE_ENV:-}" == "test" ]] || [[ ! -c /dev/tty ]]; then
+if [[ -n "${VITEST:-}" ]] || [[ "${NODE_ENV:-}" == "test" ]]; then
     NON_INTERACTIVE=true
     BYPASS_PREFLIGHTS=true
+elif [[ ! -c /dev/tty ]]; then
+    NON_INTERACTIVE=true
+fi
+
+if [[ -f "$INSTALLER_CONF" ]]; then
+    # shellcheck disable=SC1090
+    source "$INSTALLER_CONF"
+fi
+
+if [[ "$CMD" == "install" ]]; then
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --non-interactive)
+                NON_INTERACTIVE=true
+                shift
+                ;;
+            --source)
+                [[ $# -ge 2 ]] || { log "ERROR" "--source requires a directory."; exit 4; }
+                APP_SOURCE_DIR="$2"
+                shift 2
+                ;;
+            --repo)
+                [[ $# -ge 2 ]] || { log "ERROR" "--repo requires a Git URL."; exit 4; }
+                APP_REPOSITORY_URL="$2"
+                shift 2
+                ;;
+            --ref)
+                [[ $# -ge 2 ]] || { log "ERROR" "--ref requires a branch, tag, or commit SHA."; exit 4; }
+                APP_REF="$2"
+                shift 2
+                ;;
+            --legacy-db)
+                [[ $# -ge 2 ]] || { log "ERROR" "--legacy-db requires a readable JSON file."; exit 4; }
+                LEGACY_DB_PATH="$2"
+                shift 2
+                ;;
+            *)
+                log "ERROR" "Unknown install option: $1"
+                exit 4
+                ;;
+        esac
+    done
 fi
 
 case "$CMD" in
     "install")
         run_preflights
         install_dependencies
+        prepare_application_source
         collect_config
         apply_hardening
         deploy_application

@@ -1,4 +1,4 @@
-# One-File Installation & Upgrade Runbook
+# Ubuntu 24.04 Installation & Upgrade Runbook
 
 This document defines installation workflows for operators setting up fresh physical or virtual Linux servers.
 
@@ -21,7 +21,7 @@ This document defines installation workflows for operators setting up fresh phys
 
 ## 3. Fresh Installation Procedure
 
-1.  **Clone code repository or download release artifacts**:
+1.  **Clone the repository for a local-source installation**:
     ```bash
     git clone https://github.com/injo007/omnipub.git /opt/editorial-platform/current
     cd /opt/editorial-platform/current
@@ -32,10 +32,22 @@ This document defines installation workflows for operators setting up fresh phys
     chmod +x deployment/install-editorial-platform.sh
     ```
 
-3.  **Execute setup workflow**:
+3.  **Execute setup workflow**. Include `--legacy-db` during the first PostgreSQL cutover when an existing snapshot must be imported:
     ```bash
-    sudo ./deployment/install-editorial-platform.sh install
+    sudo ./deployment/install-editorial-platform.sh install \
+      --source /opt/editorial-platform/current \
+      --legacy-db /secure/export/db.json
     ```
+
+    A standalone copy of the installer can fetch and stage a release itself:
+
+    ```bash
+    sudo ./install-editorial-platform.sh install \
+      --repo https://github.com/injo007/omnipub.git \
+      --ref main
+    ```
+
+    Use a release tag or commit SHA instead of `main` for a reproducible production installation.
 
 4.  **Confirm status and service telemetry**:
     ```bash
@@ -49,7 +61,8 @@ This document defines installation workflows for operators setting up fresh phys
 
 ### A. Database Isolation Model (Self-Hosted PostgreSQL)
 The platform uses a local, self-contained PostgreSQL instance running alongside the application. No cloud database service is required.
--   **Auto-Migration & Schema Setup**: On the very first boot of the application service, the app's internal database initialization engine connects to PostgreSQL, creates all standard relational tables (such as `articles`, `writers`, `feeds`, etc.), and migrates any existing local cache (`db.json`) completely and automatically.
+-   **Ordered Migration & Schema Setup**: The installer starts PostgreSQL before the application. If `--legacy-db` is supplied and PostgreSQL is empty, a dedicated migration container creates the schema, imports the snapshot, and writes a durable migration marker. The application starts only after this succeeds. Reruns never overwrite populated PostgreSQL tables.
+-   **Deterministic Build Context**: Source is staged under `/opt/editorial-platform/current` and validated before Docker builds it. Environment files, repository metadata, and `db.json` are excluded from the image build context.
 -   **Security Configuration**: PostgreSQL credentials are stored in root-readable environment files (`0600`). WordPress secrets are encrypted by the 32-byte `CREDENTIALS_VAULT_KEY` before persistence.
 
 ### B. Network Isolation Model
