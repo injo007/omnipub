@@ -17,6 +17,7 @@ describe("Master Bash Installer Unit Checks", () => {
       expect(output).toContain("install");
       expect(output).toContain("verify");
       expect(output).toContain("rollback");
+      expect(output).toContain("configure-backup");
     } catch (err: any) {
       // In some sandboxes bash may fail or return non-zero, but we catch it gracefully
       expect(err).toBeNull();

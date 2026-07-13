@@ -27,6 +27,7 @@ DEPLOY_STAGING="${DEPLOY_STAGING:-auto}"
 HOST_CPU_COUNT=0
 HOST_RAM_MB=0
 HOST_DISK_GB=0
+REMOTE_BACKUP_ENABLED="${REMOTE_BACKUP_ENABLED:-false}"
 
 # Production-only can run on a small host; staging remains an opt-in full profile.
 MIN_PRODUCTION_CPU=1
@@ -137,6 +138,7 @@ Commands:
     --digest <digest>          Upgrade to specified Docker immutable image digest (sha256:...).
   rollback                     Rollback staging or production to the previous stable release.
   backup                       Create a local encrypted/compressed snapshot of data, volumes & configs.
+  configure-backup             Configure or update optional Restic/AWS remote backup credentials.
   remote-backup                Initiate secure restic encrypted remote cloud backup.
   remote-snapshots             List available cloud snapshots from remote restic repository.
   remote-restore               Restore cloud snapshot to isolated verification directory first.
@@ -162,6 +164,7 @@ Examples:
   sudo ./install-editorial-platform.sh install
   sudo ./install-editorial-platform.sh install --source /srv/omnipub --legacy-db /srv/omnipub/db.json
   sudo ./install-editorial-platform.sh install --repo https://github.com/injo007/omnipub.git --ref main
+  sudo ./install-editorial-platform.sh configure-backup
   sudo ./install-editorial-platform.sh update --digest sha256:49fbc0d633391d8487779774619d8bf84260f85cdbd6bf957ad7efd18d4073bb
   sudo ./install-editorial-platform.sh remote-restore --snapshot latest
 EOF
@@ -365,6 +368,81 @@ function read_stored_env_value() {
     )
 }
 
+function configure_remote_backup() {
+    log "INFO" "Configuring optional encrypted remote backups..."
+
+    local backup_file="${ETC_DIR}/secrets/restic.env"
+    local restic_repo="${RESTIC_REPOSITORY:-$(read_stored_env_value "$backup_file" RESTIC_REPOSITORY)}"
+    local restic_pass="${RESTIC_PASSWORD:-$(read_stored_env_value "$backup_file" RESTIC_PASSWORD)}"
+    local aws_id="${AWS_ACCESS_KEY_ID:-$(read_stored_env_value "$backup_file" AWS_ACCESS_KEY_ID)}"
+    local aws_secret="${AWS_SECRET_ACCESS_KEY:-$(read_stored_env_value "$backup_file" AWS_SECRET_ACCESS_KEY)}"
+    restic_repo="${restic_repo:-s3:https://s3.amazonaws.com/editorial-backups}"
+
+    if [[ "${NON_INTERACTIVE:-false}" == "false" ]]; then
+        echo -e "${YELLOW}--- Optional Remote Encrypted Cloud Backup Setup ---${NC}"
+        local input=""
+        read -r -p "Enter Restic Repository Target [$restic_repo]: " input
+        restic_repo="${input:-$restic_repo}"
+
+        local input_pass=""
+        if [[ -n "$restic_pass" ]]; then
+            echo -n "Enter a new Restic Password to replace the stored value (hidden, leave blank to keep it): "
+            read -r -s input_pass
+            echo ""
+            restic_pass="${input_pass:-$restic_pass}"
+        else
+            while [[ -z "$restic_pass" ]]; do
+                echo -n "Enter Restic Password (hidden, required for remote backups): "
+                read -r -s input_pass
+                echo ""
+                restic_pass="$input_pass"
+                if [[ -z "$restic_pass" ]]; then
+                    log "WARN" "A Restic encryption password is required to enable remote backups. Press Ctrl+C to leave backups disabled."
+                fi
+            done
+        fi
+
+        read -r -p "Enter AWS Access Key ID (optional for IAM roles and non-S3 repositories)${aws_id:+ [$aws_id]}: " input
+        aws_id="${input:-$aws_id}"
+
+        local input_aws_secret=""
+        echo -n "Enter AWS Secret Access Key (optional, hidden; leave blank to keep the stored value): "
+        read -r -s input_aws_secret
+        echo ""
+        aws_secret="${input_aws_secret:-$aws_secret}"
+    fi
+
+    if [[ -z "$restic_repo" || -z "$restic_pass" ]]; then
+        log "ERROR" "RESTIC_REPOSITORY and RESTIC_PASSWORD are required to enable remote backups. The main application remains installed and remote backups remain disabled."
+        exit 11
+    fi
+
+    {
+        printf 'export REMOTE_BACKUP_ENABLED=%q\n' "true"
+        printf 'export RESTIC_REPOSITORY=%q\n' "$restic_repo"
+        printf 'export RESTIC_PASSWORD=%q\n' "$restic_pass"
+        printf 'export AWS_ACCESS_KEY_ID=%q\n' "$aws_id"
+        printf 'export AWS_SECRET_ACCESS_KEY=%q\n' "$aws_secret"
+    } > "$backup_file"
+    chmod 600 "$backup_file"
+    log "INFO" "Remote backup configuration enabled in $backup_file. AWS credentials may remain blank when the repository uses an instance role or another authentication method."
+}
+
+function require_remote_backup_config() {
+    local backup_file="${ETC_DIR}/secrets/restic.env"
+    if [[ ! -f "$backup_file" ]]; then
+        log "ERROR" "Remote backups are not configured. Run 'sudo ./deployment/install-editorial-platform.sh configure-backup' after installation."
+        exit 11
+    fi
+
+    # shellcheck disable=SC1090
+    source "$backup_file"
+    if [[ "${REMOTE_BACKUP_ENABLED:-false}" != "true" || -z "${RESTIC_REPOSITORY:-}" || -z "${RESTIC_PASSWORD:-}" ]]; then
+        log "ERROR" "Remote backups are disabled or incomplete. Run 'sudo ./deployment/install-editorial-platform.sh configure-backup'."
+        exit 11
+    fi
+}
+
 function collect_config() {
     log "INFO" "Collecting application secrets and domain configs..."
     
@@ -392,13 +470,6 @@ function collect_config() {
     if [[ "$DEPLOY_STAGING" == "true" ]]; then
         worker_concurrency=5
     fi
-
-    local restic_repo="${RESTIC_REPOSITORY:-$(read_stored_env_value "${ETC_DIR}/secrets/restic.env" RESTIC_REPOSITORY)}"
-    local restic_pass="${RESTIC_PASSWORD:-$(read_stored_env_value "${ETC_DIR}/secrets/restic.env" RESTIC_PASSWORD)}"
-    local aws_id="${AWS_ACCESS_KEY_ID:-$(read_stored_env_value "${ETC_DIR}/secrets/restic.env" AWS_ACCESS_KEY_ID)}"
-    local aws_secret="${AWS_SECRET_ACCESS_KEY:-$(read_stored_env_value "${ETC_DIR}/secrets/restic.env" AWS_SECRET_ACCESS_KEY)}"
-    restic_repo="${restic_repo:-s3:https://s3.amazonaws.com/editorial-backups}"
-    restic_pass="${restic_pass:-super-secure-restic-vault-pass-123}"
 
     if [[ "${NON_INTERACTIVE:-false}" == "false" ]]; then
         echo -e "${YELLOW}--- Secure Platform Setup Inquiries ---${NC}"
@@ -440,7 +511,7 @@ function collect_config() {
         echo ""
         MINIMAX_API_KEY="${input_minimax_key:-$minimax_key}"
 
-        echo -n "Enter CREDENTIALS_VAULT_KEY (exactly 32 chars): "
+        echo -n "Enter CREDENTIALS_VAULT_KEY (exactly 32 chars, leave blank to reuse or generate): "
         read -r -s input_vault
         echo ""
         if [[ -n "$input_vault" ]]; then
@@ -471,30 +542,6 @@ function collect_config() {
         read -r -p "Enter PostgreSQL Port [$pg_port]: " input
         PGPORT="${input:-$pg_port}"
 
-        echo -e "${YELLOW}--- Remote Encrypted Cloud Backup Setup ---${NC}"
-        read -r -p "Enter Restic Repository Target [$restic_repo]: " input
-        RESTIC_REPOSITORY="${input:-$restic_repo}"
-
-        echo -n "Enter Restic Password (hidden): "
-        read -r -s input_pass
-        echo ""
-        if [[ -n "$input_pass" ]]; then
-            RESTIC_PASSWORD="$input_pass"
-        else
-            RESTIC_PASSWORD="$restic_pass"
-        fi
-
-        read -r -p "Enter AWS Access Key ID (Optional for S3/R2) [$aws_id]: " input
-        AWS_ACCESS_KEY_ID="${input:-$aws_id}"
-
-        echo -n "Enter AWS Secret Access Key (Optional, hidden): "
-        read -r -s input_aws_sec
-        echo ""
-        if [[ -n "$input_aws_sec" ]]; then
-            AWS_SECRET_ACCESS_KEY="$input_aws_sec"
-        else
-            AWS_SECRET_ACCESS_KEY="$aws_secret"
-        fi
     else
         log "INFO" "Non-interactive execution mode. Consuming environment variables or defaults."
         PRODUCTION_DOMAIN="$prod_domain"
@@ -509,10 +556,6 @@ function collect_config() {
         PGDATABASE="$pg_database"
         PGHOST="$pg_host"
         PGPORT="$pg_port"
-        RESTIC_REPOSITORY="$restic_repo"
-        RESTIC_PASSWORD="$restic_pass"
-        AWS_ACCESS_KEY_ID="$aws_id"
-        AWS_SECRET_ACCESS_KEY="$aws_secret"
     fi
 
     while [[ -z "$OPENROUTER_API_KEY" && -z "$MINIMAX_API_KEY" && "${NON_INTERACTIVE:-false}" == "false" ]]; do
@@ -546,8 +589,13 @@ function collect_config() {
         CREDENTIALS_VAULT_KEY="$(openssl rand -hex 16)"
         log "INFO" "No credential vault key was supplied; a 32-character key was generated and will be stored in root-only configuration."
     elif [[ ${#CREDENTIALS_VAULT_KEY} -ne 32 ]]; then
-        log "ERROR" "CREDENTIALS_VAULT_KEY must contain exactly 32 characters."
-        exit 4
+        if [[ ! -f "${BASE_DIR}/metadata/deployment.json" ]]; then
+            CREDENTIALS_VAULT_KEY="$(openssl rand -hex 16)"
+            log "WARN" "The stored credential vault key was invalid, and no completed deployment metadata exists. A new 32-character key was generated so this incomplete installation can resume safely."
+        else
+            log "ERROR" "CREDENTIALS_VAULT_KEY must contain exactly 32 characters. A completed deployment exists, so the installer will not rotate this encryption key automatically."
+            exit 4
+        fi
     fi
 
     # Write secrets and variables to secure config files
@@ -607,14 +655,7 @@ AUTH_REQUIRED=false
 EOF
     chmod 600 "${ETC_DIR}/staging.env"
 
-    # Write Restic credentials securely
-    cat <<EOF > "${ETC_DIR}/secrets/restic.env"
-export RESTIC_REPOSITORY="${RESTIC_REPOSITORY}"
-export RESTIC_PASSWORD="${RESTIC_PASSWORD}"
-export AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID}"
-export AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY}"
-EOF
-    chmod 600 "${ETC_DIR}/secrets/restic.env"
+    log "INFO" "Remote backups are optional and were not requested during application setup. Existing backup configuration, if any, was preserved; run the configure-backup command after installation to enable or update it."
 
     # Write deployment templates directly; application source is staged separately.
     write_embedded_templates
@@ -1052,6 +1093,11 @@ if [[ -f "${ETC_DIR}/secrets/restic.env" ]]; then
     source "${ETC_DIR}/secrets/restic.env"
 else
     echo "Error: Restic credentials not found." >&2
+    exit 1
+fi
+
+if [[ "\${REMOTE_BACKUP_ENABLED:-false}" != "true" || -z "\${RESTIC_REPOSITORY:-}" || -z "\${RESTIC_PASSWORD:-}" ]]; then
+    echo "Error: Remote backups are disabled or incomplete. Run the installer configure-backup command first." >&2
     exit 1
 fi
 
@@ -1544,6 +1590,7 @@ function restore_backup() {
 # --- Remote Backup Functions ---
 function run_remote_backup() {
     log "INFO" "Triggering encrypted remote cloud backup execution..."
+    require_remote_backup_config
     if [[ -x "${ETC_DIR}/scripts/restic-backup.sh" ]]; then
         "${ETC_DIR}/scripts/restic-backup.sh"
     else
@@ -1554,19 +1601,14 @@ function run_remote_backup() {
 
 function list_remote_snapshots() {
     log "INFO" "Loading remote cloud snapshots..."
-    if [[ -f "${ETC_DIR}/secrets/restic.env" ]]; then
-        # shellcheck disable=SC1091
-        source "${ETC_DIR}/secrets/restic.env"
-        restic snapshots
-    else
-        log "ERROR" "Restic credentials missing."
-        exit 11
-    fi
+    require_remote_backup_config
+    restic snapshots
 }
 
 function run_remote_restore() {
     local snapshot_id="$1"
     log "WARN" "REMOTE RESTORE WARNING: This will restore snapshot '$snapshot_id' into an isolated verification directory."
+    require_remote_backup_config
     
     if [[ "${NON_INTERACTIVE:-false}" == "false" ]]; then
         read -r -p "Confirm remote restore operation? [y/N]: " confirm
@@ -1583,15 +1625,8 @@ function run_remote_restore() {
     mkdir -p "$iso_dir"
     log "INFO" "Restoring snapshot '$snapshot_id' to isolated target: $iso_dir"
 
-    if [[ -f "${ETC_DIR}/secrets/restic.env" ]]; then
-        # shellcheck disable=SC1091
-        source "${ETC_DIR}/secrets/restic.env"
-        restic restore "$snapshot_id" --target "$iso_dir"
-        log "INFO" "Isolated restoration complete. State files ready for promotion checks inside $iso_dir."
-    else
-        log "ERROR" "Restic credentials missing."
-        exit 11
-    fi
+    restic restore "$snapshot_id" --target "$iso_dir"
+    log "INFO" "Isolated restoration complete. State files ready for promotion checks inside $iso_dir."
 }
 
 # --- Update Pipeline with Immutable Digest Enforcement ---
@@ -1778,6 +1813,19 @@ if [[ "$CMD" == "install" ]]; then
                 ;;
         esac
     done
+elif [[ "$CMD" == "configure-backup" ]]; then
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --non-interactive)
+                NON_INTERACTIVE=true
+                shift
+                ;;
+            *)
+                log "ERROR" "Unknown configure-backup option: $1"
+                exit 4
+                ;;
+        esac
+    done
 fi
 
 case "$CMD" in
@@ -1835,6 +1883,9 @@ case "$CMD" in
         ;;
     "backup")
         create_backup
+        ;;
+    "configure-backup")
+        configure_remote_backup
         ;;
     "remote-backup")
         run_remote_backup

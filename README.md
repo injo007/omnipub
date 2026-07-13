@@ -15,6 +15,7 @@ To install the platform on a fresh physical or virtual Linux server, follow thes
 *   **Production + staging minimum**: 4 vCPU, 8 GB RAM, 80 GB available disk.
 *   **Recommended sizing**: 8 vCPU, 16 GB RAM, 160 GB NVMe SSD.
 *   **Model credential**: `OPENROUTER_API_KEY` (recommended) or `MINIMAX_API_KEY` is required. PostgreSQL and credential-vault secrets can be generated securely by the installer.
+*   **Remote backup credentials**: Optional. Restic and AWS credentials are configured after installation only if remote backups are wanted.
 
 ### 2. Standard Installation Steps
 Execute the following commands on your server:
@@ -38,6 +39,12 @@ The installer automatically uses production-only mode on smaller hosts. To choos
 sudo ./deployment/install-editorial-platform.sh install \
   --source /opt/editorial-platform/current \
   --production-only
+```
+
+The application installation does not ask for Restic or AWS credentials. Configure encrypted remote backups later, without reinstalling the application:
+
+```bash
+sudo ./deployment/install-editorial-platform.sh configure-backup
 ```
 
 For the first PostgreSQL cutover from an existing local snapshot:
@@ -88,6 +95,18 @@ sudo ./deployment/install-editorial-platform.sh install \
 ```
 
 The `verify` command now reports missing containers immediately instead of waiting through repeated health-check timeouts.
+
+### `CREDENTIALS_VAULT_KEY must contain exactly 32 characters`
+
+This could occur after an interrupted older installation saved a malformed key. On an incomplete deployment with no deployment metadata, the installer now replaces that invalid value with a generated 32-character key and resumes. If a completed deployment exists, it refuses automatic rotation to protect credentials already encrypted with the existing key.
+
+Remote backup input is no longer part of application installation. Leaving AWS or Restic unset cannot stop deployment. Configure it later with:
+
+```bash
+sudo ./deployment/install-editorial-platform.sh configure-backup
+```
+
+AWS access keys are optional when Restic uses an instance role or a non-S3 authentication method. The Restic repository and encryption password are required only when remote backup is enabled.
 
 ### Direct IP address does not open the site
 

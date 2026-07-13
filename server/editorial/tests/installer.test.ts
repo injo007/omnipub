@@ -51,8 +51,27 @@ describe("Ubuntu installer packaging contract", () => {
     expect(installer).toContain('DEPLOY_STAGING=false');
   });
 
+  it("keeps optional remote backup credentials out of application installation", () => {
+    const collectConfigStart = installer.indexOf("function collect_config()");
+    const templatesStart = installer.indexOf("function write_embedded_templates()", collectConfigStart);
+    const collectConfig = installer.slice(collectConfigStart, templatesStart);
+    expect(collectConfig).not.toContain("Remote Encrypted Cloud Backup Setup");
+    expect(collectConfig).not.toContain("AWS_ACCESS_KEY_ID");
+    expect(installer).toContain('"configure-backup")');
+    expect(installer).toContain("REMOTE_BACKUP_ENABLED");
+    expect(installer).toContain("require_remote_backup_config");
+  });
+
+  it("recovers malformed vault keys only for incomplete deployments", () => {
+    expect(installer).toContain('if [[ ! -f "${BASE_DIR}/metadata/deployment.json" ]]');
+    expect(installer).toContain("A new 32-character key was generated");
+    expect(installer).toContain("will not rotate this encryption key automatically");
+  });
+
   it("documents the former missing-model-key failure and recovery", () => {
     expect(readme).toContain("Configure OPENROUTER_API_KEY or MINIMAX_API_KEY");
     expect(readme).toContain("Website times out and `docker ps` is empty");
+    expect(readme).toContain("Leaving AWS or Restic unset cannot stop deployment");
+    expect(readme).toContain("configure-backup");
   });
 });

@@ -26,6 +26,14 @@ sudo ./install-editorial-platform.sh install \
 
 Interactive installation prompts securely for `OPENROUTER_API_KEY` or `MINIMAX_API_KEY`. If PostgreSQL and vault secrets are blank, strong values are generated and saved in root-only files under `/etc/editorial-platform/`.
 
+Restic and AWS are intentionally excluded from the application install prompts. Remote backup is optional and can be configured or changed at any time afterward:
+
+```bash
+sudo ./install-editorial-platform.sh configure-backup
+```
+
+The command requires a Restic repository and encryption password. AWS keys are optional for instance-role authentication and non-S3 repositories. Until this command succeeds, `remote-backup`, `remote-snapshots`, and `remote-restore` fail with a direct configuration message without affecting the application.
+
 To migrate an existing snapshot, add:
 
 ```bash
@@ -43,4 +51,4 @@ sudo tail -n 150 /var/log/editorial-platform/installer.log
 sudo ./install-editorial-platform.sh status
 ```
 
-A missing model key was a common cause in older runs. Export `OPENROUTER_API_KEY` or `MINIMAX_API_KEY`, or rerun interactively. Verification now fails immediately for missing containers and confirms that application readiness reports a healthy PostgreSQL backend.
+A missing model key was a common cause in older runs. Export `OPENROUTER_API_KEY` or `MINIMAX_API_KEY`, or rerun interactively. A malformed vault key from an incomplete older run is now regenerated automatically when no completed deployment metadata exists; completed deployments are protected against silent key rotation. Blank AWS/Restic input can no longer interrupt installation because remote backup configuration is post-install only. Verification now fails immediately for missing containers and confirms that application readiness reports a healthy PostgreSQL backend.
