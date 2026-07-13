@@ -6,6 +6,7 @@ const root = process.cwd();
 const installer = fs.readFileSync(path.join(root, "deployment/install-editorial-platform.sh"), "utf8");
 const dockerignore = fs.readFileSync(path.join(root, ".dockerignore"), "utf8");
 const packageJson = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
+const readme = fs.readFileSync(path.join(root, "README.md"), "utf8");
 
 describe("Ubuntu installer packaging contract", () => {
   it("builds only from the validated staged source directory", () => {
@@ -37,5 +38,21 @@ describe("Ubuntu installer packaging contract", () => {
   it("requires application readiness to report a healthy PostgreSQL backend", () => {
     expect(installer).toContain('database?.backend !== "postgresql"');
     expect(installer).toContain("database?.pg?.ok !== true");
+  });
+
+  it("fails immediately when verification is requested before containers exist", () => {
+    expect(installer).toContain('if [[ "$status" == "missing" ]]');
+    expect(installer).toContain("The installation did not reach deployment");
+  });
+
+  it("supports interruption recovery and production-only sizing", () => {
+    expect(installer).toContain("handle_interrupt SIGINT 130");
+    expect(installer).toContain("--production-only");
+    expect(installer).toContain('DEPLOY_STAGING=false');
+  });
+
+  it("documents the former missing-model-key failure and recovery", () => {
+    expect(readme).toContain("Configure OPENROUTER_API_KEY or MINIMAX_API_KEY");
+    expect(readme).toContain("Website times out and `docker ps` is empty");
   });
 });

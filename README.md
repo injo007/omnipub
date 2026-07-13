@@ -11,7 +11,10 @@ To install the platform on a fresh physical or virtual Linux server, follow thes
 ### 1. Requirements & Sizing
 *   **Host OS**: Ubuntu Server 24.04 LTS (x86_64)
 *   **Permissions**: Strict `sudo` or `root` privileges.
-*   **Recommended Sizing**: 8 vCPU Cores, 16 GB RAM, 160 GB NVMe SSD.
+*   **Production-only minimum**: 1 vCPU, 2 GB RAM, 40 GB available disk. This profile uses reduced worker concurrency and does not start staging.
+*   **Production + staging minimum**: 4 vCPU, 8 GB RAM, 80 GB available disk.
+*   **Recommended sizing**: 8 vCPU, 16 GB RAM, 160 GB NVMe SSD.
+*   **Model credential**: `OPENROUTER_API_KEY` (recommended) or `MINIMAX_API_KEY` is required. PostgreSQL and credential-vault secrets can be generated securely by the installer.
 
 ### 2. Standard Installation Steps
 Execute the following commands on your server:
@@ -25,7 +28,25 @@ cd /opt/editorial-platform/current
 chmod +x deployment/install-editorial-platform.sh
 
 # 3. Launch the secure, automated installation
-sudo ./deployment/install-editorial-platform.sh install
+sudo ./deployment/install-editorial-platform.sh install \
+  --source /opt/editorial-platform/current
+```
+
+The installer automatically uses production-only mode on smaller hosts. To choose explicitly:
+
+```bash
+sudo ./deployment/install-editorial-platform.sh install \
+  --source /opt/editorial-platform/current \
+  --production-only
+```
+
+For the first PostgreSQL cutover from an existing local snapshot:
+
+```bash
+sudo ./deployment/install-editorial-platform.sh install \
+  --source /opt/editorial-platform/current \
+  --production-only \
+  --legacy-db /opt/editorial-platform/current/db.json
 ```
 
 ### 3. Verify & Monitor Service Health
@@ -38,6 +59,39 @@ sudo ./deployment/install-editorial-platform.sh status
 # Run the complete post-installation verification suite
 sudo ./deployment/install-editorial-platform.sh verify
 ```
+
+## Installation recovery and previously observed failures
+
+The installer is resumable. Pressing `Ctrl+C`, losing an SSH session, or correcting a configuration error does not remove PostgreSQL volumes or completed setup work. Rerun the same `install` command to continue.
+
+### `Configure OPENROUTER_API_KEY or MINIMAX_API_KEY`
+
+Older installer behavior exited after a blank model-key prompt, leaving no containers or deployment metadata. The current installer repeats the secure prompt in interactive mode and provides a recovery message in non-interactive mode. Set one of these variables before a non-interactive installation:
+
+```bash
+export OPENROUTER_API_KEY="your-key"
+# Or: export MINIMAX_API_KEY="your-key"
+```
+
+Do not put API keys directly in shell history on shared systems. Prefer a hidden `read -s` prompt or the interactive installer.
+
+### Website times out and `docker ps` is empty
+
+This means installation stopped before deployment; it is not a WordPress or browser error. Check the redacted installer log and resume:
+
+```bash
+sudo tail -n 150 /var/log/editorial-platform/installer.log
+sudo ./deployment/install-editorial-platform.sh status
+sudo ./deployment/install-editorial-platform.sh install \
+  --source /opt/editorial-platform/current \
+  --production-only
+```
+
+The `verify` command now reports missing containers immediately instead of waiting through repeated health-check timeouts.
+
+### Direct IP address does not open the site
+
+Caddy uses the production domain configured during installation. Point that domain's DNS `A` record to the server, allow ports 80 and 443, and open the domain rather than the raw server IP.
 
 ---
 

@@ -13,9 +13,9 @@ This document defines installation workflows for operators setting up fresh phys
 
 | Category | Recommended Capacity | Minimum Capacity (Fail Ceiling) |
 |---|---|---|
-| **CPU Cores** | 8 Cores (vCPU) | 4 Cores |
-| **RAM Space** | 16 GB DDR4/DDR5 | 8 GB |
-| **Storage NVMe**| 160 GB NVMe | 80 GB SSD |
+| **CPU Cores** | 8 Cores (vCPU) | 1 production-only / 4 with staging |
+| **RAM Space** | 16 GB DDR4/DDR5 | 2 GB production-only / 8 GB with staging |
+| **Storage NVMe**| 160 GB NVMe | 40 GB production-only / 80 GB with staging |
 
 ---
 
@@ -48,6 +48,8 @@ This document defines installation workflows for operators setting up fresh phys
     ```
 
     Use a release tag or commit SHA instead of `main` for a reproducible production installation.
+
+    On hosts below the full staging profile, the installer automatically deploys production only. Use `--with-staging` only when the full 4 CPU, 8 GB RAM, and 80 GB free-disk minimum is available.
 
 4.  **Confirm status and service telemetry**:
     ```bash

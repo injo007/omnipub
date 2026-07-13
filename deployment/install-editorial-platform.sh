@@ -23,11 +23,18 @@ APP_SOURCE_DIR="${APP_SOURCE_DIR:-}"
 LEGACY_DB_PATH="${LEGACY_DB_PATH:-}"
 APP_SOURCE_COMMIT="unknown"
 LEGACY_MIGRATION_STATUS="not-requested"
+DEPLOY_STAGING="${DEPLOY_STAGING:-auto}"
+HOST_CPU_COUNT=0
+HOST_RAM_MB=0
+HOST_DISK_GB=0
 
-# Default Minimum Host Requirements (Configurable)
-MIN_CPU=4
-MIN_RAM_GB=8
-MIN_DISK_GB=80
+# Production-only can run on a small host; staging remains an opt-in full profile.
+MIN_PRODUCTION_CPU=1
+MIN_PRODUCTION_RAM_MB=1800
+MIN_PRODUCTION_DISK_GB=40
+MIN_FULL_CPU=4
+MIN_FULL_RAM_MB=7500
+MIN_FULL_DISK_GB=80
 
 # --- Colors for Output ---
 RED='\033[0;31m'
@@ -58,7 +65,7 @@ function acquire_lock() {
 function cleanup_lock() {
     rm -f "$LOCK_FILE"
 }
-trap cleanup_lock INT TERM EXIT
+trap cleanup_lock EXIT
 
 # --- Initialization of log and directory layout ---
 function init_layout() {
@@ -91,6 +98,17 @@ function log() {
     # Structured log append
     echo "{\"timestamp\":\"$timestamp\",\"severity\":\"$severity\",\"message\":\"$clean_msg\"}" >> "$LOG_FILE"
 }
+
+function handle_interrupt() {
+    local signal="$1"
+    local exit_code="$2"
+    log "WARN" "Installer interrupted by $signal. Completed steps and stored configuration were preserved; rerun the same install command to resume safely."
+    cleanup_lock
+    trap - EXIT
+    exit "$exit_code"
+}
+trap 'handle_interrupt SIGINT 130' INT
+trap 'handle_interrupt SIGTERM 143' TERM
 
 # --- Error Handler ---
 function err_trap() {
@@ -137,6 +155,8 @@ Options:
   --repo <git-url>             Clone the application when the installer is used standalone.
   --ref <branch-tag-or-sha>    Git revision to install (default: main).
   --legacy-db <file>           Import a db.json snapshot when PostgreSQL is empty.
+  --production-only            Deploy only production (default on hosts below the full profile).
+  --with-staging               Deploy isolated production and staging stacks (8 GB RAM minimum).
 
 Examples:
   sudo ./install-editorial-platform.sh install
@@ -247,6 +267,37 @@ function run_preflights() {
         exit 3
     fi
 
+    # 3. Capacity and deployment profile selection
+    HOST_CPU_COUNT=$(nproc)
+    HOST_RAM_MB=$(awk '/MemTotal/ { print int($2 / 1024) }' /proc/meminfo)
+    HOST_DISK_GB=$(df --output=avail -BG / | tail -n 1 | tr -dc '0-9')
+
+    if [[ "$DEPLOY_STAGING" == "auto" ]]; then
+        if (( HOST_CPU_COUNT >= MIN_FULL_CPU && HOST_RAM_MB >= MIN_FULL_RAM_MB && HOST_DISK_GB >= MIN_FULL_DISK_GB )); then
+            DEPLOY_STAGING=true
+        else
+            DEPLOY_STAGING=false
+        fi
+    fi
+    if [[ "$DEPLOY_STAGING" != "true" && "$DEPLOY_STAGING" != "false" ]]; then
+        log "ERROR" "DEPLOY_STAGING must be true, false, or auto."
+        exit 3
+    fi
+
+    if [[ "$DEPLOY_STAGING" == "true" ]]; then
+        if (( HOST_CPU_COUNT < MIN_FULL_CPU || HOST_RAM_MB < MIN_FULL_RAM_MB || HOST_DISK_GB < MIN_FULL_DISK_GB )); then
+            log "ERROR" "Production plus staging requires at least ${MIN_FULL_CPU} CPUs, ${MIN_FULL_RAM_MB} MB RAM, and ${MIN_FULL_DISK_GB} GB free disk. Detected: ${HOST_CPU_COUNT} CPUs, ${HOST_RAM_MB} MB RAM, ${HOST_DISK_GB} GB free."
+            exit 3
+        fi
+        log "INFO" "Full production-and-staging profile selected."
+    else
+        if (( HOST_CPU_COUNT < MIN_PRODUCTION_CPU || HOST_RAM_MB < MIN_PRODUCTION_RAM_MB || HOST_DISK_GB < MIN_PRODUCTION_DISK_GB )); then
+            log "ERROR" "Production-only requires at least ${MIN_PRODUCTION_CPU} CPU, ${MIN_PRODUCTION_RAM_MB} MB RAM, and ${MIN_PRODUCTION_DISK_GB} GB free disk. Detected: ${HOST_CPU_COUNT} CPUs, ${HOST_RAM_MB} MB RAM, ${HOST_DISK_GB} GB free."
+            exit 3
+        fi
+        log "WARN" "Production-only profile selected for this host (${HOST_CPU_COUNT} CPUs, ${HOST_RAM_MB} MB RAM, ${HOST_DISK_GB} GB free). Staging is disabled to prevent memory exhaustion."
+    fi
+
     log "INFO" "Preflight validation complete."
 }
 
@@ -324,8 +375,8 @@ function collect_config() {
         log "INFO" "Existing configuration loaded from $INSTALLER_CONF."
     fi
 
-    local staging_domain="${STAGING_DOMAIN:-staging.editorial-intelligence.com}"
-    local prod_domain="${PRODUCTION_DOMAIN:-editorial-intelligence.com}"
+    local staging_domain="${STAGING_DOMAIN:-}"
+    local prod_domain="${PRODUCTION_DOMAIN:-}"
     local admin_email="${ADMIN_EMAIL:-admin@editorial-intelligence.com}"
     local gemini_key="${GEMINI_API_KEY:-$(read_stored_env_value "${ETC_DIR}/production.env" GEMINI_API_KEY)}"
     local openrouter_key="${OPENROUTER_API_KEY:-$(read_stored_env_value "${ETC_DIR}/production.env" OPENROUTER_API_KEY)}"
@@ -337,6 +388,10 @@ function collect_config() {
     local pg_database="${PGDATABASE:-editorial_db}"
     local pg_host="${PGHOST:-db}"
     local pg_port="${PGPORT:-5432}"
+    local worker_concurrency=2
+    if [[ "$DEPLOY_STAGING" == "true" ]]; then
+        worker_concurrency=5
+    fi
 
     local restic_repo="${RESTIC_REPOSITORY:-$(read_stored_env_value "${ETC_DIR}/secrets/restic.env" RESTIC_REPOSITORY)}"
     local restic_pass="${RESTIC_PASSWORD:-$(read_stored_env_value "${ETC_DIR}/secrets/restic.env" RESTIC_PASSWORD)}"
@@ -348,11 +403,20 @@ function collect_config() {
     if [[ "${NON_INTERACTIVE:-false}" == "false" ]]; then
         echo -e "${YELLOW}--- Secure Platform Setup Inquiries ---${NC}"
         
-        read -r -p "Enter Staging Domain Name [$staging_domain]: " input
-        STAGING_DOMAIN="${input:-$staging_domain}"
+        while [[ -z "${PRODUCTION_DOMAIN:-}" ]]; do
+            read -r -p "Enter Production Domain Name${prod_domain:+ [$prod_domain]}: " input
+            PRODUCTION_DOMAIN="${input:-$prod_domain}"
+            if [[ -z "$PRODUCTION_DOMAIN" ]]; then
+                log "WARN" "A real production DNS hostname is required; the raw server IP is not used for Caddy HTTPS routing."
+            fi
+        done
 
-        read -r -p "Enter Production Domain Name [$prod_domain]: " input
-        PRODUCTION_DOMAIN="${input:-$prod_domain}"
+        if [[ "$DEPLOY_STAGING" == "true" ]]; then
+            read -r -p "Enter Staging Domain Name${staging_domain:+ [$staging_domain]}: " input
+            STAGING_DOMAIN="${input:-${staging_domain:-staging.${PRODUCTION_DOMAIN}}}"
+        else
+            STAGING_DOMAIN="${staging_domain:-staging.${PRODUCTION_DOMAIN}}"
+        fi
 
         read -r -p "Enter Admin Email for SSL Certificates [$admin_email]: " input
         ADMIN_EMAIL="${input:-$admin_email}"
@@ -433,8 +497,8 @@ function collect_config() {
         fi
     else
         log "INFO" "Non-interactive execution mode. Consuming environment variables or defaults."
-        STAGING_DOMAIN="$staging_domain"
         PRODUCTION_DOMAIN="$prod_domain"
+        STAGING_DOMAIN="${staging_domain:-staging.${prod_domain}}"
         ADMIN_EMAIL="$admin_email"
         GEMINI_API_KEY="$gemini_key"
         OPENROUTER_API_KEY="$openrouter_key"
@@ -451,19 +515,37 @@ function collect_config() {
         AWS_SECRET_ACCESS_KEY="$aws_secret"
     fi
 
+    while [[ -z "$OPENROUTER_API_KEY" && -z "$MINIMAX_API_KEY" && "${NON_INTERACTIVE:-false}" == "false" ]]; do
+        log "WARN" "A model credential is required before deployment can continue. Press Ctrl+C to stop safely and resume later."
+        echo -n "Enter OPENROUTER_API_KEY (recommended for MiniMax-M3 and fallback routing, hidden): "
+        read -r -s OPENROUTER_API_KEY
+        echo ""
+        if [[ -z "$OPENROUTER_API_KEY" ]]; then
+            echo -n "Enter native MINIMAX_API_KEY instead (hidden): "
+            read -r -s MINIMAX_API_KEY
+            echo ""
+        fi
+    done
     if [[ -z "$OPENROUTER_API_KEY" && -z "$MINIMAX_API_KEY" ]]; then
-        log "ERROR" "Configure OPENROUTER_API_KEY or MINIMAX_API_KEY for the MiniMax-M3 primary model."
+        log "ERROR" "Missing model credential. Export OPENROUTER_API_KEY or MINIMAX_API_KEY, then rerun the same install command. No database or deployment data was removed."
+        exit 4
+    fi
+    if [[ -z "$PRODUCTION_DOMAIN" || "$PRODUCTION_DOMAIN" == *"://"* || "$PRODUCTION_DOMAIN" == "editorial-intelligence.com" || "$PRODUCTION_DOMAIN" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        log "ERROR" "PRODUCTION_DOMAIN must be a real DNS hostname pointing to this server, without http:// or https://. Raw IP addresses and placeholder domains are rejected."
         exit 4
     fi
     if [[ -z "$PGPASSWORD" ]]; then
-        log "ERROR" "PostgreSQL password is mandatory. Setup cannot proceed."
-        exit 4
+        PGPASSWORD="$(openssl rand -hex 24)"
+        log "INFO" "No PostgreSQL password was supplied; a strong password was generated and will be stored in root-only configuration."
     fi
     if [[ "$PGHOST" != "db" ]]; then
         log "ERROR" "This installer provisions internal PostgreSQL containers, so PGHOST must be 'db'. Use the manual deployment runbook for an external PostgreSQL service."
         exit 4
     fi
-    if [[ ${#CREDENTIALS_VAULT_KEY} -ne 32 ]]; then
+    if [[ -z "$CREDENTIALS_VAULT_KEY" ]]; then
+        CREDENTIALS_VAULT_KEY="$(openssl rand -hex 16)"
+        log "INFO" "No credential vault key was supplied; a 32-character key was generated and will be stored in root-only configuration."
+    elif [[ ${#CREDENTIALS_VAULT_KEY} -ne 32 ]]; then
         log "ERROR" "CREDENTIALS_VAULT_KEY must contain exactly 32 characters."
         exit 4
     fi
@@ -478,6 +560,7 @@ PGPASSWORD="${PGPASSWORD}"
 PGDATABASE="${PGDATABASE}"
 PGHOST="${PGHOST}"
 PGPORT="${PGPORT}"
+DEPLOY_STAGING="${DEPLOY_STAGING}"
 EOF
     chmod 600 "$INSTALLER_CONF"
 
@@ -490,7 +573,7 @@ OPENROUTER_API_KEY="${OPENROUTER_API_KEY}"
 MINIMAX_API_KEY="${MINIMAX_API_KEY}"
 CREDENTIALS_VAULT_KEY="${CREDENTIALS_VAULT_KEY}"
 APP_URL="https://${PRODUCTION_DOMAIN}"
-WORKER_CONCURRENCY=5
+WORKER_CONCURRENCY=${worker_concurrency}
 WORKER_LEASE_DURATION_SEC=60
 MAX_PUBLISHING_RETRIES=5
 PGHOST="${PGHOST}"
@@ -511,7 +594,7 @@ OPENROUTER_API_KEY="${OPENROUTER_API_KEY}"
 MINIMAX_API_KEY="${MINIMAX_API_KEY}"
 CREDENTIALS_VAULT_KEY="${CREDENTIALS_VAULT_KEY}"
 APP_URL="https://${STAGING_DOMAIN}"
-WORKER_CONCURRENCY=5
+WORKER_CONCURRENCY=${worker_concurrency}
 WORKER_LEASE_DURATION_SEC=60
 MAX_PUBLISHING_RETRIES=5
 PGHOST="${PGHOST}"
@@ -540,6 +623,12 @@ EOF
 # --- Write Embedded Templates ---
 function write_embedded_templates() {
     log "INFO" "Extracting embedded application architecture templates..."
+    local production_app_memory="1024M"
+    local production_db_memory="384M"
+    if [[ "$DEPLOY_STAGING" == "true" ]]; then
+        production_app_memory="2048M"
+        production_db_memory="512M"
+    fi
 
     # 1. Unified Caddyfile (Standard Reverse Proxy with Virtual Host Domain Routing on standard ports 80 & 443)
     cat <<EOF > "${ETC_DIR}/Caddyfile"
@@ -627,7 +716,7 @@ services:
       resources:
         limits:
           cpus: '0.5'
-          memory: 512M
+          memory: ${production_db_memory}
     logging:
       driver: "json-file"
       options:
@@ -657,7 +746,7 @@ services:
       resources:
         limits:
           cpus: '1.0'
-          memory: 2048M
+          memory: ${production_app_memory}
         reservations:
           cpus: '0.2'
           memory: 512M
@@ -1101,6 +1190,10 @@ function wait_for_container_health() {
     while (( elapsed < timeout_seconds )); do
         local status
         status=$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$container" 2>/dev/null || echo missing)
+        if [[ "$status" == "missing" ]]; then
+            log "ERROR" "Required container does not exist: $container. The installation did not reach deployment; inspect $LOG_FILE and rerun install."
+            return 1
+        fi
         if [[ "$status" == "healthy" || "$status" == "running" ]]; then
             return 0
         fi
@@ -1175,21 +1268,29 @@ function deploy_application() {
     fi
 
     docker compose -f "${BASE_DIR}/compose.production.yml" config --quiet
-    docker compose -f "${BASE_DIR}/compose.staging.yml" config --quiet
+    if [[ "$DEPLOY_STAGING" == "true" ]]; then
+        docker compose -f "${BASE_DIR}/compose.staging.yml" config --quiet
+    fi
 
     if [[ "$image_mode" == "build" ]]; then
         log "INFO" "Building immutable application image from $SOURCE_DIR..."
         docker build --pull -t editorial-platform:production -f "${SOURCE_DIR}/Dockerfile" "$SOURCE_DIR"
-        docker tag editorial-platform:production editorial-platform:staging
+        if [[ "$DEPLOY_STAGING" == "true" ]]; then
+            docker tag editorial-platform:production editorial-platform:staging
+        fi
     else
         log "INFO" "Using the already selected immutable application image."
     fi
 
     # Start PostgreSQL before the application so legacy import cannot race startup seeding.
     docker compose -f "${BASE_DIR}/compose.production.yml" up -d db
-    docker compose -f "${BASE_DIR}/compose.staging.yml" up -d db
     wait_for_container_health "editorial-production-db" 120
-    wait_for_container_health "editorial-staging-db" 120
+    if [[ "$DEPLOY_STAGING" == "true" ]]; then
+        docker compose -f "${BASE_DIR}/compose.staging.yml" up -d db
+        wait_for_container_health "editorial-staging-db" 120
+    else
+        docker compose -f "${BASE_DIR}/compose.staging.yml" down --remove-orphans 2>/dev/null || true
+    fi
     migrate_legacy_database_if_needed
 
     # Production Deploy
@@ -1197,8 +1298,12 @@ function deploy_application() {
     docker compose -f "${BASE_DIR}/compose.production.yml" up -d --remove-orphans
 
     # Staging Deploy
-    log "INFO" "Starting Staging Stack via Docker Compose..."
-    docker compose -f "${BASE_DIR}/compose.staging.yml" up -d --remove-orphans
+    if [[ "$DEPLOY_STAGING" == "true" ]]; then
+        log "INFO" "Starting Staging Stack via Docker Compose..."
+        docker compose -f "${BASE_DIR}/compose.staging.yml" up -d --remove-orphans
+    else
+        log "INFO" "Staging deployment is disabled for the production-only host profile."
+    fi
 
     # Record Metadata
     local deploy_sha
@@ -1215,6 +1320,7 @@ function deploy_application() {
   "timestamp": "${deploy_time}",
   "production_domain": "${PRODUCTION_DOMAIN}",
   "staging_domain": "${STAGING_DOMAIN}",
+  "staging_enabled": ${DEPLOY_STAGING},
   "legacy_migration": "${LEGACY_MIGRATION_STATUS}"
 }
 EOF
@@ -1237,14 +1343,20 @@ function verify_installation() {
     fi
 
     # 2. Verify PostgreSQL and application containers are healthy.
-    for container in editorial-production-db editorial-staging-db editorial-production-app editorial-staging-app; do
+    local expected_containers=(editorial-production-db editorial-production-app)
+    local expected_apps=(editorial-production-app)
+    if [[ "$DEPLOY_STAGING" == "true" ]]; then
+        expected_containers+=(editorial-staging-db editorial-staging-app)
+        expected_apps+=(editorial-staging-app)
+    fi
+    for container in "${expected_containers[@]}"; do
         if ! wait_for_container_health "$container" 120; then
             passed=false
         fi
     done
 
     # 3. Readiness must confirm PostgreSQL from inside each application container.
-    for container in editorial-production-app editorial-staging-app; do
+    for container in "${expected_apps[@]}"; do
         if ! docker exec "$container" node -e '
           fetch("http://127.0.0.1:3000/api/health/readiness")
             .then(async (response) => {
@@ -1652,6 +1764,14 @@ if [[ "$CMD" == "install" ]]; then
                 LEGACY_DB_PATH="$2"
                 shift 2
                 ;;
+            --production-only)
+                DEPLOY_STAGING=false
+                shift
+                ;;
+            --with-staging)
+                DEPLOY_STAGING=true
+                shift
+                ;;
             *)
                 log "ERROR" "Unknown install option: $1"
                 exit 4
@@ -1681,6 +1801,14 @@ case "$CMD" in
         if [[ "${BYPASS_PREFLIGHTS:-false}" != "true" ]]; then
             docker ps
             ss -lntup
+            if [[ -z "$(docker ps -q)" ]]; then
+                log "ERROR" "No platform containers are running. Installation either stopped before deployment or failed during Docker startup."
+                local_last_error=$(grep -E '"severity":"(ERROR|WARN)"' "$LOG_FILE" | tail -n 1 || true)
+                if [[ -n "$local_last_error" ]]; then
+                    echo "Last installer warning/error: $local_last_error"
+                fi
+                echo "Recovery: rerun './deployment/install-editorial-platform.sh install --source /opt/editorial-platform/current --production-only' after correcting the reported configuration error."
+            fi
         fi
         ;;
     "update")

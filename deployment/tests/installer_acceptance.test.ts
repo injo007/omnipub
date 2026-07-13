@@ -26,7 +26,9 @@ describe("Master Bash Installer Unit Checks", () => {
   it("should contain clean error trap logic and strict execution shell directives", () => {
     const content = fs.readFileSync(scriptPath, "utf-8");
     expect(content).toContain("set -Eeuo pipefail");
-    expect(content).toContain("trap cleanup_lock INT TERM EXIT");
+    expect(content).toContain("trap cleanup_lock EXIT");
+    expect(content).toContain("handle_interrupt SIGINT 130");
+    expect(content).toContain("handle_interrupt SIGTERM 143");
   });
 
   it("should prevent double lock execution", () => {

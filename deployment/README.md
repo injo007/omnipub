@@ -17,7 +17,30 @@ chmod +x install-editorial-platform.sh
 sudo ./install-editorial-platform.sh help
 ```
 
-To run a complete, non-interactive secure staging deployment:
+For a production-only deployment on a small Ubuntu 24.04 host:
 ```bash
-sudo GEMINI_API_KEY="AI_KEY_REPRESENTATIVE_HERE" ./install-editorial-platform.sh install
+sudo ./install-editorial-platform.sh install \
+  --source /opt/editorial-platform/current \
+  --production-only
 ```
+
+Interactive installation prompts securely for `OPENROUTER_API_KEY` or `MINIMAX_API_KEY`. If PostgreSQL and vault secrets are blank, strong values are generated and saved in root-only files under `/etc/editorial-platform/`.
+
+To migrate an existing snapshot, add:
+
+```bash
+--legacy-db /opt/editorial-platform/current/db.json
+```
+
+The import runs only against an empty production database and writes a durable migration marker. Rerunning the installer cannot overwrite populated PostgreSQL tables.
+
+## Interrupted or incomplete installation
+
+The installer handles `SIGINT` and `SIGTERM`, releases its lock, and preserves completed work. Rerun the same command after correcting the reported error. When `docker ps` is empty or deployment metadata is absent:
+
+```bash
+sudo tail -n 150 /var/log/editorial-platform/installer.log
+sudo ./install-editorial-platform.sh status
+```
+
+A missing model key was a common cause in older runs. Export `OPENROUTER_API_KEY` or `MINIMAX_API_KEY`, or rerun interactively. Verification now fails immediately for missing containers and confirms that application readiness reports a healthy PostgreSQL backend.
