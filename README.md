@@ -108,6 +108,20 @@ sudo ./deployment/install-editorial-platform.sh configure-backup
 
 AWS access keys are optional when Restic uses an instance role or a non-S3 authentication method. The Restic repository and encryption password are required only when remote backup is enabled.
 
+### Application is unhealthy and `Production PostgreSQL schema is not initialized`
+
+Older deployment ordering allowed the application container to be responsible for creating the PostgreSQL schema during its first boot. A startup failure could therefore leave both an empty schema and a restart loop. The installer now runs a dedicated one-shot schema bootstrap before starting the application, verifies the required tables, waits for container health, and confirms PostgreSQL readiness before recording successful deployment metadata.
+
+Pull the corrected installer and rerun the same installation command. PostgreSQL volumes are preserved and `CREATE TABLE IF NOT EXISTS` makes schema bootstrap safe to repeat:
+
+```bash
+sudo ./deployment/install-editorial-platform.sh install \
+  --source /opt/editorial-platform/current \
+  --production-only
+```
+
+If startup still fails for a different reason, the installer now records the container exit code, OOM status, restart count, and the last 120 container log lines in `/var/log/editorial-platform/installer.log`.
+
 ### Direct IP address does not open the site
 
 Caddy uses the production domain configured during installation. Point that domain's DNS `A` record to the server, allow ports 80 and 443, and open the domain rather than the raw server IP.

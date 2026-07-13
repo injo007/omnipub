@@ -4,7 +4,9 @@ import { checkHealth, closePool, getPool, initSchema, migrateFromJsonFile } from
 
 dotenv.config();
 
-const sourcePath = path.resolve(process.argv[2] || "db.json");
+const command = process.argv[2] || "db.json";
+const initializeOnly = command === "--init-only";
+const sourcePath = initializeOnly ? "" : path.resolve(command);
 
 async function main(): Promise<void> {
   if (!process.env.PGPASSWORD) {
@@ -14,6 +16,11 @@ async function main(): Promise<void> {
   await initSchema();
   const health = await checkHealth();
   if (!health.ok) throw new Error(`PostgreSQL is unavailable: ${health.error || "health check failed"}`);
+
+  if (initializeOnly) {
+    console.log(`[PG Bootstrap] Schema initialized and PostgreSQL connectivity verified (${health.latencyMs}ms health latency).`);
+    return;
+  }
 
   const migrated = await migrateFromJsonFile(sourcePath);
   if (!migrated) throw new Error(`No records were migrated from ${sourcePath}.`);

@@ -82,6 +82,7 @@ The platform uses a local, self-contained PostgreSQL instance running alongside 
 -   A blank PostgreSQL password or credential-vault key is generated and saved in root-only configuration.
 -   A malformed credential-vault key from an incomplete deployment is replaced automatically. The installer never rotates the key automatically after deployment metadata exists.
 -   Restic/AWS values cannot block application installation. Use `configure-backup` after the website is healthy.
+-   PostgreSQL schema creation is a one-shot gate before application startup. An unhealthy or restarting application cannot produce successful deployment metadata, and failure diagnostics include exit/OOM/restart state plus recent container logs.
 
 ### B. Network Isolation Model
 The master installer configures four isolated Docker bridge networks to guarantee staging and production container environments never cross-talk or share routes:

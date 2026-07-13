@@ -42,6 +42,83 @@ jobs:
       - name: ESLint Code Quality Verification
         run: npm run lint
 
+      - name: Build Production Runtime and Migration Artifacts
+        run: npm run build
+
+      - name: Run Production PostgreSQL Schema Bootstrap Artifact
+        run: |
+          node dist/migrate-json-to-postgres.cjs --init-only
+          node --input-type=module -e '
+            import pg from "pg";
+            const pool = new pg.Pool();
+            const required = ["articles", "settings", "deployment_migrations"];
+            const result = await pool.query(
+              "SELECT tablename FROM pg_tables WHERE schemaname = $1 AND tablename = ANY($2::text[])",
+              ["public", required]
+            );
+            await pool.end();
+            const found = new Set(result.rows.map((row) => row.tablename));
+            const missing = required.filter((table) => !found.has(table));
+            if (missing.length) throw new Error(`Schema bootstrap omitted required tables: ${missing.join(", ")}`);
+          '
+        env:
+          PGHOST: 127.0.0.1
+          PGPORT: 5432
+          PGDATABASE: editorial_db
+          PGUSER: postgres
+          PGPASSWORD: ci-postgres-password
+
+      - name: Verify Production Runtime PostgreSQL Readiness
+        run: |
+          runtime_dir="$(mktemp -d)"
+          ln -s "$GITHUB_WORKSPACE/dist" "$runtime_dir/dist"
+          (
+            cd "$runtime_dir"
+            node "$GITHUB_WORKSPACE/dist/server.cjs"
+          ) > "$RUNNER_TEMP/editorial-runtime.log" 2>&1 &
+          app_pid=$!
+          cleanup() {
+            kill "$app_pid" 2>/dev/null || true
+            wait "$app_pid" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+
+          ready=false
+          for _ in $(seq 1 60); do
+            if ! kill -0 "$app_pid" 2>/dev/null; then
+              cat "$RUNNER_TEMP/editorial-runtime.log"
+              exit 1
+            fi
+            if node -e '
+              fetch("http://127.0.0.1:3000/api/health/readiness")
+                .then(async (response) => {
+                  const body = await response.json();
+                  const database = body?.diagnostics?.database;
+                  if (!response.ok || body.status !== "ready" || database?.backend !== "postgresql" || database?.pg?.ok !== true) process.exit(1);
+                })
+                .catch(() => process.exit(1));
+            '; then
+              ready=true
+              break
+            fi
+            sleep 2
+          done
+          if [[ "$ready" != "true" ]]; then
+            cat "$RUNNER_TEMP/editorial-runtime.log"
+            exit 1
+          fi
+        env:
+          NODE_ENV: production
+          POSTGRES_REQUIRED: "true"
+          CREDENTIALS_VAULT_KEY: 0123456789abcdef0123456789abcdef
+          OPENROUTER_API_KEY: sk-or-v1-ci-runtime-health-credential
+          APP_URL: https://editorial-ci.example
+          PGHOST: 127.0.0.1
+          PGPORT: 5432
+          PGDATABASE: editorial_db
+          PGUSER: postgres
+          PGPASSWORD: ci-postgres-password
+
       - name: Run ShellCheck on Installer Script
         uses: ludeeus/action-shellcheck@master
         with:

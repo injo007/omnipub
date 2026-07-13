@@ -7,6 +7,8 @@ const installer = fs.readFileSync(path.join(root, "deployment/install-editorial-
 const dockerignore = fs.readFileSync(path.join(root, ".dockerignore"), "utf8");
 const packageJson = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
 const readme = fs.readFileSync(path.join(root, "README.md"), "utf8");
+const migrationScript = fs.readFileSync(path.join(root, "scripts/migrate-json-to-postgres.ts"), "utf8");
+const ciWorkflow = fs.readFileSync(path.join(root, ".github/workflows/ci.yml"), "utf8");
 
 describe("Ubuntu installer packaging contract", () => {
   it("builds only from the validated staged source directory", () => {
@@ -17,9 +19,12 @@ describe("Ubuntu installer packaging contract", () => {
 
   it("starts PostgreSQL and performs legacy migration before application startup", () => {
     const databaseStart = installer.indexOf('up -d db');
+    const schemaBootstrap = installer.indexOf("initialize_postgres_schema", databaseStart);
     const migration = installer.indexOf("migrate_legacy_database_if_needed", databaseStart);
     const applicationStart = installer.indexOf('up -d --remove-orphans', migration);
     expect(databaseStart).toBeGreaterThan(-1);
+    expect(schemaBootstrap).toBeGreaterThan(databaseStart);
+    expect(migration).toBeGreaterThan(schemaBootstrap);
     expect(migration).toBeGreaterThan(databaseStart);
     expect(applicationStart).toBeGreaterThan(migration);
   });
@@ -27,6 +32,34 @@ describe("Ubuntu installer packaging contract", () => {
   it("bundles the migration executable into the production build", () => {
     expect(packageJson.scripts.build).toContain("dist/migrate-json-to-postgres.cjs");
     expect(installer).toContain("node dist/migrate-json-to-postgres.cjs");
+    expect(migrationScript).toContain('command === "--init-only"');
+    expect(installer).toContain("node dist/migrate-json-to-postgres.cjs --init-only");
+  });
+
+  it("records deployment metadata only after schema and readiness gates", () => {
+    const productionStart = installer.indexOf('Starting Production Stack via Docker Compose');
+    const appHealthGate = installer.indexOf('wait_for_container_health "editorial-production-app" 180', productionStart);
+    const readinessGate = installer.indexOf('application_reports_postgres_ready "editorial-production-app"', appHealthGate);
+    const metadataWrite = installer.indexOf('cat <<EOF > "${BASE_DIR}/metadata/deployment.json"', readinessGate);
+    expect(appHealthGate).toBeGreaterThan(productionStart);
+    expect(readinessGate).toBeGreaterThan(appHealthGate);
+    expect(metadataWrite).toBeGreaterThan(readinessGate);
+    expect(installer).toContain('"schema_initialized": true');
+    expect(installer).toContain('"health_verified": true');
+  });
+
+  it("prints container exit, OOM, restart, and recent-log diagnostics", () => {
+    expect(installer).toContain("function report_container_failure()");
+    expect(installer).toContain("oom_killed={{.State.OOMKilled}}");
+    expect(installer).toContain("docker logs --tail 120");
+  });
+
+  it("runs schema bootstrap and production readiness against PostgreSQL 16 in CI", () => {
+    expect(ciWorkflow).toContain("postgres:16-alpine");
+    expect(ciWorkflow).toContain("node dist/migrate-json-to-postgres.cjs --init-only");
+    expect(ciWorkflow).toContain("Verify Production Runtime PostgreSQL Readiness");
+    expect(ciWorkflow).toContain('TEST_POSTGRES: true');
+    expect(ciWorkflow).toContain('database?.backend !== "postgresql"');
   });
 
   it("keeps credentials, repository metadata, and legacy data out of Docker builds", () => {

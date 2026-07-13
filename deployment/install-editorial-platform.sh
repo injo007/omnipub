@@ -96,8 +96,11 @@ function log() {
         *)       echo -e "${BLUE}[$timestamp] [$severity] ${clean_msg}${NC}" ;;
     esac
 
-    # Structured log append
-    echo "{\"timestamp\":\"$timestamp\",\"severity\":\"$severity\",\"message\":\"$clean_msg\"}" >> "$LOG_FILE"
+    # Structured log append. Container diagnostics commonly contain quotes and
+    # backslashes, so escape them before writing one valid JSON object per line.
+    local json_msg="${clean_msg//\\/\\\\}"
+    json_msg="${json_msg//\"/\\\"}"
+    printf '{"timestamp":"%s","severity":"%s","message":"%s"}\n' "$timestamp" "$severity" "$json_msg" >> "$LOG_FILE"
 }
 
 function handle_interrupt() {
@@ -1245,6 +1248,7 @@ function wait_for_container_health() {
         fi
         if [[ "$status" == "unhealthy" || "$status" == "exited" || "$status" == "dead" ]]; then
             log "ERROR" "Container $container entered terminal state: $status"
+            report_container_failure "$container"
             return 1
         fi
         sleep 2
@@ -1252,6 +1256,60 @@ function wait_for_container_health() {
     done
     log "ERROR" "Timed out waiting for container health: $container"
     return 1
+}
+
+function report_container_failure() {
+    local container="$1"
+    local state_details
+    state_details=$(docker inspect --format 'status={{.State.Status}} exit_code={{.State.ExitCode}} oom_killed={{.State.OOMKilled}} error={{.State.Error}} restart_count={{.RestartCount}}' "$container" 2>/dev/null || echo "container inspection unavailable")
+    log "ERROR" "Container diagnostics for $container: $state_details"
+    log "ERROR" "Recent logs for $container follow (up to 120 lines):"
+    while IFS= read -r container_log; do
+        log "ERROR" "[$container] $container_log"
+    done < <(docker logs --tail 120 "$container" 2>&1 || true)
+}
+
+function initialize_postgres_schema() {
+    local compose_file="$1"
+    local database_container="$2"
+    local environment_name="$3"
+
+    log "INFO" "Initializing the $environment_name PostgreSQL schema before application startup..."
+    local bootstrap_output=""
+    if ! bootstrap_output=$(docker compose -f "$compose_file" run --rm --no-deps -T app node dist/migrate-json-to-postgres.cjs --init-only 2>&1); then
+        while IFS= read -r bootstrap_line; do
+            log "ERROR" "[$environment_name-schema-bootstrap] $bootstrap_line"
+        done <<< "$bootstrap_output"
+        log "ERROR" "The $environment_name PostgreSQL schema bootstrap container failed."
+        report_container_failure "$database_container"
+        exit 5
+    fi
+    while IFS= read -r bootstrap_line; do
+        [[ -n "$bootstrap_line" ]] && log "INFO" "[$environment_name-schema-bootstrap] $bootstrap_line"
+    done <<< "$bootstrap_output"
+
+    local schema_ready
+    schema_ready=$(docker exec "$database_container" psql --username "$PGUSER" --dbname "$PGDATABASE" --tuples-only --no-align \
+        --command "SELECT to_regclass('public.articles') IS NOT NULL AND to_regclass('public.settings') IS NOT NULL AND to_regclass('public.deployment_migrations') IS NOT NULL" 2>/dev/null || echo f)
+    if [[ "$schema_ready" != "t" ]]; then
+        log "ERROR" "The $environment_name PostgreSQL bootstrap command completed without creating the required schema."
+        report_container_failure "$database_container"
+        exit 5
+    fi
+    log "INFO" "$environment_name PostgreSQL schema initialization verified."
+}
+
+function application_reports_postgres_ready() {
+    local container="$1"
+    docker exec "$container" node -e '
+      fetch("http://127.0.0.1:3000/api/health/readiness")
+        .then(async (response) => {
+          const body = await response.json();
+          const database = body?.diagnostics?.database;
+          if (!response.ok || body.status !== "ready" || database?.backend !== "postgresql" || database?.pg?.ok !== true) process.exit(1);
+        })
+        .catch(() => process.exit(1));
+    '
 }
 
 function postgres_has_application_data() {
@@ -1328,12 +1386,15 @@ function deploy_application() {
         log "INFO" "Using the already selected immutable application image."
     fi
 
-    # Start PostgreSQL before the application so legacy import cannot race startup seeding.
+    # Start PostgreSQL and initialize its schema before application startup. This prevents
+    # first-boot crashes from leaving an empty database and an unhealthy restart loop.
     docker compose -f "${BASE_DIR}/compose.production.yml" up -d db
     wait_for_container_health "editorial-production-db" 120
+    initialize_postgres_schema "${BASE_DIR}/compose.production.yml" "editorial-production-db" "production"
     if [[ "$DEPLOY_STAGING" == "true" ]]; then
         docker compose -f "${BASE_DIR}/compose.staging.yml" up -d db
         wait_for_container_health "editorial-staging-db" 120
+        initialize_postgres_schema "${BASE_DIR}/compose.staging.yml" "editorial-staging-db" "staging"
     else
         docker compose -f "${BASE_DIR}/compose.staging.yml" down --remove-orphans 2>/dev/null || true
     fi
@@ -1342,11 +1403,29 @@ function deploy_application() {
     # Production Deploy
     log "INFO" "Starting Production Stack via Docker Compose..."
     docker compose -f "${BASE_DIR}/compose.production.yml" up -d --remove-orphans
+    if ! wait_for_container_health "editorial-production-app" 180; then
+        log "ERROR" "Production application did not become healthy; deployment metadata will not be recorded."
+        exit 5
+    fi
+    if ! application_reports_postgres_ready "editorial-production-app"; then
+        log "ERROR" "Production application did not report PostgreSQL readiness; deployment metadata will not be recorded."
+        report_container_failure "editorial-production-app"
+        exit 5
+    fi
 
     # Staging Deploy
     if [[ "$DEPLOY_STAGING" == "true" ]]; then
         log "INFO" "Starting Staging Stack via Docker Compose..."
         docker compose -f "${BASE_DIR}/compose.staging.yml" up -d --remove-orphans
+        if ! wait_for_container_health "editorial-staging-app" 180; then
+            log "ERROR" "Staging application did not become healthy; deployment metadata will not be recorded."
+            exit 5
+        fi
+        if ! application_reports_postgres_ready "editorial-staging-app"; then
+            log "ERROR" "Staging application did not report PostgreSQL readiness; deployment metadata will not be recorded."
+            report_container_failure "editorial-staging-app"
+            exit 5
+        fi
     else
         log "INFO" "Staging deployment is disabled for the production-only host profile."
     fi
@@ -1367,7 +1446,9 @@ function deploy_application() {
   "production_domain": "${PRODUCTION_DOMAIN}",
   "staging_domain": "${STAGING_DOMAIN}",
   "staging_enabled": ${DEPLOY_STAGING},
-  "legacy_migration": "${LEGACY_MIGRATION_STATUS}"
+  "legacy_migration": "${LEGACY_MIGRATION_STATUS}",
+  "schema_initialized": true,
+  "health_verified": true
 }
 EOF
     chmod 644 "${BASE_DIR}/metadata/deployment.json"
@@ -1381,8 +1462,12 @@ function verify_installation() {
     local passed=true
 
     # 1. Check metadata
-    if [[ -f "${BASE_DIR}/metadata/deployment.json" ]]; then
-        log "INFO" "Deployment metadata is active and readable."
+    if [[ -f "${BASE_DIR}/metadata/deployment.json" ]] && \
+       jq -e '.schema_initialized == true and .health_verified == true' "${BASE_DIR}/metadata/deployment.json" >/dev/null 2>&1; then
+        log "INFO" "Deployment metadata is active and records successful schema and health gates."
+    elif [[ -f "${BASE_DIR}/metadata/deployment.json" ]]; then
+        log "ERROR" "Deployment metadata is incomplete or predates the mandatory schema/readiness gates. Rerun install to complete deployment."
+        passed=false
     else
         log "WARN" "Deployment metadata record not found."
         passed=false
@@ -1403,16 +1488,12 @@ function verify_installation() {
 
     # 3. Readiness must confirm PostgreSQL from inside each application container.
     for container in "${expected_apps[@]}"; do
-        if ! docker exec "$container" node -e '
-          fetch("http://127.0.0.1:3000/api/health/readiness")
-            .then(async (response) => {
-              const body = await response.json();
-              const database = body?.diagnostics?.database;
-              if (!response.ok || body.status !== "ready" || database?.backend !== "postgresql" || database?.pg?.ok !== true) process.exit(1);
-            })
-            .catch(() => process.exit(1));
-        '; then
+        if [[ "$(docker inspect --format '{{.State.Running}}' "$container" 2>/dev/null || echo false)" != "true" ]]; then
+            log "ERROR" "Application container is not running, so readiness cannot be checked: $container"
+            passed=false
+        elif ! application_reports_postgres_ready "$container"; then
             log "ERROR" "Application readiness did not confirm a healthy PostgreSQL backend: $container"
+            report_container_failure "$container"
             passed=false
         fi
     done
