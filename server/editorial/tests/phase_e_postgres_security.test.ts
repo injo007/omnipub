@@ -6,6 +6,10 @@ describe("PostgreSQL persistence security boundaries", () => {
   it("uses a strict collection-to-table allowlist", () => {
     resetInMemoryDocumentStore();
     expect(() => getDocumentStore().collection("publishing_queue")).not.toThrow();
+    expect(() => getDocumentStore().collection("workflow_runs")).not.toThrow();
+    expect(() => getDocumentStore().collection("model_calls")).not.toThrow();
+    expect(() => getDocumentStore().collection("editorial_repair_records")).not.toThrow();
+    expect(() => getDocumentStore().collection("media_assets")).not.toThrow();
     expect(() => getDocumentStore().collection("users; DROP TABLE users")).toThrow("Unsupported database collection");
   });
 

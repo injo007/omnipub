@@ -138,6 +138,24 @@ describe('Phase C - Editorial Quality & Repair', () => {
      expect(res.repairRecord.cycle).toBe(3);
   });
 
+  it('attemptRepair fails closed when no repair provider is available', async () => {
+     const res = await attemptRepair(
+       'trace1',
+       '<p>This draft needs a real repair.</p>',
+       'ORIGINALITY',
+       ['This draft needs a real repair.'],
+       ['Replace the copied passage with an original explanation.'],
+       ['claim_1'],
+       'Natural Style Editor',
+       1
+     );
+
+     expect(res.resolved).toBe(false);
+     expect(res.repairedHtml).toBe('');
+     expect(res.repairRecord.resolved).toBe(false);
+     expect(res.repairRecord.protectedClaimIds).toEqual(['claim_1']);
+  });
+
   it('evaluateEditorialQuality logs structured observability data without sensitive info', () => {
      const originalityData = { passed: true, overallOriginalityScore: 90 };
      const naturalnessData = { passed: true, naturalnessScore: 95, detectedPatterns: [] };

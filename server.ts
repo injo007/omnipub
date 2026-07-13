@@ -18,6 +18,7 @@ import crypto from "crypto";
 import { getPgPool } from "./server/db/postgres";
 import { db as dbService, type LocalDB as DatabaseState } from "./server/db/database";
 import { getDocumentStore } from "./server/db/documentStore";
+import { resolveModelProvider, resolveModelRoute } from "./server/core/models/modelRegistry";
 
 // --- Editorial Core Imports ---
 import { validateEditorialBrief } from "./server/editorial/editorialBriefService";
@@ -1923,6 +1924,21 @@ async function persistRecord(collectionName: string, documentId: string, data: a
   await dbService.upsert(collectionName as keyof DatabaseState, item, persistedItem);
 }
 
+type WorkflowArtifactCollection = "workflow_runs" | "model_calls" | "editorial_repair_records" | "media_assets";
+
+/**
+ * Persists append-style workflow evidence outside the mutable article document.
+ * These records intentionally omit raw prompts, API keys, and article bodies.
+ */
+async function persistWorkflowArtifact(collection: WorkflowArtifactCollection, id: string, data: any): Promise<void> {
+  try {
+    const record = { id, ...cleanUndefined(data) };
+    await getDocumentStore().collection(collection).doc(id).set(record);
+  } catch (err: any) {
+    console.warn(`[WORKFLOW AUDIT] Failed to persist ${collection}/${id}:`, err.message);
+  }
+}
+
 async function removeRecord(collectionName: string, documentId: string): Promise<void> {
   await dbService.remove(collectionName as keyof DatabaseState, documentId);
 }
@@ -2974,29 +2990,32 @@ function readDB(): LocalDB {
         dirty = true;
       }
       
-      // Proactively migrate any active settings to MiniMax-M3 and cohere/north-mini-code:free fallback to respect explicit model preferences
+      // Legacy installations may lack some routing defaults. Fill only missing
+      // values; never overwrite an administrator's selected provider/model at
+      // runtime. Rewriting explicit settings here made the multi-model UI a
+      // cosmetic control rather than a real routing policy.
       const keysToMigrate = [
-        "researchModel", "researchCustomModel",
-        "draftModel", "draftCustomModel",
-        "humanizeModel", "humanizeCustomModel",
-        "seoModel", "seoCustomModel",
-        "originalityModel", "originalityCustomModel",
-        "validationModel", "validationCustomModel",
-        "copilotSynthesisModel", "copilotSynthesisCustomModel",
-        "imageModel", "imageCustomModel",
-        "discoveryModel", "discoveryCustomModel",
-        "nicheDiscoveryModel", "nicheDiscoveryCustomModel"
+        "researchModel",
+        "draftModel",
+        "humanizeModel",
+        "seoModel",
+        "originalityModel",
+        "validationModel",
+        "copilotSynthesisModel",
+        "imageModel",
+        "discoveryModel",
+        "nicheDiscoveryModel"
       ];
       
       keysToMigrate.forEach((key) => {
         const val = cached.settings.modelSettings[key];
-        if (!val || val.includes("gemini") || val.includes("imagen") || val === "custom-openrouter" || val === "openrouter/owl-alpha" || val === "openai/gpt-oss-120b:free") {
+        if (!val) {
           cached.settings.modelSettings[key] = "MiniMax-M3";
           dirty = true;
         }
       });
 
-      if (!cached.settings.modelSettings.globalFallbackModel || cached.settings.modelSettings.globalFallbackModel.includes("gemini") || cached.settings.modelSettings.globalFallbackModel === "openrouter/owl-alpha") {
+      if (!cached.settings.modelSettings.globalFallbackModel) {
         cached.settings.modelSettings.globalFallbackModel = "cohere/north-mini-code:free";
         dirty = true;
       }
@@ -3007,17 +3026,22 @@ function readDB(): LocalDB {
           if (p[plName]) {
             ["research", "draft", "editing", "validation", "seo"].forEach((step) => {
               const current = p[plName][step];
-              if (!current || current.includes("gemini") || current === "openrouter/owl-alpha" || current === "openai/gpt-oss-120b:free") {
+              if (!current) {
                 p[plName][step] = "MiniMax-M3";
                 dirty = true;
               }
             });
           }
         });
-        if (p.emergency && (!p.emergency.fallbackModel || p.emergency.fallbackModel.includes("gemini"))) {
+        if (p.emergency && !p.emergency.fallbackModel) {
           p.emergency.fallbackModel = "cohere/north-mini-code:free";
           dirty = true;
         }
+      }
+
+      if (cached.settings.modelSettings.modelRoutingSchemaVersion !== 1) {
+        cached.settings.modelSettings.modelRoutingSchemaVersion = 1;
+        dirty = true;
       }
     }
     
@@ -3208,26 +3232,7 @@ function resolveProvider(modelId: string): "gemini" | "openrouter" | "minimax" {
   if (!modelId || modelId === "none" || modelId.toLowerCase().includes("none") || modelId === "local" || modelId === "browser-assistant") {
     return "gemini";
   }
-  
-  if (modelId.toLowerCase().startsWith("minimax") || modelId.toLowerCase().includes("abab") || modelId.toLowerCase().includes("minimax")) {
-    return "minimax";
-  }
-  
-  const nativeGeminiPrefixes = [
-    "gemini-",
-    "models/gemini-",
-    "imagen-"
-  ];
-
-  const isNativeGemini = nativeGeminiPrefixes.some(prefix =>
-    modelId.toLowerCase().startsWith(prefix)
-  );
-
-  if (isNativeGemini) {
-    return "gemini";
-  }
-
-  return "openrouter";
+  return resolveModelProvider(modelId);
 }
 
 function getModelForStep(step: string, pipelineName: string, settings: any): string {
@@ -3629,7 +3634,9 @@ export async function runLLMCompletion(params: any): Promise<any> {
     else selectedModel = mSettings.draftCustomModel || "openrouter/free";
   }
 
-  const resolvedProvider = resolveProvider(selectedModel);
+  const selectedRoute = resolveModelRoute(selectedModel);
+  selectedModel = selectedRoute.modelId;
+  const resolvedProvider = selectedRoute.provider;
   let runtimeClient: "GoogleGenAI" | "OpenRouter" | "OpenAI" | "ImageEngine" | "MiniMaxEngine" = "OpenRouter";
   if (resolvedProvider === "gemini") {
     runtimeClient = "GoogleGenAI";
@@ -3886,7 +3893,9 @@ export async function runLLMCompletion(params: any): Promise<any> {
       source = "fallback";
 
       const fallbackTarget = getFallbackModelForAgent(agentKey, saasConfig);
-      const fbProvider = resolveProvider(fallbackTarget);
+      const fallbackRoute = resolveModelRoute(fallbackTarget);
+      const fallbackModelId = fallbackRoute.modelId;
+      const fbProvider = fallbackRoute.provider;
 
       console.warn(`[LLM Fallback 1 Triggered] Primary failed. Transitioning to granular agent fallback: "${fallbackTarget}"...`);
       addNotification("warning", "Primary Failover Engaged", `Agent "${agentName}" primary model failed. Routing to fallback model "${fallbackTarget}".`);
@@ -3910,7 +3919,7 @@ export async function runLLMCompletion(params: any): Promise<any> {
             if (systemInstruction) messages.push({ role: "system", content: systemInstruction });
             messages.push({ role: "user", content: contents });
             const response = await openrouter.chat.completions.create({
-              model: fallbackTarget,
+              model: fallbackModelId,
               messages: messages,
               response_format: jsonMode ? { type: "json_object" } : undefined,
               max_tokens: 8192,
@@ -3923,7 +3932,7 @@ export async function runLLMCompletion(params: any): Promise<any> {
             inputTokens = response.usage?.prompt_tokens || 0;
             outputTokens = response.usage?.completion_tokens || 0;
             if (inputTokens === 0) calculateTokensHeuristic(text);
-            fallbackModelUsed = fallbackTarget;
+            fallbackModelUsed = fallbackModelId;
             success = true;
             addNotification("success", "Playback Stabilized", `Rerouted agent execution stabilized on OpenRouter fallback.`);
           } catch (fbErr: any) {
@@ -3984,27 +3993,16 @@ export async function runLLMCompletion(params: any): Promise<any> {
               if (minimaxSuccess) {
                 // Done!
               } else {
-                // CRITICAL GATE: If this is a non-destructive agent (Editor, Fact-Checker), we can allow pass-through on extreme failure
+                // Critical editorial checks must fail closed. A provider outage is not evidence
+                // that research, originality, safety, or editing has passed.
                 const isNonDestructive = ["naturalStyleEditor", "researchVerification", "qualitySafetyAuditor", "originalityReadabilityValidator"].includes(agentKey);
                 
                 if (isQuota2 && isNonDestructive) {
-                  console.warn(`[PASSIVE FAILOVER] Extreme rate limiting detected. Agent "${agentName}" entering passive pass-through mode to preserve pipeline continuity.`);
-                  addNotification("warning", "Passive Failover", `Global rate limits reached. "${agentName}" skipped to preserve article generation.`);
-                  
-                  // For JSON agents we need to return valid structural data
-                  if (jsonMode) {
-                    if (agentKey === "researchVerification") text = getFallbackResearchVerificationJSON();
-                    else if (agentKey === "qualitySafetyAuditor") text = JSON.stringify({ passed: true, safetyScore: 80, risks: [] });
-                    else if (agentKey === "originalityReadabilityValidator") text = JSON.stringify({ score: 75, suggestions: [] });
-                    else text = JSON.stringify({ status: "skipped" });
-                  } else {
-                    // For the Writer/Editor, we try to extract the original text from the prompt or return a placeholder
-                    // In most cases, the content is in the "contents" string
-                    text = "Manual refinement required due to provider rate limits.";
-                  }
-                  
-                  success = true;
-                  finalStatus = "stabilized_manual";
+                  finalStatus = "failed";
+                  const totalErr = `Critical editorial step "${agentName}" could not be verified because every configured provider was rate limited.`;
+                  console.error(`[LLM Critical Failure] ${totalErr}`);
+                  addNotification("error", "Editorial Verification Unavailable", totalErr);
+                  throw new Error(totalErr);
                 } else {
                   finalStatus = "failed";
                   const totalErr = `Primary ${selectedModel}, fallback ${fallbackTarget} AND secondary fallback ${nextFallback} all failed. Last error: ${fbErr2.message || fbErr2}`;
@@ -4017,7 +4015,7 @@ export async function runLLMCompletion(params: any): Promise<any> {
           }
       } else {
         try {
-          const geminiModel = (fbProvider === "gemini" && fallbackTarget) ? fallbackTarget : "gemini-2.5-flash";
+          const geminiModel = (fbProvider === "gemini" && fallbackModelId) ? fallbackModelId : "gemini-2.5-flash";
           const fbResult = await runSingleGeminiInference(geminiModel, contents, systemInstruction, jsonMode, responseSchema, geminiApiKey);
           text = fbResult.text;
           inputTokens = fbResult.inputTokens;
@@ -4083,24 +4081,16 @@ export async function runLLMCompletion(params: any): Promise<any> {
             if (minimaxSuccess) {
               // Done!
             } else {
-              // CRITICAL GATE: If this is a non-destructive agent (Editor, Fact-Checker), we can allow pass-through on extreme failure
+              // Critical editorial checks must fail closed. A provider outage is not evidence
+              // that research, originality, safety, or editing has passed.
               const isNonDestructive = ["naturalStyleEditor", "researchVerification", "qualitySafetyAuditor", "originalityReadabilityValidator"].includes(agentKey);
               
               if (isQuota2 && isNonDestructive) {
-                console.warn(`[PASSIVE FAILOVER] Extreme rate limiting detected in Gemini branch. Agent "${agentName}" entering passive pass-through mode.`);
-                addNotification("warning", "Passive Failover", `Global rate limits reached. "${agentName}" skipped to preserve article generation.`);
-                
-                if (jsonMode) {
-                  if (agentKey === "researchVerification") text = getFallbackResearchVerificationJSON();
-                  else if (agentKey === "qualitySafetyAuditor") text = JSON.stringify({ passed: true, safetyScore: 80, risks: [] });
-                  else if (agentKey === "originalityReadabilityValidator") text = JSON.stringify({ score: 75, suggestions: [] });
-                  else text = JSON.stringify({ status: "skipped" });
-                } else {
-                  text = "Manual refinement required due to provider rate limits.";
-                }
-                
-                success = true;
-                finalStatus = "stabilized_manual";
+                finalStatus = "failed";
+                const totalErr = `Critical editorial step "${agentName}" could not be verified because every configured provider was rate limited.`;
+                console.error(`[LLM Critical Failure] ${totalErr}`);
+                addNotification("error", "Editorial Verification Unavailable", totalErr);
+                throw new Error(totalErr);
               } else {
                 finalStatus = "failed";
                 const totalErr = `Primary ${selectedModel}, fallback ${fallbackTarget} AND secondary fallback ${nextFallback} all failed. Last error: ${fbErr2.message || fbErr2}`;
@@ -8482,6 +8472,15 @@ appRouter.post("/api/articles/create", async (req, res) => {
     pipelineStates = recordStateTransition(pipelineStates, articleTraceId, "DISCOVERED", "orchestrator", "none", "Article selected for compilation");
   } catch(e) {}
 
+  void persistWorkflowArtifact("workflow_runs", taskId, {
+    workflowRunId: taskId,
+    articleTraceId,
+    status: "RUNNING",
+    niche,
+    sourceTitle,
+    startedAt: new Date().toISOString(),
+  });
+
   res.setHeader("Content-Type", "text/plain; charset=utf-8");
   res.setHeader("Cache-Control", "no-cache");
   res.setHeader("Connection", "keep-alive");
@@ -8513,6 +8512,15 @@ appRouter.post("/api/articles/create", async (req, res) => {
     };
     db.articles.push(failedArticle);
     writeDB(db);
+    void persistWorkflowArtifact("workflow_runs", taskId, {
+      workflowRunId: taskId,
+      articleTraceId,
+      articleId: failedArticle.id,
+      status: "NEEDS_MANUAL_REVIEW",
+      terminalState: failedState,
+      failureReason: reason,
+      completedAt: new Date().toISOString(),
+    });
     res.write(JSON.stringify({ taskId, step: "failed", log: additionalLogMsg || reason }) + "\n");
     res.end();
   };
@@ -8578,6 +8586,27 @@ appRouter.post("/api/articles/create", async (req, res) => {
       }
     };
     workflowLogs.push(logItem);
+    if (stepModel || executionMetadata?.modelRequested) {
+      const modelCallId = `${taskId}-model-${workflowLogs.length}`;
+      void persistWorkflowArtifact("model_calls", modelCallId, {
+        modelCallId,
+        workflowRunId: taskId,
+        articleTraceId,
+        step,
+        agentName,
+        status,
+        modelRequested: logItem.modelRequested,
+        modelActuallyUsed: logItem.modelActuallyUsed,
+        providerResolved: logItem.providerResolved,
+        fallbackHappened: logItem.fallbackHappened,
+        fallbackModelUsed: logItem.fallbackModelUsed,
+        inputTokens,
+        outputTokens,
+        estimatedCost: totalCost,
+        latencyMs,
+        createdAt: logItem.timestamp,
+      });
+    }
     res.write(JSON.stringify({ taskId, step, log: `${agentName}: ${output.slice(0, 100)}...`, detail: logItem }) + "\n");
   };
 
@@ -9198,67 +9227,13 @@ appRouter.post("/api/articles/create", async (req, res) => {
     }
 
     if (!firstDraft || firstDraft.startsWith("Failed")) {
-      if (writer.niche === "hollywood") {
-        firstDraft = `The latest updates regarding "${sourceTitle}" are drawing significant interest and discussion across the community. As details emerge concerning "${focusKeyword}", observers and analysts are taking a closer look at the key dimensions of this event.
-
-## Key Context and Background
-A thorough analysis of the circumstances reveals several important factors. To understand how these elements align with the official coverage, it is helpful to examine the original reports.
-
-We will continue to monitor the situation and share notable developments as they arise.
-
-## Perspectives on ${focusKeyword}
-As discussions continue, different perspectives are helping to clarify the overall impact of this news. For full details, please refer to the primary sources.
-
-<img src="https://images.unsplash.com/photo-1517604931442-7e0c8ed2963c?w=1024&auto=format&fit=crop&q=80" alt="${focusKeyword} overview discussion" />`;
-      } else if (writer.niche === "sports") {
-        firstDraft = `The latest developments concerning "${sourceTitle}" are being closely monitored. As updates unfold regarding "${focusKeyword}", players, analysts, and fans alike are evaluating the immediate and long-term implications.
-
-## Detailed Coverage and Analysis
-Looking closely at the official accounts surrounding "${focusKeyword}", several core factors are at play. Understanding these details requires a careful examination of the reports and historical data.
-
-We will continue to provide updates as more certified details become available.
-
-## Key Takeaways for ${focusKeyword}
-A closer look at the official timeline helps shed light on how this situation is being managed. For the official publications, please check the primary sources.
-
-<img src="https://images.unsplash.com/photo-1508098682722-e99c43a406b2?w=1024&auto=format&fit=crop&q=80" alt="${focusKeyword} event coverage" />`;
-      } else if (writer.niche === "traveling") {
-        firstDraft = `The news surrounding "${sourceTitle}" is attracting notable interest. As discussions surrounding "${focusKeyword}" continue to develop, we are compiling the essential facts and key highlights for our readers.
-
-## Core Context and Highlights
-To understand the background of "${focusKeyword}", it is valuable to look beyond the surface details and review the structured timelines provided in the official reports.
-
-We will follow this development and keep you updated on further verified announcements.
-
-## Planning and Perspectives
-For comprehensive context and the complete sequence of events, please consult the verified publications.
-
-<img src="https://images.unsplash.com/photo-1488646953014-85cb44e25828?w=1024&auto=format&fit=crop&q=80" alt="${focusKeyword} documentation" />`;
-      } else {
-        firstDraft = `The recent announcements surrounding "${sourceTitle}" are being analyzed. As discussions surrounding "${focusKeyword}" continue to expand, observers are focusing on the main aspects of this update.
-
-## Context and Core Details
-A detailed review of the verified timeline regarding "${focusKeyword}" reveals critical points of interest. To understand the full scope of this announcement, please refer to the official documentation.
-
-We will continue tracking this topic and present updates as more verified news is published.
-
-## Summary of ${focusKeyword}
-For a comprehensive overview of the situation and the detailed timeline, consult the primary publications.
-
-<img src="https://images.unsplash.com/photo-1488590528505-98d2b5aba04b?w=1024&auto=format&fit=crop&q=80" alt="${focusKeyword} analysis layout" />`;
-      }
+      const reason = `DRAFT_UNAVAILABLE: ${draftingError || "The drafting provider returned no usable article."}`;
+      addLog("drafting", "Brand Voice Writer", "failed", `${reason} The article has been held for manual review; no generic template was generated.`, undefined, writerPromptObj.compiledPrompt, dfModel, dfMeta);
+      abortAndPersist(reason, "NEEDS_MANUAL_REVIEW", reason, evidenceLedger);
+      return;
     }
 
-    if (draftingError) {
-      const isQuota = draftingError.includes("quota") || draftingError.includes("429") || draftingError.includes("RESOURCE_EXHAUSTED");
-      const errModelName = dfModel.includes("custom-openrouter") ? "Custom OpenRouter" : (dfModel.includes("custom-minimax") ? "Custom MiniMax" : dfModel);
-      const errDetail = isQuota
-        ? `⚠️ ${errModelName} Quota Limit Exceeded (429 - Resource Exhausted). Utilizing Traditional Template.`
-        : `⚠️ Drafting Error: ${draftingError}. Utilizing Traditional Template.`;
-      addLog("drafting", `${writer.name} Persona [Fallback Mode]`, "success", errDetail, firstDraft, writerPromptObj.compiledPrompt, dfModel);
-    } else {
-      addLog("drafting", `${writer.name} Persona [using ${dfModel}]`, "success", "Polished structural first draft written.", firstDraft, writerPromptObj.compiledPrompt, dfModel, dfMeta);
-    }
+    addLog("drafting", `${writer.name} Persona [using ${dfModel}]`, "success", "Polished structural first draft written.", firstDraft, writerPromptObj.compiledPrompt, dfModel, dfMeta);
 
     // -------------------------------------------------------------
     // AGENT 3: Natural Style Editor
@@ -9333,22 +9308,18 @@ For a comprehensive overview of the situation and the detailed timeline, consult
         });
       }
       editError = err?.message || err?.toString() || "Unknown API Error";
-      editedDraft = firstDraft
-        .replace(/\b(First of all|Furthermore|More over|More over|In conclusion|It's a testament to|Delve deep into|Look no further)\b/gi, "")
-        .trim();
     }
     
     if (editError) {
-      const isQuota = editError.includes("quota") || editError.includes("429") || editError.includes("RESOURCE_EXHAUSTED");
-      const errDetail = isQuota
-        ? "⚠️ Gemini Editorial Refinement Quota Limit Exceeded (429 - Resource Exhausted). Fluid standard regex cleanup run."
-        : `⚠️ Copyediting Error: ${editError}. Fluid standard regex cleanup run.`;
-      try { pipelineStates = recordStateTransition(pipelineStates, articleTraceId, "NATURAL_EDIT_FAILED", "Natural Style Editor", hmModel, "Editing failed"); } catch(e){}
-      addLog("editing", `Natural Style Editor [Fallback Mode]`, "success", errDetail, editedDraft, editingPromptObj.compiledPrompt, hmModel, hmMeta);
-    } else {
-      try { pipelineStates = recordStateTransition(pipelineStates, articleTraceId, "NATURAL_EDITED", "Natural Style Editor", hmModel, "Editing complete"); } catch(e){}
-      addLog("editing", `Natural Style Editor`, "success", "Purged robotic vocabulary, normalized pacing, and certified reader-friendly editorial style.", editedDraft, editingPromptObj.compiledPrompt, hmModel, hmMeta);
+      const reason = `NATURAL_EDIT_UNAVAILABLE: ${editError}`;
+      try { pipelineStates = recordStateTransition(pipelineStates, articleTraceId, "NEEDS_MANUAL_REVIEW", "Natural Style Editor", hmModel, reason); } catch(e){}
+      addLog("editing", "Natural Style Editor", "failed", `${reason} The article has been held for editorial review; regex cleanup is not a substitute for a completed edit.`, undefined, editingPromptObj.compiledPrompt, hmModel, hmMeta);
+      abortAndPersist(reason, "NEEDS_MANUAL_REVIEW", reason, evidenceLedger);
+      return;
     }
+
+    try { pipelineStates = recordStateTransition(pipelineStates, articleTraceId, "NATURAL_EDITED", "Natural Style Editor", hmModel, "Editing complete"); } catch(e){}
+    addLog("editing", "Natural Style Editor", "success", "Completed editorial refinement and preserved verified claim boundaries.", editedDraft, editingPromptObj.compiledPrompt, hmModel, hmMeta);
 
     // -------------------------------------------------------------
     // FACTUAL GATE CHECKS (Phase B implementation)
@@ -9412,42 +9383,59 @@ For a comprehensive overview of the situation and the detailed timeline, consult
            true  // noFabrication
         );
         
-        let needsRepair = false;
-        let repairNotes = [];
+        let needsRepair = !finalQuality.passed;
+        const repairNotes: string[] = [...finalQuality.repairRecommendations, ...finalQuality.blockingFailures];
+        const failingPassages: string[] = [
+          ...(originalityData.failingPassages || []).map((passage: any) => passage.draftPassage || passage.paragraphText || passage.sourcePassage || "").filter(Boolean),
+          ...(naturalnessData.failingPassages || []),
+          ...(writerVoiceData.detectedDeviations || [])
+        ];
         
-        if (originalityData.overallOriginalityScore < 75) { needsRepair = true; repairNotes.push(`Originality is only ${originalityData.overallOriginalityScore}%, target is >75%.`); }
-        if (naturalnessData.aiMarkersDetected > 5) { needsRepair = true; repairNotes.push(`Found ${naturalnessData.aiMarkersDetected} AI markers, need <=5.`); }
-        if (writerVoiceData.voiceConsistencyScore < 80) { needsRepair = true; repairNotes.push(`Writer voice consistency ${writerVoiceData.voiceConsistencyScore}%, target >80%.`); }
+        if (originalityData.overallOriginalityScore < 75) repairNotes.push(`Originality is only ${originalityData.overallOriginalityScore}%, target is at least 75%.`);
+        if (naturalnessData.aiMarkersDetected > 5) repairNotes.push(`Found ${naturalnessData.aiMarkersDetected} formulaic markers; target is five or fewer.`);
+        if (writerVoiceData.voiceConsistencyScore < 80) repairNotes.push(`Writer voice consistency is ${writerVoiceData.voiceConsistencyScore}%, target is at least 80%.`);
+        needsRepair = needsRepair || repairNotes.length > 0;
         
         if (needsRepair && repairAttempts < maxRepairs) {
             repairAttempts++;
             addLog("editing", "Targeted Repair Loop", "running", `Initiating repair round ${repairAttempts} for: ${repairNotes.join("; ")}`);
             
             try {
+                const preRepairHtml = currentHtml;
                 const repairResult = await attemptRepair(
                     articleTraceId,
                     currentHtml,
                     "General compliance repair",
-                    [], // failing passages
+                    failingPassages,
                     repairNotes, // instructions
                     claimsUsed, // protected claim IDs
                     "Lead Quality & Safety Compliance Inspector",
                     repairAttempts
                 );
-                currentHtml = repairResult.repairedHtml;
                 repairRecords.push(repairResult.repairRecord);
+                void persistWorkflowArtifact("editorial_repair_records", repairResult.repairRecord.repairId, {
+                  ...repairResult.repairRecord,
+                  workflowRunId: taskId,
+                });
+
+                if (!repairResult.resolved || !repairResult.repairedHtml.trim()) {
+                    addLog("editing", "Targeted Repair Loop", "failed", "Repair provider returned no material, usable revision. Article will require manual review.");
+                    break;
+                }
+
+                currentHtml = repairResult.repairedHtml;
                 
                 // Re-verify Claims
                 const repairClaimCheck = validateDraftClaimsAgainstLedger(currentHtml, claimsUsed, evidenceLedger);
                 if (!repairClaimCheck.passed) {
-                    addLog("editing", `Factual Safety Gate (Repair Loop)`, "warn", "Repair introduced unsupported claims. Reverting to pre-repair version.");
-                    currentHtml = editedDraft; // Revert
+                    addLog("editing", `Factual Safety Gate (Repair Loop)`, "failed", "Repair introduced unsupported claims. Article will require manual review.");
+                    currentHtml = preRepairHtml;
                     break;
                 }
                 
                 await createVersion(articleTraceId, `Repaired Draft v${repairAttempts}`, currentHtml, "Editorial Repair Loop", hmModel, hmModel);
             } catch(e) {
-                addLog("editing", `Targeted Repair Loop`, "warn", "Repair attempt failed. Continuing with existing draft.");
+                addLog("editing", `Targeted Repair Loop`, "failed", "Repair attempt failed. Article will require manual review.");
                 break;
             }
         } else {
@@ -9572,36 +9560,13 @@ For a comprehensive overview of the situation and the detailed timeline, consult
     const imgModel = getModelForAgent("visualMediaDirector", saasConfig, pipeline);
     let finalImageUrl = "";
     let imageSource = "";
+    let mediaReviewRequired = false;
     
-    // Attempt original image crawl first unless AI generated header image is preferred
-    const aiImagePreferred = saasConfig.modelSettings?.aiImagePreferred ?? true;
-    let crawledImage = null;
-    
-    if (aiImagePreferred) {
-      addLog("image", "Visual Media Director", "running", "AI Generated Header Image option is Active. Bypassing crawl to coordinate original illustration.");
-    } else {
-      addLog("image", "Visual Media Director", "running", "Checking if original article image can be recycled...");
-      crawledImage = await crawlOriginalArticleImage(sourceUrl, niche);
-    }
-    
-    if (crawledImage) {
-      finalImageUrl = crawledImage;
-      imageSource = "Original Article Image";
-      addLog("image", "Visual Media Director", "success", `No AI prompt used because original article image was recycled.`, undefined, undefined, imgModel, {
-        modelRequested: imgModel,
-        modelActuallyUsed: "Static Recycled",
-        providerResolved: "local",
-        runtimeClientUsed: "Static",
-        fallbackEnabled: false,
-        fallbackHappened: false,
-        aiModelUsed: false,
-        selectedImageModel: "sourceful/riverflow-v2.5-fast:free",
-        latencyMs: 150,
-        actualCost: 0
-      });
-      addLog("image", "Orchestrator Media Render", "success", "Successfully rendered visual via Original Article Image!", undefined, undefined, imgModel);
-    } else {
-      addLog("image", `Visual Media Director [using ${imgModel}]`, "running", "Original article image not available. Compiling description prompt...");
+    // Source-site images are never reused without a recorded license and rights
+    // audit. This workflow currently has no asset-rights repository, so it only
+    // produces original generated media or explicit review placeholders.
+    {
+      addLog("image", `Visual Media Director [using ${imgModel}]`, "running", "Compiling an original, brand-safe visual brief. Source-site images are not reused.");
       
       const imagePromptModel = saasConfig.modelSettings.researchModel || "gemini-2.5-flash";
       let imagePrompt = `Dynamic and high-contrast professional blog header styled for niche webpage, theme ${niche}, subject related to "${sourceTitle}"`;
@@ -9673,14 +9638,16 @@ For a comprehensive overview of the situation and the detailed timeline, consult
           imageSource = generated.source;
           
           if (generated.isFallback) {
-            addLog("image", "Orchestrator Media Render", "error", `All targeted provider pipelines failed: ${generated.errorLogs?.join(" | ") || "Unknown quota error"}. Falling back to default thematic asset.`);
+            mediaReviewRequired = true;
+            addLog("image", "Orchestrator Media Render", "failed", `All targeted provider pipelines failed: ${generated.errorLogs?.join(" | ") || "Unknown quota error"}. The backup asset is held for media review and cannot auto-publish.`);
           } else {
             addLog("image", "Orchestrator Media Render", "success", `Successfully rendered visual via ${imageSource}!`);
           }
         } catch (imgErr: any) {
-          finalImageUrl = getDeterministicBackupImage(imagePrompt, niche);
-          imageSource = "Local Deterministic Fallback";
-          addLog("image", "Orchestrator Media Render", "error", `Render defaulted to pre-seeded backup image block. Error: ${imgErr.message || imgErr}`);
+          finalImageUrl = "";
+          imageSource = "Media generation unavailable";
+          mediaReviewRequired = true;
+          addLog("image", "Orchestrator Media Render", "failed", `No approved media was produced. The article is held for media review. Error: ${imgErr.message || imgErr}`);
         }
       }
     }
@@ -9729,9 +9696,9 @@ For a comprehensive overview of the situation and the detailed timeline, consult
                 addLog("image", "Visual Media Director", "success", `Replaced inline visual slot ${i + 1} with generated asset url.`);
               }
             } catch (err: any) {
-              const fallbackUrl = getDeterministicBackupImage(item.altText, niche);
-              editedDraft = editedDraft.replace(item.originalMatch, `![${item.altText}](${fallbackUrl})`);
-              addLog("image", "Visual Media Director", "warning", `Failed generating inline image ${i + 1}, using background assets. Error: ${err.message || err}`);
+              mediaReviewRequired = true;
+              editedDraft = editedDraft.replace(item.originalMatch, `**[Visual review required: ${item.altText}]**`);
+              addLog("image", "Visual Media Director", "failed", `Failed generating inline image ${i + 1}; no unverified backup was inserted. Error: ${err.message || err}`);
             }
           } else {
             editedDraft = editedDraft.replace(item.originalMatch, `**[Visual Slot: ${item.altText}]**`);
@@ -9745,6 +9712,29 @@ For a comprehensive overview of the situation and the detailed timeline, consult
           addLog("image", "Visual Media Director", "success", `Stripped inline graphics tag ${i + 1} as requested.`);
         }
       }
+    }
+
+    if (mediaReviewRequired) {
+      finalEditorialStatus = "Needs Media Review";
+      finalArticleStatus = "manual_review";
+      addLog("validation", "Image Safety Gate", "warn", "Media review is required before publishing because an approved original visual was not available.");
+    }
+
+    if (finalImageUrl && !finalImageUrl.startsWith("#prompt-only:")) {
+      const mediaAssetId = `${taskId}-header-image`;
+      void persistWorkflowArtifact("media_assets", mediaAssetId, {
+        mediaAssetId,
+        workflowRunId: taskId,
+        articleTraceId,
+        assetRole: "header",
+        providerModel: imgModel,
+        provider: resolveProvider(imgModel),
+        source: imageSource,
+        requiresManualReview: mediaReviewRequired,
+        // Store a stable reference fingerprint, never the base64 image payload.
+        assetFingerprint: crypto.createHash("sha256").update(finalImageUrl).digest("hex"),
+        createdAt: new Date().toISOString(),
+      });
     }
 
     // Create the usage proof object
@@ -9812,6 +9802,7 @@ For a comprehensive overview of the situation and the detailed timeline, consult
         writerAssignment: { writerId: writer.id, name: writer.name, voiceStyle: writer.voiceStyle },
         claimsUsed,
         validationResults: { adSensePassed: passedCompliance, safetyPassed: passedCompliance, violations: finalQuality?.blockingFailures || [], fabricatedCheck, timeSensitiveCheck },
+        repairRecords,
         pipelineStates: pipelineStates[pipelineStates.length - 1]?.newState || "NONE",
         pipelineStateTransitions: pipelineStates
       }
@@ -9897,6 +9888,16 @@ For a comprehensive overview of the situation and the detailed timeline, consult
     });
     
     writeDB(db);
+    void persistWorkflowArtifact("workflow_runs", taskId, {
+      workflowRunId: taskId,
+      articleTraceId,
+      articleId: newArticle.id,
+      status: finalArticleStatus === "manual_review" ? "NEEDS_MANUAL_REVIEW" : "COMPLETED",
+      terminalState: newArticle.pipelineRecords.pipelineStates,
+      editorialStatus: finalEditorialStatus,
+      modelUsage: modelUsageProof,
+      completedAt: new Date().toISOString(),
+    });
     addNotification("success", "Article editorial refinement draft ready", `Draft "${newArticle.title}" is ready and verified (Editorial Naturalness Score: ${newArticle.seo?.humanScore || 95}%).`);
 
     res.write(JSON.stringify({ taskId, step: "completed", articleId: newArticle.id, log: "Article successfully queued as Original plagiarised-clean draft!" }) + "\n");
@@ -9936,6 +9937,14 @@ For a comprehensive overview of the situation and the detailed timeline, consult
       console.error("Failed to save error logs to db", dbErr);
     }
 
+    void persistWorkflowArtifact("workflow_runs", taskId, {
+      workflowRunId: taskId,
+      articleTraceId,
+      status: "FAILED",
+      terminalState: pipelineStates[pipelineStates.length - 1]?.newState || "TECHNICAL_FAILURE",
+      failureReason: err.message || String(err),
+      completedAt: new Date().toISOString(),
+    });
     addNotification("error", "Editorial Orchestrator Crash", `Editorial process failed: ${err.message || err}`);
     res.write(JSON.stringify({ taskId, step: "failed", log: "Process terminated unexpectedly." }) + "\n");
     res.end();

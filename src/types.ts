@@ -237,6 +237,8 @@ export interface WordPressConfig {
 }
 
 export interface ModelSettings {
+  /** Internal one-time defaults migration marker; explicit model choices are never overwritten. */
+  modelRoutingSchemaVersion?: number;
   promptAuditEnabled?: boolean;
   geminiApiKey: string;
   openaiApiKey: string;

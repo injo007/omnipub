@@ -19,6 +19,10 @@ const COLLECTION_TABLES = {
   phase_d_packages: "phase_d_packages",
   phase_d_audits: "phase_d_audits",
   publishing_queue: "publishing_queue",
+  workflow_runs: "workflow_runs",
+  model_calls: "model_calls",
+  editorial_repair_records: "editorial_repair_records",
+  media_assets: "media_assets",
 } as const;
 
 type CollectionName = keyof typeof COLLECTION_TABLES;

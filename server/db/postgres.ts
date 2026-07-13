@@ -33,6 +33,10 @@ const ALLOWED_TABLES = new Set([
   "publishing_queue",
   "phase_d_audits",
   "deployment_migrations",
+  "workflow_runs",
+  "model_calls",
+  "editorial_repair_records",
+  "media_assets",
 ]);
 
 function assertAllowedTable(table: string): void {
@@ -252,8 +256,18 @@ export async function initSchema(): Promise<void> {
       )
     `);
 
-    // Transactional editorial packages, queue jobs, and immutable audit events.
-    for (const table of ["phase_d_packages", "publishing_queue", "phase_d_audits"]) {
+    // Transactional editorial packages, queue jobs, and immutable workflow
+    // audit records. They retain JSONB flexibility while providing durable,
+    // queryable records during the repository-by-repository migration.
+    for (const table of [
+      "phase_d_packages",
+      "publishing_queue",
+      "phase_d_audits",
+      "workflow_runs",
+      "model_calls",
+      "editorial_repair_records",
+      "media_assets",
+    ]) {
       await client.query(`
         CREATE TABLE IF NOT EXISTS ${table} (
           id VARCHAR(255) PRIMARY KEY,
@@ -271,6 +285,22 @@ export async function initSchema(): Promise<void> {
       CREATE UNIQUE INDEX IF NOT EXISTS idx_phase_d_packages_idempotency
       ON phase_d_packages ((data->>'idempotencyKey'))
       WHERE data ? 'idempotencyKey'
+    `);
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_workflow_runs_trace_created
+      ON workflow_runs ((data->>'articleTraceId'), created_at DESC)
+    `);
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_model_calls_workflow_created
+      ON model_calls ((data->>'workflowRunId'), created_at DESC)
+    `);
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_editorial_repairs_trace_created
+      ON editorial_repair_records ((data->>'articleTraceId'), created_at DESC)
+    `);
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_media_assets_article_created
+      ON media_assets ((data->>'articleTraceId'), created_at DESC)
     `);
 
     await client.query(`
