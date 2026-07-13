@@ -1,4 +1,5 @@
 import path from "path";
+import crypto from "crypto";
 import dotenv from "dotenv";
 import { checkHealth, closePool, getPool, initSchema, migrateFromJsonFile } from "../server/db/postgres";
 
@@ -8,10 +9,28 @@ const command = process.argv[2] || "db.json";
 const initializeOnly = command === "--init-only";
 const sourcePath = initializeOnly ? "" : path.resolve(command);
 
+function connectionDiagnostics(): string {
+  const password = process.env.PGPASSWORD || "";
+  const diagnosticSalt = process.env.PG_DIAGNOSTIC_SALT || "";
+  const fingerprint = diagnosticSalt
+    ? crypto.createHash("sha256").update(`${diagnosticSalt}:${password}`).digest("hex").slice(0, 12)
+    : "not-requested";
+  return [
+    `host=${process.env.PGHOST || "localhost"}`,
+    `port=${process.env.PGPORT || "5432"}`,
+    `database=${process.env.PGDATABASE || "editorial_db"}`,
+    `user=${process.env.PGUSER || "postgres"}`,
+    `password_bytes=${Buffer.byteLength(password)}`,
+    `password_fingerprint=${fingerprint}`,
+  ].join(" ");
+}
+
 async function main(): Promise<void> {
   if (!process.env.PGPASSWORD) {
     throw new Error("PGPASSWORD is required. PostgreSQL migration cannot run in fallback mode.");
   }
+
+  console.log(`[PG Migration] Connection configuration: ${connectionDiagnostics()}`);
 
   await initSchema();
   const health = await checkHealth();
@@ -40,6 +59,7 @@ main()
   .then(() => closePool())
   .catch(async (error) => {
     console.error(`[PG Migration] ${error.message}`);
+    console.error(`[PG Migration] Failed connection configuration: ${connectionDiagnostics()}`);
     await closePool();
     process.exitCode = 1;
   });

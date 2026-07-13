@@ -1309,13 +1309,21 @@ function reconcile_managed_postgres_credentials() {
     local container="$1"
     local environment_name="$2"
 
+    local authenticated=false
     if docker exec --env "PGPASSWORD=$PGPASSWORD" "$container" \
         psql --host 127.0.0.1 --username postgres --dbname editorial_db --tuples-only --no-align --command "SELECT 1" >/dev/null 2>&1; then
-        log "INFO" "$environment_name PostgreSQL managed-role authentication verified."
-        return
+        authenticated=true
+        if [[ -f "${BASE_DIR}/metadata/deployment.json" ]] && \
+           jq -e '.health_verified == true' "${BASE_DIR}/metadata/deployment.json" >/dev/null 2>&1; then
+            log "INFO" "$environment_name PostgreSQL managed-role authentication verified."
+            return
+        fi
+        log "INFO" "$environment_name PostgreSQL authentication works, but deployment is incomplete; reapplying the root-only managed password before bootstrap."
     fi
 
-    log "WARN" "$environment_name PostgreSQL credentials do not match the persistent managed volume. Reconciling the private postgres role with the root-only installer configuration."
+    if [[ "$authenticated" != "true" ]]; then
+        log "WARN" "$environment_name PostgreSQL credentials do not match the persistent managed volume. Reconciling the private postgres role with the root-only installer configuration."
+    fi
     if ! docker exec "$container" psql --username postgres --dbname postgres --tuples-only --no-align --command "SELECT 1" >/dev/null 2>&1; then
         log "ERROR" "Cannot access the managed postgres administrator role through the container-local socket. The volume may have been initialized outside this installer; no role or data was changed."
         report_container_failure "$container"
@@ -1363,6 +1371,11 @@ function initialize_postgres_schema() {
     local environment_name="$3"
 
     log "INFO" "Initializing the $environment_name PostgreSQL schema before application startup..."
+    local diagnostic_salt
+    local password_fingerprint
+    diagnostic_salt=$(openssl rand -hex 16)
+    password_fingerprint=$(printf '%s' "${diagnostic_salt}:${PGPASSWORD}" | sha256sum | awk '{print substr($1, 1, 12)}')
+    log "INFO" "$environment_name schema bootstrap connection: host=$PGHOST port=$PGPORT database=$PGDATABASE user=$PGUSER password_bytes=${#PGPASSWORD} password_fingerprint=$password_fingerprint"
     local bootstrap_output=""
     if ! bootstrap_output=$(docker compose -f "$compose_file" run --rm --no-deps -T \
         --env "PGHOST=$PGHOST" \
@@ -1370,6 +1383,7 @@ function initialize_postgres_schema() {
         --env "PGDATABASE=$PGDATABASE" \
         --env "PGUSER=$PGUSER" \
         --env "PGPASSWORD=$PGPASSWORD" \
+        --env "PG_DIAGNOSTIC_SALT=$diagnostic_salt" \
         app node dist/migrate-json-to-postgres.cjs --init-only 2>&1); then
         while IFS= read -r bootstrap_line; do
             log "ERROR" "[$environment_name-schema-bootstrap] $bootstrap_line"

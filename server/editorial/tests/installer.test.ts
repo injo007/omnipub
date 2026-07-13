@@ -48,6 +48,8 @@ describe("Ubuntu installer packaging contract", () => {
     expect(installer).toContain("will be synchronized with the private managed PostgreSQL role");
     expect(installer).toContain("psql --host 127.0.0.1 --username postgres --dbname editorial_db");
     expect(installer).toContain('--env "PGPASSWORD=$PGPASSWORD"');
+    expect(installer).toContain('--env "PG_DIAGNOSTIC_SALT=$diagnostic_salt"');
+    expect(installer).toContain("password_fingerprint=$password_fingerprint");
     expect(installer).toContain('PGPASSWORD: "${PGPASSWORD}"');
     expect(productionCompose).toContain('$${POSTGRES_PASSWORD}');
     expect(productionCompose).toContain("--command 'SELECT 1'");
@@ -59,6 +61,8 @@ describe("Ubuntu installer packaging contract", () => {
     expect(installer).toContain("node dist/migrate-json-to-postgres.cjs");
     expect(migrationScript).toContain('command === "--init-only"');
     expect(installer).toContain("node dist/migrate-json-to-postgres.cjs --init-only");
+    expect(migrationScript).toContain("PG_DIAGNOSTIC_SALT");
+    expect(migrationScript).toContain("password_fingerprint=");
   });
 
   it("records deployment metadata only after schema and readiness gates", () => {
