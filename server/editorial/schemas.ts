@@ -130,6 +130,8 @@ export const DraftingOutputSchema = z.object({
   articleTraceId: z.string(),
   title: z.string(),
   articleHtml: z.string(),
+  contentFormat: z.string().optional(),
+  structureManifest: z.array(z.string()).optional(),
   claimsUsed: z.array(z.string()),
   unresolvedQuestions: z.array(z.string()),
   researchRequests: z.array(z.string())

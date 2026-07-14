@@ -35,6 +35,7 @@ import { createVersion } from "./server/editorial/articleVersionService";
 import { evaluateEditorialQuality } from "./server/editorial/editorialQualityService";
 import { assessMediaAsset, type MediaAssetAssessment } from "./server/editorial/imageQualityService";
 import { assessResearchIntegrity } from "./server/editorial/researchIntegrityService";
+import { selectArticleFormat, type ArticleFormatProfile } from "./server/editorial/articleFormatService";
 import { PublishingQueueService, setPushToWordPressAdapter } from "./server/editorial/publishingQueueService";
 import { FinalArticlePackage } from "./server/editorial/typesPhaseD";
 
@@ -7036,6 +7037,8 @@ async function createPackageFromArticle(article: any, siteId: string, scheduledP
       headings: [],
       nichePlaybookId: article.niche,
       editorialVoiceProfileId: article.authorId || "marques-brown",
+      contentFormat: article.contentFormat,
+      structureManifest: article.formatManifest?.sections || article.formatManifest?.requiredElements,
       language: "en",
       wordCount: wordCount,
       readingTime: readingTime
@@ -8205,7 +8208,7 @@ Maintain absolute fidelity to this voice while respecting Niche rules.`;
   return { systemPrompt, userPrompt, variables, compiledPrompt };
 }
 
-function buildBrandVoiceWriterPrompt(editorialContext: EditorialContext, editorialBriefObj: EditorialBrief, evidenceLedger: EvidenceLedger, seoBrief: any) {
+function buildBrandVoiceWriterPrompt(editorialContext: EditorialContext, editorialBriefObj: EditorialBrief, evidenceLedger: EvidenceLedger, seoBrief: any, articleFormat: ArticleFormatProfile) {
   const wp = editorialContext.selectedWriterProfile;
   const focus = seoBrief?.focusKeyword || editorialContext.focusKeyword || "keyword";
 
@@ -8235,12 +8238,13 @@ function buildBrandVoiceWriterPrompt(editorialContext: EditorialContext, editori
   const systemPrompt = `You are an elite, world-class Enterprise Editorial Writer Agent. Your core system identity is: [WRITER PROFILE: ${wp.name}].
 Your absolute objective is to produce a masterful, highly original, standalone longform editorial piece that reads with unmatched human elegance, connects instantly with readers, and perfectly executes your active publishing brand-voice specs.
 
-=== THE GOLDEN "5-SECOND ATTENTION" HOOK FORMULA ===
-Online readers decide to stay or click away in the first five seconds. Your opening paragraph determines the article's financial and editorial success.
-1. The Opening Salvo: Start with a "Pattern Interrupt". Your very first sentence must be a gripping, sharp hook—such as a dramatic ironical contrast, an intense or highly specific scene, a staggering statistical revelation, or an unexpected direct question.
-2. Under no circumstances may you use dry, lazy, generic, or passive opening clichés. 
-   - ABSOLUTELY BANNED: "In today's fast-paced world...", "Recently, ...", "In a surprising turn of events...", "It is no secret that...", "As technology continues to...", "In a move that has...", "Furthermore, ...".
-   - Instead, plunge the reader straight into the action or the core conflict. Make it impossible to stop reading after sentence one.
+=== SELECTED ARTICLE FORMAT: ${articleFormat.label.toUpperCase()} ===
+This article must follow this format rather than a generic newsroom template.
+- Opening: ${articleFormat.openingInstruction}
+- Structure: ${articleFormat.structureInstruction}
+- Required elements: ${articleFormat.requiredElements.join("; ")}.
+- Forbidden patterns: ${articleFormat.forbiddenPatterns.join("; ")}.
+- Do not add a pull quote, table, FAQ, timeline, list, or final-summary section merely for decoration. Use a format element only when the selected format calls for it and the evidence supports it.
 
 === DEEP HUMAN-CENTRIC NARRATIVE ARCHITECTURE & EDITORIAL NATURALNESS ===
 - **Narrative Depth**: Do not just summarize facts sequentially. Weave a compelling, investigative narrative arc that captures the 'why' behind the news. Frame stories using human stakes, deep analytical curiosity, and constructive critique. Explore historical patterns, technical or cultural context, and real-world implications.
@@ -8249,10 +8253,10 @@ Online readers decide to stay or click away in the first five seconds. Your open
 - **Robotic Filler Stripping (ZERO TOLERANCE FOR AI SLOP)**: Strictly eliminate all predictable machine-learning phrases that fatigue readers and trigger AI detectors.
   - BANNED PHRASES: "at its core", "it is important to note", "delve", "testament to", "beacon", "paving the way", "moreover", "furthermore", "in conclusion", "it is worth noting", "tapestry", "vibrant", "rapidly evolving", "crucial", "underscores", "transformative".
 
-=== PREMIUM VISUAL FORMATTING & SEMANTIC MARKUP ===
-- **Heading Hierarchies (H2 & H3)**: Structure your article using refined, highly compelling heading hierarchies. Use '##' (h2) for primary thematic hubs and '###' (h3) for granular sub-narratives, specifications, or data breakdowns. Never skip a heading level. Headings must be punchy, curiosity-driven, and conversational.
-- **Elegant Pull-Quotes (<blockquote>)**: Harness '<blockquote>' or Markdown '> ' blockquotes to highlight highly engaging, dramatic, or pivotal quotes and insights from the Evidence Ledger. Place 1-2 high-impact pull-quotes throughout the article to act as visual anchors and editorial breathing room.
-- **Aesthetic Comparison Tables**: When presenting comparison metrics, specifications, timelines, or structured data, construct beautiful and highly legible Markdown tables ('| Col 1 | Col 2 |'). Keep tables crisp, scannable, and clean.
+=== FORMAT-SENSITIVE MARKUP ===
+- Use H2 sections only where they clarify the selected format. H3s are optional and must have an H2 parent.
+- Never invent or paraphrase a quote as a blockquote. A Markdown blockquote is permitted only for a verbatim, evidence-led direct quotation.
+- A Markdown table is permitted only for the comparison format and only for evidence-backed dimensions. It is never mandatory.
 
 === CRITICAL BRAND-SAFETY & FACTUAL MANDATE ===
 1. You may ONLY USE FACTS from the provided Evidence Ledger. DO NOT INVENT or hallucinate specific real-world visual event occurrences, fictitious outfits/fabrics, local venue descriptors, or fictitious crowd interactions.
@@ -8289,14 +8293,16 @@ Generate and return ONLY a strict JSON object conforming to the following struct
   "articleTraceId": "${editorialBriefObj.articleTraceId}",
   "title": "The headline of the article",
   "articleHtml": "The full written longform article body in clean, professional Markdown format (use ##, ###, >, * list, and Markdown tables). DO NOT use raw HTML tags like <p>, <h2>, <blockquote>, or <table>.",
+  "contentFormat": "${articleFormat.id}",
+  "structureManifest": ["the actual major sections used, in order"],
   "claimsUsed": ["array of claim IDs from the Evidence Ledger that were used"],
   "unresolvedQuestions": [],
   "researchRequests": []
 }
-Do not wrap in any other object. Return only the JSON block. Ensure all fields are populated and "articleHtml" contains the complete, high-quality longform article formatted strictly in Markdown.`;
+Do not wrap in any other object. Return only the JSON block. Ensure all fields are populated and "articleHtml" contains the complete, high-quality longform article formatted strictly in Markdown. The contentFormat must equal "${articleFormat.id}".`;
 
   const compiledPrompt = `[SYSTEM]\n${systemPrompt}\n\n[USER]\n${userPrompt}`;
-  const variables = { sourceTitle: editorialContext.sourceTitle, wp, focus, seoBrief };
+  const variables = { sourceTitle: editorialContext.sourceTitle, wp, focus, seoBrief, articleFormat };
 
   return { systemPrompt, userPrompt, variables, compiledPrompt };
 }
@@ -8306,19 +8312,20 @@ function buildNaturalStyleEditorPrompt(editorialContext: EditorialContext, edito
   const systemPrompt = `You are our Lead Natural Style Editor in the newsroom. 
 Your primary, non-negotiable task is to transform algorithmic drafts into warm, highly conversational, and deeply engaging human journalism. Ensure the prose has a beautifully smooth, reader-friendly flow, utilizing sophisticated but accessible vocabulary. It is absolutely critical that the final draft achieves an Editorial Naturalness Score of 95% or higher and completely bypasses advanced AI content detection (< 5% AI probability).
 
-=== THE 5-SECOND ATTENTION HOOK AUDIT ===
-1. Verify and reinforce the opening hook. The very first sentence/paragraph must capture human interest instantly. Ensure it starts with a gripping "Pattern Interrupt" (e.g. an ironical contrast, an aggressive question, a staggering stat, or a vivid scene description).
-2. Rewrite any openings that rely on passive or cliché intros such as "In today's fast-paced world...", "Recently, ...", "In a surprising turn of events...", "It is no secret that...".
+=== OPENING FIT AUDIT ===
+1. Preserve the opening architecture specified in the format instruction supplied with the audit notes. An analysis may open on a tension, an explainer on an answer, a chronology on the latest development, and a decision guide on a trade-off.
+2. Rewrite only passive or cliché openings such as "In today's fast-paced world...", "Recently, ...", "In a surprising turn of events...", or "It is no secret that...". Do not force every article into a dramatic question or scene.
 
 === TO ACHIEVE ABSOLUTE HUMAN REALISM & BYPASS AI FILTERS ===
 - Erase all symmetrical paragraphs. Humans write with extreme burstiness: a one-line punchy sentence, followed by a longer analytical thought, followed by a moderate statement.
 - Eliminate ALL robotic transitions and "AI Tells" (ZERO TOLERANCE): "At its core", "It is important to remember", "In a world where", "Moreover", "Furthermore", "In conclusion", "As we look to the future", "Not merely a X, but a Y", "Additionally", "Consequently", "Specifically", "beacon", "testament to", "delve", "paving the way", "it is worth noting", "tapestry", "vibrant", "rapidly evolving", "crucial", "underscores", "transformative".
 - Inject genuine human voice, sarcasm/wit where appropriate, and editorial rhythm. Use rhetorical questions, brief illustrative anecdotes, and natural structural variance. Avoid parallel sentence structures or academic summaries.
 
-PREMIUM VISUAL FORMATTING & SEMANTIC MARKUP ENFORCEMENT:
-- **Refined Heading Hierarchies**: Ensure headers use logical markdown subheadings ('##' for H2 main thematic pivots, and '###' for H3 detailed breakdowns). Do not allow H3 headings to jump in without an H2 parent. Keep titles bold and descriptive.
-- **Semantic Pull-Quotes (<blockquote>)**: Convert critical statements, striking verified quotes, or core findings from the Evidence Ledger into elegant Markdown blockquotes ('> quote text'). Ensure these visual pull-quotes feel organic, premium, and impactful.
-- **Aesthetic Comparison Tables**: Formulate comparisons, specs, or summaries into clear, clean Markdown tables ('| Header | Header |'). Ensure the column titles are brief and the rows are highly scannable.
+FORMAT PRESERVATION & SEMANTIC MARKUP:
+- Preserve the selected article format supplied in the audit notes. It is not acceptable to normalize every draft into the same hook, H2, pull-quote, table, and conclusion sequence.
+- Keep H2/H3 hierarchy valid where headings are used. Do not add headings just to make a draft look longer.
+- Never manufacture a pull quote. Retain a blockquote only when it is a verified direct quotation.
+- Retain or add a table only when the format is a supported comparison and the evidence provides every cell.
 
 CRITICAL FACTUAL POLICY:
 You are acting as an editor, NOT a researcher. You MUST NOT introduce any new names, dates, quotes, statistics, or real-world events that are not explicitly provided in the Evidence Ledger.
@@ -8351,7 +8358,7 @@ Style requirements to enforce:
 - Keep focus keyword: "${editorialContext.focusKeyword || "keyword"}" intact.
 - Keep all factual details, specs, and names perfectly untouched. Do not invent any new facts or fake tables.
 - Remove all robotic filler phrases mentioned in the system instructions.
-- Preserve markdown formatting (headings, bullet lists, bold text, comparison tables, and any YouTube video links). Under no circumstances strip or modify any YouTube media anchor tags.
+- Preserve the selected format's useful markdown formatting and any YouTube video links. Do not add decorative tables, pull quotes, FAQ blocks, or generic conclusion headings. Under no circumstances strip or modify any YouTube media anchor tags.
 - Under no circumstances add fake CTA markers, fake bylines, or links in margins. Specifically, DO NOT append or leave any writer signatures, author bionotes, or fake names (such as "By Aria Sterling", "By Lola Perez").
 - ABSOLUTELY NO AI DISCLOSURES: Eliminate any references to artificial generation, programmatic editing thresholds, scoring systems, or copilot parameters. The final text must read as organic human editorial reporting.
 ${editorialContext.copilotTone ? `- Copilot Target Tone: ${editorialContext.copilotTone}` : ""}
@@ -8373,6 +8380,13 @@ Do not wrap in any other object. Return only the JSON block. Ensure all fields a
   const variables = { wp, draftLength: draft.length, auditNotes };
 
   return { systemPrompt, userPrompt, variables, compiledPrompt };
+}
+
+function extractArticleStructureManifest(markdown: string): string[] {
+  return (markdown.match(/^#{2,3}\s+.+$/gm) || [])
+    .map((heading) => heading.replace(/^#+\s+/, "").trim())
+    .filter(Boolean)
+    .slice(0, 12);
 }
 
 function buildQualitySafetyAuditPrompt(editorialContext: EditorialContext, draft: string) {
@@ -9180,6 +9194,16 @@ appRouter.post("/api/articles/create", async (req, res) => {
     // Pass the playbook to writer prompt obj
     editorialContext.targetStructure = originalArticlePlan.plannedSections.join(", ");
     editorialContext.seoStrategy = originalArticlePlan.originalAngle;
+    const recentFormatIds = (db.articles || [])
+      .slice(-12)
+      .map((article: any) => article.contentFormat || article?.pipelineRecords?.articleFormat?.id)
+      .filter(Boolean);
+    const articleFormat = selectArticleFormat({
+      articleTraceId,
+      readerIntent: editorialBriefObj.readerIntent,
+      evidenceLedger,
+      recentFormatIds,
+    });
 
 
     // -------------------------------------------------------------
@@ -9195,7 +9219,7 @@ appRouter.post("/api/articles/create", async (req, res) => {
     let dfMeta: any = null;
     let claimsUsed: string[] = [];
     
-    const writerPromptObj = buildBrandVoiceWriterPrompt(editorialContext, editorialBriefObj, evidenceLedger, seoBrief);
+    const writerPromptObj = buildBrandVoiceWriterPrompt(editorialContext, editorialBriefObj, evidenceLedger, seoBrief, articleFormat);
     checkPromptSafety("Brand Voice Writer", writerPromptObj);
       
     try {
@@ -9213,6 +9237,8 @@ appRouter.post("/api/articles/create", async (req, res) => {
              articleTraceId: { type: Type.STRING },
              title: { type: Type.STRING },
              articleHtml: { type: Type.STRING },
+             contentFormat: { type: Type.STRING },
+             structureManifest: { type: Type.ARRAY, items: { type: Type.STRING } },
              claimsUsed: { type: Type.ARRAY, items: { type: Type.STRING } },
              unresolvedQuestions: { type: Type.ARRAY, items: { type: Type.STRING } },
              researchRequests: { type: Type.ARRAY, items: { type: Type.STRING } }
@@ -9282,7 +9308,13 @@ appRouter.post("/api/articles/create", async (req, res) => {
     let editedDraft = "";
     let editError = "";
     let hmMeta: any = null;
-    const editingPromptObj = buildNaturalStyleEditorPrompt(editorialContext, editorialBriefObj, evidenceLedger, firstDraft, "");
+    const editingPromptObj = buildNaturalStyleEditorPrompt(
+      editorialContext,
+      editorialBriefObj,
+      evidenceLedger,
+      firstDraft,
+      `Selected format: ${articleFormat.label}. ${articleFormat.editorInstruction} Required elements: ${articleFormat.requiredElements.join("; ")}. Do not introduce forbidden patterns: ${articleFormat.forbiddenPatterns.join("; ")}.`,
+    );
     checkPromptSafety("Natural Style Editor", editingPromptObj);
       
     try {
@@ -9820,6 +9852,7 @@ appRouter.post("/api/articles/create", async (req, res) => {
       fallback_used: workflowLogs.some(log => log.fallbackHappened),
       total_model_cost: Number(totalModelCostValue.toFixed(5))
     };
+    const finalStructureManifest = extractArticleStructureManifest(editedDraft);
 
     const newArticle: any = {
       id: `art-${Date.now()}`,
@@ -9833,6 +9866,14 @@ appRouter.post("/api/articles/create", async (req, res) => {
       authorId: writer.id,
       title: seoParams.title,
       content: editedDraft,
+      contentFormat: articleFormat.id,
+      formatManifest: {
+        id: articleFormat.id,
+        label: articleFormat.label,
+        sections: finalStructureManifest,
+        requiredElements: articleFormat.requiredElements,
+        forbiddenPatterns: articleFormat.forbiddenPatterns,
+      },
       originalImageUrl: finalImageUrl,
       imageSource,
       mediaAssessment: headerMediaAssessment,
@@ -9858,6 +9899,7 @@ appRouter.post("/api/articles/create", async (req, res) => {
         evidenceLedger,
         researchBrief: parsedResearchOutput,
         writerAssignment: { writerId: writer.id, name: writer.name, voiceStyle: writer.voiceStyle },
+        articleFormat: { ...articleFormat, finalStructureManifest },
         claimsUsed,
         validationResults: { adSensePassed: passedCompliance, safetyPassed: passedCompliance, violations: finalQuality?.blockingFailures || [], fabricatedCheck, timeSensitiveCheck },
         repairRecords,

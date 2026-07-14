@@ -16,6 +16,9 @@ describe("Ubuntu installer packaging contract", () => {
     expect(installer).toContain('validate_application_source "$SOURCE_DIR"');
     expect(installer).toContain('-f "${SOURCE_DIR}/Dockerfile" "$SOURCE_DIR"');
     expect(installer).not.toContain("docker build -t editorial-platform:production -f Dockerfile .");
+    expect(installer).toContain('server/editorial/articleFormatService.ts');
+    expect(installer).toContain('server/core/models/modelRegistry.ts');
+    expect(installer).toContain("Release contract validated");
   });
 
   it("starts PostgreSQL and performs legacy migration before application startup", () => {

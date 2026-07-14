@@ -64,6 +64,8 @@ export const FinalArticlePackageSchema = z.object({
     headings: z.array(z.string()),
     nichePlaybookId: z.string(),
     editorialVoiceProfileId: z.string(),
+    contentFormat: z.string().optional(),
+    structureManifest: z.array(z.string()).optional(),
     language: z.string(),
     wordCount: z.number(),
     readingTime: z.number()
