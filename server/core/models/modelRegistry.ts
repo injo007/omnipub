@@ -6,7 +6,7 @@
  * registry owns deterministic route resolution and capability declarations.
  */
 
-export type ModelProvider = "gemini" | "openrouter" | "minimax";
+export type ModelProvider = "gemini" | "openai" | "openrouter" | "minimax";
 export type ModelCapability = "text" | "json" | "image";
 
 export type ModelRoute = {
@@ -37,6 +37,10 @@ export function resolveModelRoute(input: string | undefined | null): ModelRoute 
   if (normalized.startsWith("gemini:")) {
     const modelId = raw.slice("gemini:".length).trim();
     return { provider: "gemini", modelId, capabilities: imageCapabilities(modelId) };
+  }
+  if (normalized.startsWith("openai:")) {
+    const modelId = raw.slice("openai:".length).trim();
+    return { provider: "openai", modelId, capabilities: imageCapabilities(modelId) };
   }
   if (normalized.startsWith("minimax:")) {
     const modelId = raw.slice("minimax:".length).trim();

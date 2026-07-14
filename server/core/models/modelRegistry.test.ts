@@ -22,5 +22,6 @@ describe("model registry", () => {
       modelId: "google/gemini-2.5-flash",
     });
     expect(resolveModelRoute("minimax:MiniMax-M3")).toMatchObject({ provider: "minimax", modelId: "MiniMax-M3" });
+    expect(resolveModelRoute("openai:gpt-4.1")).toMatchObject({ provider: "openai", modelId: "gpt-4.1" });
   });
 });
