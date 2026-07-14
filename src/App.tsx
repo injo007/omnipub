@@ -2181,6 +2181,9 @@ export default function App() {
               if (payload.terminalStatus === "failed" || payload.step === "failed") {
                 terminalStatus = "failed";
                 setRewriteTerminalStatus("failed");
+                const failureCode = payload.failure?.code ? ` [${payload.failure.code}]` : "";
+                const failureReason = payload.failure?.reason || payload.log || "The workflow stopped without a reported reason.";
+                setRewritingStatusText(`Rewrite failed${failureCode}: ${failureReason}`);
               } else if (payload.terminalStatus === "completed" || payload.step === "completed") {
                 terminalStatus = "completed";
                 setRewriteTerminalStatus("completed");

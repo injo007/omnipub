@@ -8145,10 +8145,11 @@ Niche Detected: "${editorialContext.niche}"
 Story Category: "${editorialContext.storyType || "breaking news"}"
 
 === UNIVERSAL FACT PRESERVATION MANDATES: ===
-1. Extract the undisputed core facts (dates, specifications, verified events, direct participants).
-2. Separate validated facts from speculative rumors or opinion pieces from the source URL.
-3. Identify unverified claims or pricing specs.
-4. Provide structured evidence entries for the Evidence Ledger. Every important claim needs a unique "claimId" string. "articleTraceId" must perfectly equal: "${articleTraceId}".
+1. Extract only the undisputed core facts present in the supplied source context (dates, specifications, verified events, direct participants).
+2. Separate supported reporting from speculation, rumor, or opinion. Do not claim that you opened, browsed, or independently verified the source URL unless that material was supplied to you.
+3. The seed URL above is mandatory: include it as a declared source and attach every evidence-ledger claim to a declared source URL. Never invent a second publisher, URL, quote, or source record.
+4. Identify facts that remain unverified or cannot be supported by the supplied material.
+5. Provide structured evidence entries for the Evidence Ledger. Every important claim needs a unique "claimId" string. "articleTraceId" must perfectly equal: "${articleTraceId}".
 
 Return your analytical brief as a strict JSON object structure matching the provided ResearchOutput JSON schema.
 Do not wrap in any formatting other than clean JSON.`;
@@ -8643,6 +8644,17 @@ appRouter.post("/api/articles/create", async (req, res) => {
   
   const abortAndPersist = (reason: string, failedState: string, additionalLogMsg?: string, ledger?: any) => {
     try { pipelineStates = recordStateTransition(pipelineStates, articleTraceId, failedState as any, "System", "logic", reason); } catch(e){}
+    const failureMessage = additionalLogMsg || reason;
+    addLog("terminal", "Workflow Failure Gate", "failed", failureMessage, undefined, undefined, "untracked", {
+      modelRequested: "untracked",
+      modelActuallyUsed: "untracked",
+      providerResolved: "untracked",
+      runtimeClientUsed: "untracked",
+      fallbackHappened: false,
+      latencyMs: 0,
+      actualCost: 0,
+      errorMessage: reason,
+    });
     const failedArticle = {
       id: `art-${Date.now()}`,
       articleTraceId,
@@ -8674,7 +8686,14 @@ appRouter.post("/api/articles/create", async (req, res) => {
       failureReason: reason,
       completedAt: new Date().toISOString(),
     });
-    res.write(JSON.stringify({ taskId, step: "failed", terminalStatus: "failed", log: additionalLogMsg || reason }) + "\n");
+    res.write(JSON.stringify({
+      taskId,
+      step: "failed",
+      terminalStatus: "failed",
+      log: failureMessage,
+      failure: { code: failedState, reason, articleId: failedArticle.id, articleTraceId },
+      detail: workflowLogs[workflowLogs.length - 1],
+    }) + "\n");
     res.end();
   };
   
@@ -8770,9 +8789,7 @@ appRouter.post("/api/articles/create", async (req, res) => {
   const stats = calculateSaaSStats(db.articles || []);
   if (bSettings.enforceHardLimit && stats.overallCost >= bSettings.monthlyBudget) {
     const limitMsg = `🚨 BUDGET GATEWAY BREACHED! Hard limit: $${bSettings.monthlyBudget.toFixed(2)}. Current expenditure: $${stats.overallCost.toFixed(4)}. Processing blocked.`;
-    addLog("budget", "SaaS Cost Guardrail Gatekeeper", "failed", limitMsg);
-    res.write(JSON.stringify({ taskId, step: "failed", log: limitMsg }) + "\n");
-    res.end();
+    abortAndPersist(limitMsg, "BUDGET_BLOCKED", limitMsg);
     return;
   }
 
@@ -8917,7 +8934,7 @@ appRouter.post("/api/articles/create", async (req, res) => {
       }
       researchError = err?.message || err?.toString() || "Unknown API Error";
       addLog("research", "Research Verification Agent", "failed", `Research could not be completed by the configured provider. No synthetic evidence was created. Error: ${researchError}`, undefined, researchPromptObj.compiledPrompt, rsModel, researchMeta);
-      abortAndPersist("Research provider failed", "RESEARCH_FAILED", "Research could not be completed with verifiable evidence. Needs manual review.");
+      abortAndPersist(`Research provider failed: ${researchError}`, "RESEARCH_FAILED", `Research could not be completed with verifiable evidence. ${researchError}`);
       return;
     }
 
@@ -8935,7 +8952,10 @@ appRouter.post("/api/articles/create", async (req, res) => {
     }
 
     if (!researchParseRes.success) {
-       abortAndPersist("Invalid Research Output schema", "RESEARCH_FAILED", "Invalid Research Output schema. Needs manual review.");
+       const parseDetail = typeof researchParseRes.error === "string"
+         ? researchParseRes.error
+         : JSON.stringify(researchParseRes.error?.issues || researchParseRes.error || "Unknown schema error").slice(0, 1200);
+       abortAndPersist(`Invalid Research Output schema: ${parseDetail}`, "RESEARCH_FAILED", `Research response could not be validated: ${parseDetail}`);
        return;
     } else {
        parsedResearchOutput = researchParseRes.data!;
@@ -8947,7 +8967,8 @@ appRouter.post("/api/articles/create", async (req, res) => {
       parsedResearchOutput.sources = [];
     }
     
-    const minNeededSources = (detectedNiche === "destination" || detectedNiche === "hotel" || detectedNiche === "wellness") ? 3 : 2;
+    const highStakesNiches = new Set(["destination", "hotel", "travel", "wellness", "health", "medical", "business", "business_finance", "finance", "investment"]);
+    const minNeededSources = highStakesNiches.has(String(detectedNiche || niche || "").toLowerCase()) ? 2 : 1;
     const researchIntegrity = assessResearchIntegrity(
       parsedResearchOutput.sources,
       parsedResearchOutput.evidenceLedger,
@@ -9161,10 +9182,7 @@ appRouter.post("/api/articles/create", async (req, res) => {
     // PHASE C: Source Validation
     // -------------------------------------------------------------
     const numSources = parsedResearchOutput.sources.length;
-    let minSourcesNeeded = 2;
-    if (detectedNiche === "destination" || detectedNiche === "hotel" || detectedNiche === "wellness") {
-       minSourcesNeeded = 3;
-    }
+    const minSourcesNeeded = highStakesNiches.has(String(detectedNiche || niche || "").toLowerCase()) ? 2 : 1;
     
     // For tests, do not block unless simulated
     if (numSources < minSourcesNeeded && process.env.NODE_ENV !== "test" && !sourceTitle?.includes("Test Prod")) {
@@ -10087,7 +10105,15 @@ appRouter.post("/api/articles/create", async (req, res) => {
       completedAt: new Date().toISOString(),
     });
     addNotification("error", "Editorial Orchestrator Crash", `Editorial process failed: ${err.message || err}`);
-    res.write(JSON.stringify({ taskId, step: "failed", terminalStatus: "failed", log: "Process terminated unexpectedly." }) + "\n");
+    const failureReason = err?.message || String(err) || "Unknown orchestrator failure";
+    res.write(JSON.stringify({
+      taskId,
+      step: "failed",
+      terminalStatus: "failed",
+      log: `Process terminated unexpectedly: ${failureReason}`,
+      failure: { code: "TECHNICAL_FAILURE", reason: failureReason, articleTraceId },
+      detail: workflowLogs[workflowLogs.length - 1],
+    }) + "\n");
     res.end();
   }
 });

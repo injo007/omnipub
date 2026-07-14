@@ -13,6 +13,12 @@ describe("research integrity gate", () => {
     ], 2)).toMatchObject({ passed: true, validSourceCount: 2 });
   });
 
+  it("allows a traceable single seed source when the active niche policy permits one", () => {
+    expect(assessResearchIntegrity([sources[0]], [
+      { sourceUrl: sources[0].url, verificationStatus: "verified", supportsClaim: true },
+    ], 1)).toMatchObject({ passed: true, validSourceCount: 1 });
+  });
+
   it("rejects placeholder, incomplete, and unlinked evidence", () => {
     const result = assessResearchIntegrity([
       { url: "https://example.com/source", title: "Placeholder", publisher: "Placeholder" },
