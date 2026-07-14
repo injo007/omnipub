@@ -36,6 +36,7 @@ import { assessMediaAsset, type MediaAssetAssessment } from "./server/editorial/
 import { assessResearchIntegrity } from "./server/editorial/researchIntegrityService";
 import { selectArticleFormat, type ArticleFormatProfile } from "./server/editorial/articleFormatService";
 import { resolveNicheEditorialPolicy } from "./server/editorial/nichePolicyService";
+import { assessEditorialReadiness } from "./server/editorial/editorialReadinessService";
 import { PublishingQueueService, setPushToWordPressAdapter } from "./server/editorial/publishingQueueService";
 import { FinalArticlePackage } from "./server/editorial/typesPhaseD";
 
@@ -9426,6 +9427,10 @@ appRouter.post("/api/articles/create", async (req, res) => {
     let currentHtml = editedDraft;
     let maxRepairs = 2;
     let repairAttempts = 0;
+    let finalClaimValidation: any = null;
+    let finalFabricatedCheck: any = fabricatedCheck;
+    let finalFreshnessCheck: any = timeSensitiveCheck;
+    let finalReadiness: any = null;
     
     // Save initial version
     try {
@@ -9441,21 +9446,34 @@ appRouter.post("/api/articles/create", async (req, res) => {
         originalityData = await analyzeOriginality(articleTraceId, currentHtml, deconstructions);
         naturalnessData = await analyzeNaturalness(articleTraceId, currentHtml);
         writerVoiceData = await validateWriterVoice(articleTraceId, currentHtml, writerProfile);
+        finalClaimValidation = validateDraftClaimsAgainstLedger(currentHtml, claimsUsed, evidenceLedger);
+        finalFabricatedCheck = checkFabricatedExperience(currentHtml, []);
+        finalFreshnessCheck = checkTimeSensitiveFacts(evidenceLedger);
+        finalReadiness = assessEditorialReadiness({
+          content: currentHtml,
+          evidenceLedger,
+          playbook,
+          articleFormat,
+        });
         
         finalQuality = evaluateEditorialQuality(
            articleTraceId,
-           { passed: true, unsupportedPassages: [] }, // validationResult dummy since facts passed earlier
+           finalClaimValidation,
            originalityData,
            naturalnessData,
            writerVoiceData,
-           true, // playbookPassed
-           true, // isFresh
-           true, // compliancePassed
-           true  // noFabrication
+           finalReadiness.playbookPassed,
+           finalFreshnessCheck.passed,
+           finalReadiness.compliancePassed,
+           finalFabricatedCheck.passed
         );
         
         let needsRepair = !finalQuality.passed;
-        const repairNotes: string[] = [...finalQuality.repairRecommendations, ...finalQuality.blockingFailures];
+        const repairNotes: string[] = [
+          ...finalQuality.repairRecommendations,
+          ...finalQuality.blockingFailures,
+          ...finalReadiness.blockingFailures,
+        ];
         const failingPassages: string[] = [
           ...(originalityData.failingPassages || []).map((passage: any) => passage.draftPassage || passage.paragraphText || passage.sourcePassage || "").filter(Boolean),
           ...(naturalnessData.failingPassages || []),
@@ -9905,7 +9923,15 @@ appRouter.post("/api/articles/create", async (req, res) => {
         articleFormat: { ...articleFormat, finalStructureManifest },
         nicheEditorialPolicy: { policyId: nicheEditorialPolicy.policyId, version: nicheEditorialPolicy.version, playbookId: playbook.playbookId },
         claimsUsed,
-        validationResults: { adSensePassed: passedCompliance, safetyPassed: passedCompliance, violations: finalQuality?.blockingFailures || [], fabricatedCheck, timeSensitiveCheck },
+        validationResults: {
+          adSensePassed: passedCompliance,
+          safetyPassed: passedCompliance,
+          violations: [...(finalQuality?.blockingFailures || []), ...(finalReadiness?.blockingFailures || [])],
+          claimValidation: finalClaimValidation,
+          fabricatedCheck: finalFabricatedCheck,
+          timeSensitiveCheck: finalFreshnessCheck,
+          editorialReadiness: finalReadiness,
+        },
         repairRecords,
         pipelineStates: pipelineStates[pipelineStates.length - 1]?.newState || "NONE",
         pipelineStateTransitions: pipelineStates
