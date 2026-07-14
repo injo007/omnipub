@@ -718,7 +718,7 @@ function linguisticHumanizeFilter(content: string): string {
 
 function sanitizeArticleContent(content: string): string {
   if (!content) return "";
-  let clean = content.trim();
+  let clean = normalizeResponsiveArticleMarkup(content.trim());
 
   // 1. Remove Markdown block fences if the LLM wrapped the output in backticks (e.g., ```markdown ... ```)
   clean = clean.replace(/^```[a-zA-Z]*\n([\s\S]*?)\n```$/g, "$1");
@@ -757,7 +757,25 @@ function sanitizeArticleContent(content: string): string {
     clean = clean.replace(pattern, "").trim();
   }
 
-  // 4. Force linguistic humanizer filter to strip and clean all AI tells the detectors look for
+  // 4. The editor is instructed to return Markdown, but providers occasionally
+  // return HTML. Convert the supported semantic subset so the application
+  // preview and WordPress formatter never expose raw tags to readers.
+  if (/<\/?(?:article|p|h[1-6]|ul|ol|li|blockquote|div|figure|table)\b/i.test(clean)) {
+    clean = clean
+      .replace(/<!--\s*\/?wp:[\s\S]*?-->/gi, "")
+      .replace(/<\/?article\b[^>]*>/gi, "")
+      .replace(/<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi, (_, url, text) => `[${text.replace(/<[^>]*>/g, "").trim()}](${url})`)
+      .replace(/<h([1-6])\b[^>]*>([\s\S]*?)<\/h\1>/gi, (_, level, text) => `${"#".repeat(Number(level))} ${text.replace(/<[^>]*>/g, "").trim()}\n\n`)
+      .replace(/<blockquote\b[^>]*>([\s\S]*?)<\/blockquote>/gi, (_, text) => `> ${text.replace(/<[^>]*>/g, "").trim()}\n\n`)
+      .replace(/<li\b[^>]*>([\s\S]*?)<\/li>/gi, (_, text) => `- ${text.replace(/<[^>]*>/g, "").trim()}\n`)
+      .replace(/<p\b[^>]*>([\s\S]*?)<\/p>/gi, (_, text) => `${text.replace(/<[^>]*>/g, "").trim()}\n\n`)
+      .replace(/<br\s*\/?>/gi, "\n")
+      .replace(/<[^>]*>/g, "")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
+  }
+
+  // 5. Force linguistic humanizer filter to strip and clean all AI tells the detectors look for
   clean = linguisticHumanizeFilter(clean);
 
   return clean;
@@ -5904,10 +5922,8 @@ function tuneMetaDescription(desc: string, focusKeyword: string): string {
   // If still too short or too long, build a balanced one
   if (cleanDesc.length < 140) {
     const fillers = [
-      ` Read our exclusive primary source breakdown.`,
-      ` Get the deep dive diagnostic details.`,
-      ` Learn all verified facts here.`,
-      ` Examine the full evidence now.`
+      ` It explains the confirmed context, the practical implications, and the questions the reporting leaves open.`,
+      ` The focus is on what the supplied source establishes and what still needs independent confirmation.`
     ];
     let idx = 0;
     while (cleanDesc.length < 140 && idx < fillers.length) {
@@ -5922,7 +5938,7 @@ function tuneMetaDescription(desc: string, focusKeyword: string): string {
   
   // Final safeguard: if still out of range, generate a perfect 150-char template
   if (cleanDesc.length < 140 || cleanDesc.length > 160) {
-    cleanDesc = `Read our key editorial coverage of ${focusKeyword} with dynamic performance analysis, verified tables, and a comprehensive overview of recent updates.`.slice(0, 155);
+    cleanDesc = `A source-led overview of ${focusKeyword}, covering the confirmed context, practical implications, and questions still open in the reporting.`.slice(0, 155);
   }
   
   return cleanDesc;
@@ -5969,20 +5985,6 @@ function findRelevantInternalLink(article: { niche: string; id?: string; tags?: 
   return { url, title };
 }
 
-function getTopicalAuthorityLink(niche: string): { name: string; url: string } {
-  const norm = (niche || "").toLowerCase().trim();
-  if (norm.includes("tech")) {
-    return { name: "The Verge", url: "https://www.theverge.com" };
-  } else if (norm.includes("sport")) {
-    return { name: "ESPN", url: "https://www.espn.com" };
-  } else if (norm.includes("hollywood") || norm.includes("entertain")) {
-    return { name: "The Hollywood Reporter", url: "https://www.hollywoodreporter.com" };
-  } else if (norm.includes("lifestyle") || norm.includes("fashion")) {
-    return { name: "Vogue", url: "https://www.vogue.com" };
-  }
-  return { name: "Reuters", url: "https://www.reuters.com" };
-}
-
 function cleanBannedAIFiller(text: any): string {
   if (!text) return "";
   let s = typeof text === "string" ? text : String(text);
@@ -6002,6 +6004,24 @@ function cleanBannedAIFiller(text: any): string {
   s = s.replace(/Pixar News Room/gi, "official news channels");
 
   return s;
+}
+
+function slugifyHeading(text: string): string {
+  return text
+    .replace(/<[^>]*>/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/(^-|-$)/g, "");
+}
+
+/** Keep generated article bodies semantic and controlled by the site theme. */
+function normalizeResponsiveArticleMarkup(content: string): string {
+  return content
+    .replace(/<\/?article\b[^>]*>/gi, "")
+    .replace(/<!--\s*INTERNAL_LINK_REQUIRED:[\s\S]*?-->/gi, "")
+    .replace(/<!--\s*wp:table\s*-->[\s\S]*?Analytical Dimension[\s\S]*?<!--\s*\/wp:table\s*-->/gi, "")
+    .replace(/<p\b[^>]*>\s*To view external resources and authoritative analytical timelines,[\s\S]*?<\/p>/gi, "")
+    .replace(/\sstyle=("[^"]*"|'[^']*')/gi, "");
 }
 
 function runRankMathAudit(article: any): any {
@@ -6115,21 +6135,21 @@ function runRankMathAudit(article: any): any {
   }
 
   // 8. Article has internal link
-  const hasInternal = content.includes("(/") || content.includes("href=\"/") || content.includes("INTERNAL_LINK_REQUIRED") || content.includes("wordpressPush") || content.includes("related") || content.includes("coverage");
+  const hasInternal = content.includes("(/") || content.includes("href=\"/") || content.includes("href='/");
   if (hasInternal) {
-    passed_checks.push("Article has internal link or setup comment");
+    passed_checks.push("Article has an internal link");
     score += 5;
   } else {
-    failed_checks.push("Article lacks any internal links or setup placeholders");
+    passed_checks.push("No relevant internal link is available yet; no placeholder was inserted");
   }
 
-  // 9. Article has external link
+  // 9. External links are optional unless they are supplied and verified.
   const hasExternal = content.toLowerCase().includes("http://") || content.toLowerCase().includes("https://");
   if (hasExternal) {
     passed_checks.push("Article has external link");
     score += 5;
   } else {
-    failed_checks.push("Article lacks any external authority links");
+    passed_checks.push("No external link was manufactured without a verified source");
   }
 
   // 10. Content length is at least 700 words
@@ -6197,158 +6217,17 @@ function runRankMathAudit(article: any): any {
 
 function optimizeArticleContentForSEO(content: any, focusKeyword: string, niche = "general", id?: string, tags: string[] = []): string {
   if (!content) return "";
-  let s = typeof content === "string" ? cleanBannedAIFiller(content) : cleanBannedAIFiller(String(content));
+  let s = normalizeResponsiveArticleMarkup(typeof content === "string" ? cleanBannedAIFiller(content) : cleanBannedAIFiller(String(content)));
   const lowerKeyword = focusKeyword.toLowerCase();
   
   // Detect if the content is HTML or Markdown
   const hasMarkdownStructure = /^\s*##?\s+/m.test(s) || /^\s*###?\s+/m.test(s) || /^\s*[-*]\s+/m.test(s) || /^\s*\d+\.\s+/m.test(s);
   const isHtml = !hasMarkdownStructure && (/<(p|h[1-6]|div|table)[^>]*>/i.test(s) || s.includes("<p>") || s.includes("<h2>") || s.includes("<h3>"));
   
-  // 1. Ensure focus keyword is in the first paragraph/beginning of content
-  // Increase introductory search window to 1200 characters to cover the whole opening without forcing ugly injections
-  let lowerContent = s.toLowerCase();
-  if (!lowerContent.slice(0, 1200).includes(lowerKeyword)) {
-    if (isHtml) {
-      if (s.includes("<p>")) {
-        s = s.replace("<p>", `<p>Regarding <strong>${focusKeyword}</strong>: `);
-      } else if (s.includes("<p ")) {
-        s = s.replace(/(<p[^>]*>)/i, `$1Regarding <strong>${focusKeyword}</strong>: `);
-      } else {
-        s = `<p style="line-height: 1.75; font-size: 16px; color: #334155; margin-bottom: 20px;">Regarding <strong>${focusKeyword}</strong>: </p>\n\n` + s;
-      }
-    } else {
-      const paragraphs = s.split("\n\n");
-      let injectedText = false;
-      for (let i = 0; i < paragraphs.length; i++) {
-        const trimmedPara = paragraphs[i].trim();
-        if (trimmedPara && !trimmedPara.startsWith("#") && !trimmedPara.startsWith("<") && !trimmedPara.startsWith("|")) {
-          paragraphs[i] = `Regarding our recent analysis of **${focusKeyword}**, several key insights have emerged that deserve a closer, more detailed examination. ` + paragraphs[i];
-          injectedText = true;
-          break;
-        }
-      }
-      if (!injectedText && paragraphs.length > 0) {
-        paragraphs[0] = `Regarding **${focusKeyword}**: ` + paragraphs[0];
-      }
-      s = paragraphs.join("\n\n");
-    }
-  }
+  // Search metadata belongs in metadata. Do not inject keyword filler,
+  // headings, or decorative tables into an evidence-led article body.
 
-  // Refresh lowerContent for subheading evaluation
-  lowerContent = s.toLowerCase();
-
-  // 2. Ensure focus keyword is in at least one subheading (H2 or H3)
-  let hasKeywordInSubheading = false;
-  if (isHtml) {
-    const headingRegex = /<(h2|h3)[^>]*>([\s\S]*?)<\/\1>/gi;
-    let match;
-    while ((match = headingRegex.exec(s)) !== null) {
-      if (match[2].toLowerCase().includes(lowerKeyword)) {
-        hasKeywordInSubheading = true;
-        break;
-      }
-    }
-  } else {
-    const lines = s.split("\n");
-    hasKeywordInSubheading = lines.some(line => {
-      const trimmed = line.trim();
-      return (trimmed.startsWith("## ") || trimmed.startsWith("### ")) && trimmed.toLowerCase().includes(lowerKeyword);
-    });
-  }
-
-  if (!hasKeywordInSubheading) {
-    if (isHtml) {
-      let injectedSub = false;
-      s = s.replace(/<(h2|h3)([^>]*)>([\s\S]*?)<\/\1>/i, (match, tag, attrs, text) => {
-        injectedSub = true;
-        return `<${tag}${attrs}>${focusKeyword}: ${text}</${tag}>`;
-      });
-      if (!injectedSub) {
-        s = `<h2 style="font-size: 22px; font-weight: 600; color: #1e293b; margin-top: 30px; margin-bottom: 15px;">In-Depth Analysis of ${focusKeyword}</h2>\n\n` + s;
-      }
-    } else {
-      let injectedSub = false;
-      const lines = s.split("\n");
-      for (let i = 0; i < lines.length; i++) {
-        const trimmed = lines[i].trim();
-        if (trimmed.startsWith("## ") && !trimmed.toLowerCase().includes(lowerKeyword)) {
-          lines[i] = `## ${focusKeyword}: ` + lines[i].slice(3);
-          injectedSub = true;
-          break;
-        } else if (trimmed.startsWith("### ") && !trimmed.toLowerCase().includes(lowerKeyword)) {
-          lines[i] = `### ${focusKeyword}: ` + lines[i].slice(4);
-          injectedSub = true;
-          break;
-        }
-      }
-      if (!injectedSub) {
-        s = `## In-Depth Analysis of ${focusKeyword}\n\n` + s;
-      } else {
-        s = lines.join("\n");
-      }
-    }
-  }
-
-  // 3. Ensure a comparison table exists (Avoid duplicates by checking both HTML and markdown table structures)
-  const hasTable = s.includes("<table") || s.includes("wp:table") || (s.includes("|") && s.includes("|-"));
-  if (!hasTable) {
-    if (isHtml) {
-      const tableTemplate = `\n\n<!-- wp:table -->
-<figure class="wp-block-table"><div style="overflow-x: auto; margin: 30px 0; border: 1px solid #e2e8f0; border-radius: 8px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05);">
-<table style="width: 100%; border-collapse: collapse; text-align: left; font-family: inherit; font-size: 15px;">
-<thead>
-<tr style="background-color: #f8fafc; border-bottom: 2px solid #e2e8f0; color: #1e293b;">
-<th style="padding: 12px 16px; font-weight: 600;">Analytical Dimension</th>
-<th style="padding: 12px 16px; font-weight: 600;">Specifications & Details</th>
-<th style="padding: 12px 16px; font-weight: 600;">Primary Takeaway</th>
-</tr>
-</thead>
-<tbody>
-<tr style="border-bottom: 1px solid #e2e8f0; color: #334155;">
-<td style="padding: 12px 16px;">Core Subject</td>
-<td style="padding: 12px 16px;"><strong>${focusKeyword}</strong></td>
-<td style="padding: 12px 16px;">Primary Focus</td>
-</tr>
-<tr style="border-bottom: 1px solid #e2e8f0; color: #334155;">
-<td style="padding: 12px 16px;">Reporting Quality</td>
-<td style="padding: 12px 16px;">Verified Sources & Comprehensive Review</td>
-<td style="padding: 12px 16px;">High Integrity</td>
-</tr>
-<tr style="color: #334155;">
-<td style="padding: 12px 16px;">Investigative Coverage</td>
-<td style="padding: 12px 16px;">In-Depth Professional Analysis</td>
-<td style="padding: 12px 16px;">Certified</td>
-</tr>
-</tbody>
-</table>
-</div></figure>
-<!-- /wp:table -->\n\n`;
-      const paragraphs = s.split("</p>");
-      if (paragraphs.length > 3) {
-        paragraphs.splice(Math.floor(paragraphs.length / 2), 0, tableTemplate);
-        s = paragraphs.join("</p>");
-      } else {
-        s += tableTemplate;
-      }
-    } else {
-      const tableTemplate = `\n\n### Specifications & Analysis of ${focusKeyword}
- 
-| Reference Dimension | Specifications & Details | Primary Takeaway |
-| :--- | :--- | :--- |
-| Core Subject | **${focusKeyword}** | Primary Focus |
-| Reporting Quality | Verified Sources & Comprehensive Review | High Integrity |
-| Investigative Coverage | In-Depth Professional Analysis | Certified |
- 
-\n\n`;
-      const paragraphs = s.split("\n\n");
-      if (paragraphs.length > 3) {
-        paragraphs.splice(Math.floor(paragraphs.length / 2), 0, tableTemplate);
-        s = paragraphs.join("\n\n");
-      } else {
-        s += tableTemplate;
-      }
-    }
-  }
+  // A table is retained only when the writer supplied evidence-backed data.
 
   // 4. Ensure image alt tags contain the focus keyword for maximum RankMath SEO value
   s = s.replace(/!\[(.*?)\]\((.*?)\)/g, (match, alt, url) => {
@@ -6359,75 +6238,45 @@ function optimizeArticleContentForSEO(content: any, focusKeyword: string, niche 
     return match;
   });
 
-  // 5. Build dynamic contextual internal and external links
+  // 2. Add a real internal link only when the local catalogue has one.
+  // Never manufacture a placeholder or an unrelated authority link.
   const db = readDB();
   const internalLinkObj = findRelevantInternalLink({ niche, id, tags }, db);
-  const externalLinkObj = getTopicalAuthorityLink(niche);
-
-  // Strip arbitrary hardcoded Pixar/Hollywood/Wikipedia links if they exist
-  s = s.replace(/\[Pixar Newsroom\]\(https?:\/\/www.pixar.com\)/gi, `[${externalLinkObj.name}](${externalLinkObj.url})`);
-  s = s.replace(/\[Pixar News Room\]\(https?:\/\/www.pixar.com\)/gi, `[${externalLinkObj.name}](${externalLinkObj.url})`);
-  s = s.replace(/\[Hollywood Authority\]\(https?:\/\/www.wikipedia.org\)/gi, `[${externalLinkObj.name}](${externalLinkObj.url})`);
-
-  let internalLinkSection = "";
-  let externalLinkSection = "";
-
-  if (isHtml) {
-    if (internalLinkObj) {
-      internalLinkSection = `\n\n<p style="line-height: 1.75; font-size: 16px; color: #334155; margin-bottom: 20px;">Related editorial coverage: <a href="${internalLinkObj.url}" style="color: #4f46e5; text-decoration: underline;">${internalLinkObj.title}</a></p>`;
-    } else {
-      internalLinkSection = `\n\n<!-- INTERNAL_LINK_REQUIRED: Add one relevant internal link for this article -->`;
-    }
-    externalLinkSection = `\n\n<p style="line-height: 1.75; font-size: 16px; color: #334155; margin-bottom: 20px;">To view external resources and authoritative analytical timelines, explore the reported coverage on <a href="${externalLinkObj.url}" style="color: #4f46e5; text-decoration: underline;">${externalLinkObj.name}</a>.</p>`;
-  } else {
-    if (internalLinkObj) {
-      internalLinkSection = `\n\nRelated editorial coverage: [${internalLinkObj.title}](${internalLinkObj.url})`;
-    } else {
-      internalLinkSection = `\n\n<!-- INTERNAL_LINK_REQUIRED: Add one relevant internal link for this article -->`;
-    }
-    externalLinkSection = `\n\nTo view external resources and authoritative analytical timelines, explore the reported coverage on [${externalLinkObj.name}](${externalLinkObj.url}).`;
+  const hasInternal = s.includes("href=\"/") || s.includes("href='/") || s.includes("](/");
+  if (internalLinkObj && !hasInternal) {
+    s += isHtml
+      ? `\n\n<p>Related editorial coverage: <a href="${internalLinkObj.url}">${internalLinkObj.title}</a></p>`
+      : `\n\nRelated editorial coverage: [${internalLinkObj.title}](${internalLinkObj.url})`;
   }
 
-  // Parse existing links
-  const hasLinks = s.toLowerCase().includes("http://") || s.toLowerCase().includes("https://") || s.toLowerCase().includes("<a ");
-  const hasInternal = s.includes("(/") || s.includes("href=\"/") || s.includes("INTERNAL_LINK_REQUIRED") || s.includes("wordpressPush");
-  const hasExternal = s.toLowerCase().includes("http://") || s.toLowerCase().includes("https://");
-
-  if (!hasLinks) {
-    s += internalLinkSection + externalLinkSection;
-  } else {
-    if (!hasInternal) {
-      s += internalLinkSection;
-    }
-    if (!hasExternal) {
-      s += externalLinkSection;
-    }
-  }
-
-  // 6. Automatically construct an elegant Table of Contents if not already present (checking both HTML and markdown)
+  // 3. Build a semantic table of contents only when the article needs one.
   const hasToc = s.toLowerCase().includes("table of contents") || s.includes("wp:list");
   if (!hasToc) {
     if (isHtml) {
-      const headingRegex = /<(h2|h3)[^>]*>([\s\S]*?)<\/\1>/gi;
-      const headers: string[] = [];
+      s = s.replace(/<(h2|h3)([^>]*)>([\s\S]*?)<\/\1>/gi, (full, tag, attrs, text) => {
+        if (/\bid\s*=/i.test(attrs)) return full;
+        const id = slugifyHeading(text);
+        return id ? `<${tag}${attrs} id="${id}">${text}</${tag}>` : full;
+      });
+      const headingRegex = /<(h2|h3)([^>]*)>([\s\S]*?)<\/\1>/gi;
+      const headers: Array<{ id: string; text: string }> = [];
       let match;
       while ((match = headingRegex.exec(s)) !== null) {
-        headers.push(match[2].replace(/<[^>]*>/g, "").trim());
+        const text = match[3].replace(/<[^>]*>/g, "").trim();
+        const id = match[2].match(/\bid=("|')([^"']+)\1/i)?.[2] || slugifyHeading(text);
+        if (text && id) headers.push({ id, text });
       }
       const filteredHeaders = headers.slice(0, 6);
-      if (filteredHeaders.length > 1) {
+      if (filteredHeaders.length > 2) {
         const tocItems = filteredHeaders.map(h => {
-          const anchor = h.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
-          return `<li style="margin-bottom: 8px; line-height: 1.6;"><a href="#${anchor}" style="color: #4f46e5; text-decoration: none;">${h}</a></li>`;
+          return `<li><a href="#${h.id}">${h.text}</a></li>`;
         });
-        const tocSection = `\n\n<!-- wp:list -->
-<div style="background-color: #f8fafc; padding: 20px; border-radius: 8px; margin-bottom: 24px; border: 1px solid #e2e8f0;">
-<h3 style="font-size: 18px; font-weight: 600; color: #1e293b; margin-top: 0; margin-bottom: 12px;">Table of Contents</h3>
-<ul style="list-style-type: disc; padding-left: 20px; margin-bottom: 0; color: #475569;">
+        const tocSection = `\n\n<nav class="omnipub-table-of-contents" aria-label="Table of contents">
+<p><strong>On this page</strong></p>
+<ul>
 ${tocItems.join("\n")}
 </ul>
-</div>
-<!-- /wp:list -->\n\n`;
+</nav>\n\n`;
         const firstClosingP = s.indexOf("</p>");
         if (firstClosingP !== -1) {
           s = s.slice(0, firstClosingP + 4) + tocSection + s.slice(firstClosingP + 4);
@@ -6460,44 +6309,7 @@ ${tocItems.join("\n")}
     }
   }
 
-  // 7. Humanized, fully natural keyword density phrases (No Banned words / Fully professional transitions)
-  const wordsCount = s.split(/\s+/).filter(Boolean).length;
-  const occurrences = (s.toLowerCase().split(lowerKeyword).length - 1);
-  const currentDensity = occurrences / (wordsCount || 1);
-  
-  // Use a much gentler minimum density check (0.5%) to avoid robotic keyword stuffing
-  if (currentDensity < 0.005 && occurrences < 3) {
-    const needed = Math.min(3 - occurrences, Math.ceil(wordsCount * 0.005) - occurrences);
-    let added = 0;
-    const lines = s.split("\n");
-    
-    const fillerPhrases = [
-      `This development surrounding ${focusKeyword} continues to draw significant interest across the industry.`,
-      `Many observers point to ${focusKeyword} as a clear example of shifting standards in this category.`,
-      `When examining the broader implications of ${focusKeyword}, several distinct perspectives emerge.`,
-      `We will continue to monitor details related to ${focusKeyword} as more facts are verified.`
-    ];
-    
-    for (let i = 0; i < lines.length && added < needed; i++) {
-      const lineTrim = lines[i].trim();
-      if (lineTrim.length > 120 && !lineTrim.startsWith("#") && !lineTrim.startsWith("|") && !lineTrim.startsWith("<h") && !lineTrim.toLowerCase().includes(lowerKeyword)) {
-        const filler = fillerPhrases[added % fillerPhrases.length];
-        if (isHtml) {
-          if (lineTrim.endsWith("</p>")) {
-            lines[i] = lineTrim.slice(0, -4) + ` ${filler}</p>`;
-          } else {
-            lines[i] = lineTrim + ` <p style="line-height: 1.75; font-size: 16px; color: #334155; margin-bottom: 20px;">${filler}</p>`;
-          }
-        } else {
-          lines[i] = lineTrim + ` ${filler}`;
-        }
-        added++;
-      }
-    }
-    s = lines.join("\n");
-  }
-
-  return cleanBannedAIFiller(s);
+  return normalizeResponsiveArticleMarkup(cleanBannedAIFiller(s));
 }
 
 function validateAndOptimizeSEOForWordPress(article: any, niche: string): any {
@@ -6518,19 +6330,14 @@ function validateAndOptimizeSEOForWordPress(article: any, niche: string): any {
     focusKeyword = rawTags.find((t: any) => typeof t === "string" && t.trim().length > 3) || niche || "News Analysis";
   }
   
-  // 2. Resolve Title & Prepend Keyword
+  // 2. Preserve the reader-facing headline. SEO metadata may foreground the
+  // keyword, but a visible title must never be mechanically prefixed.
   let title = (optArt.title || "").trim();
+  let seoTitle = (optArt.seo?.title || title).trim();
   if (title) {
-    const lowerTitle = title.toLowerCase();
     const lowerKeyword = focusKeyword.toLowerCase();
-    
-    if (!lowerTitle.includes(lowerKeyword)) {
-      title = `${focusKeyword}: ${title}`;
-    } else {
-      const index = lowerTitle.indexOf(lowerKeyword);
-      if (index > 40) {
-        title = `${focusKeyword} - ${title.replace(new RegExp(lowerKeyword, "gi"), "").replace(/^[:\-,\s]+|[:\-,\s]+$/g, "")}`;
-      }
+    if (!seoTitle.toLowerCase().includes(lowerKeyword)) {
+      seoTitle = `${focusKeyword}: ${seoTitle}`;
     }
     optArt.title = title;
   }
@@ -6567,7 +6374,7 @@ function validateAndOptimizeSEOForWordPress(article: any, niche: string): any {
 
   optArt.seo = {
     ...optArt.seo,
-    title,
+    title: seoTitle,
     description: metaDesc,
     focusKeyword,
     slug,
@@ -8307,7 +8114,8 @@ This article must follow this format rather than a generic newsroom template.
 === DEEP HUMAN-CENTRIC NARRATIVE ARCHITECTURE & EDITORIAL NATURALNESS ===
 - **Narrative Depth**: Do not just summarize facts sequentially. Weave a compelling, investigative narrative arc that captures the 'why' behind the news. Frame stories using human stakes, deep analytical curiosity, and constructive critique. Explore historical patterns, technical or cultural context, and real-world implications.
 - **Advanced Fact Integrity**: Ground every statement directly in verified claims from the Evidence Ledger. Perform active self-auditing as you write to guarantee 100% strict adherence to raw seed facts. Under no circumstances invent, embellish, or generalize any claims.
-- **Conversational Cadence, Burstiness & Rhythm**: Avoid a predictable, mechanical, and monotonous machine cadence. Incorporate extreme sentence and paragraph variance: intersperse short, punchy, dramatic statements (e.g., "Look at the numbers.", "It gets worse.", "But why?", "Not exactly.", "Let's be real.") with elegant, complex analytical clauses. Ensure highly asymmetrical paragraph structures.
+- **Specificity Over Length**: Every paragraph must advance a named fact, a clearly labelled limitation, or an evidence-led interpretation. Do not pad a thin source with broad industry trends, travel imagery, universal claims about audiences, or generic conclusions. If the evidence is limited, write a concise article and state the boundary plainly.
+- **Natural Editorial Rhythm**: Use varied but purposeful sentence and paragraph lengths. Do not insert theatrical fragments, rhetorical questions, invented scenes, or stock transitions merely to create a style effect.
 - **Robotic Filler Stripping (ZERO TOLERANCE FOR AI SLOP)**: Strictly eliminate all predictable machine-learning phrases that fatigue readers and trigger AI detectors.
   - BANNED PHRASES: "at its core", "it is important to note", "delve", "testament to", "beacon", "paving the way", "moreover", "furthermore", "in conclusion", "it is worth noting", "tapestry", "vibrant", "rapidly evolving", "crucial", "underscores", "transformative".
 
@@ -8344,7 +8152,8 @@ ${JSON.stringify(evidenceLedger, null, 2)}
 === FOCUS SEO STRATEGY (100% SEO-FRIENDLY MAPPING) ===
 - Focus Keyword: "${focus}"
 - H1 Suggestion: "${seoBrief?.h1 || editorialBriefObj.topic}"
-- SEO Rule: Naturally weave the Focus Keyword into the absolute first paragraph (first or second sentence), repeat it naturally 3-4 times across the entire article, and include it in exactly one H2 subheading. Keep density strictly around 1.0% to 1.5% to ensure ideal ranking.
+- SEO Rule: Use the Focus Keyword naturally in the title, opening, and one useful H2 only when it reads cleanly. Do not repeat it to meet a density target.
+- Output rule: Return semantic Markdown only. Do not create a table of contents, decorative comparison table, generic resource section, external link, call to action, or placeholder marker.
 
 Generate and return ONLY a strict JSON object conforming to the following structure:
 {
@@ -8368,16 +8177,16 @@ Do not wrap in any other object. Return only the JSON block. Ensure all fields a
 function buildNaturalStyleEditorPrompt(editorialContext: EditorialContext, editorialBriefObj: EditorialBrief, evidenceLedger: EvidenceLedger, draft: string, auditNotes: string) {
   const wp = editorialContext.selectedWriterProfile;
   const systemPrompt = `You are our Lead Natural Style Editor in the newsroom. 
-Your primary, non-negotiable task is to transform algorithmic drafts into warm, highly conversational, and deeply engaging human journalism. Ensure the prose has a beautifully smooth, reader-friendly flow, utilizing sophisticated but accessible vocabulary. It is absolutely critical that the final draft achieves an Editorial Naturalness Score of 95% or higher and completely bypasses advanced AI content detection (< 5% AI probability).
+Your primary task is to produce clear, reader-friendly journalism with a natural editorial voice. Preserve the meaning and limits of the supplied evidence; do not optimize for formulaic scoring targets.
 
 === OPENING FIT AUDIT ===
 1. Preserve the opening architecture specified in the format instruction supplied with the audit notes. An analysis may open on a tension, an explainer on an answer, a chronology on the latest development, and a decision guide on a trade-off.
 2. Rewrite only passive or cliché openings such as "In today's fast-paced world...", "Recently, ...", "In a surprising turn of events...", or "It is no secret that...". Do not force every article into a dramatic question or scene.
 
-=== TO ACHIEVE ABSOLUTE HUMAN REALISM & BYPASS AI FILTERS ===
-- Erase all symmetrical paragraphs. Humans write with extreme burstiness: a one-line punchy sentence, followed by a longer analytical thought, followed by a moderate statement.
+=== NATURAL STYLE EDITING ===
+- Vary sentence and paragraph length only where it improves clarity. Do not add punchlines, scenes, anecdotes, sarcasm, or rhetorical questions that the evidence does not support.
 - Eliminate ALL robotic transitions and "AI Tells" (ZERO TOLERANCE): "At its core", "It is important to remember", "In a world where", "Moreover", "Furthermore", "In conclusion", "As we look to the future", "Not merely a X, but a Y", "Additionally", "Consequently", "Specifically", "beacon", "testament to", "delve", "paving the way", "it is worth noting", "tapestry", "vibrant", "rapidly evolving", "crucial", "underscores", "transformative".
-- Inject genuine human voice, sarcasm/wit where appropriate, and editorial rhythm. Use rhetorical questions, brief illustrative anecdotes, and natural structural variance. Avoid parallel sentence structures or academic summaries.
+- Prefer precise, direct prose. Remove generic claims that cannot be traced to the Editorial Brief or Evidence Ledger.
 
 FORMAT PRESERVATION & SEMANTIC MARKUP:
 - Preserve the selected article format supplied in the audit notes. It is not acceptable to normalize every draft into the same hook, H2, pull-quote, table, and conclusion sequence.
@@ -8390,7 +8199,7 @@ You are acting as an editor, NOT a researcher. You MUST NOT introduce any new na
 DO NOT fabricate any first-person experiences, fictitious subjective opinions disguised as fact, or fake scenarios. Strict compliance with fact-checking is mandatory.`;
 
   const userPrompt = `Rigorously edit and polish this written draft to sound completely natural, engaging, and in line with ${wp.name}'s writer profile.
-Embrace a conversational, relatable, and authentic human tone. Erase robotic transitions, repetitive sentence patterns, and academic structures. Maintain a highly dynamic, variable cadence (< 5% AI content detection signature).
+Use a conversational but precise editorial tone. Erase robotic transitions, repetitive sentence patterns, and academic padding without adding unsupported color or claims.
 
 === STRICT DATA SOURCES (DO NOT INTRODUCE NEW FACTS OUTSIDE THESE SUMMARIES) ===
 Editorial Brief:
@@ -8411,8 +8220,8 @@ ${auditNotes || "No active compliance issue flagged. Focus on fluid readability,
 
 Style requirements to enforce:
 - Tone cadence: ${editorialContext.copilotTone || wp.tone}
-- Sentence variation: ${wp.sentenceRhythm} (Inject extreme burstiness; scatter short 3-7 word punchy clauses to break up regular sentence lengths)
-- Paragraph style: ${wp.paragraphStyle} (Ensure highly asymmetrical paragraphs)
+- Sentence variation: ${wp.sentenceRhythm} (Use variation only when it improves readability)
+- Paragraph style: ${wp.paragraphStyle} (Keep each paragraph focused on a supported point)
 - Keep focus keyword: "${editorialContext.focusKeyword || "keyword"}" intact.
 - Keep all factual details, specs, and names perfectly untouched. Do not invent any new facts or fake tables.
 - Remove all robotic filler phrases mentioned in the system instructions.
@@ -8508,7 +8317,7 @@ Return a strict JSON result card matching the response schema.`;
 
 function buildWordPressSeoPrompt(editorialContext: EditorialContext, finalDraft: string) {
   const systemPrompt = `You are our WordPress Rank Math SEO Agent.
-Your goal is to optimize the final longform draft for search engines, adhering strictly to Rank Math quality criteria. You must produce a complete SEO package containing: focus keyword, secondary keywords, SEO title, meta description, url slug, excerpt, optimized post title, optimized HTML post body, and targets verification checks.`;
+Your goal is to produce accurate, reader-first search metadata for the final longform draft. Return only the requested title, description, focus keyword, and keywords; do not rewrite or add to the article body.`;
 
   const userPrompt = `Analyse the following draft and niche context, and output a highly optimized Rank Math SEO Package matching the requested JSON schema.
 
@@ -8527,15 +8336,8 @@ CRITICAL SEO INSTRUCTIONS:
 3. META DESCRIPTION: Must be STRICTLY between 140 and 160 characters. Highlight a clear benefit or hook, containing the focus keyword.
 4. EXCERPT: Under 150 characters, matching meta description theme.
 5. URL SLUG: Hyphen-separated lowercase string containing the Focus Keyword words.
-6. CONTENT ANALYSIS (OPTIMIZED HTML): Establish a complete HTML translation of the post body (using h2, h3, p, strong, blockquote, and ul/ol blocks where appropriate).
-   - Inject the Focus Keyword in the first sentence of the article (and first 100 words absolutely).
-   - Inject the Focus Keyword in at least one H2 subheading.
-   - Inject Focus/Secondary Keywords organically with a safe density (1.0% to 1.8%).
-   - Keep paragraphs short, natural, and highly readable.
-   - Absolutely prohibit all banned AI filler phrases ("This continues to be a central topic of interest", "Experts analyze the trajectory", "Many stakeholders view this as", "In today’s fast-paced world", "It remains to be seen", "Only time will tell", "This sparked conversation online").
-7. CATEGORY AND TAGS: Select a relevant standard WordPress category and a rich list of 5-8 tags.
-8. IMAGE ALT TEXT: Formulate highly descriptive image alt text that incorporates the focus keyword naturally.
-9. INTERNAL & EXTERNAL LINKS: Provide suggestions/placeholders.
+6. Keep the focus keyword natural. Do not append dates, alarmist qualifiers, placeholder links, calls to action, or any text not supported by the article.
+7. Meta descriptions must describe the article as written; do not claim research, verification, or coverage that is not present in the supplied draft.
 
 Return a strict JSON result matching the response schema structure.`;
 
@@ -9704,8 +9506,8 @@ appRouter.post("/api/articles/create", async (req, res) => {
     addLog("seo", `WordPress SEO Publisher [using ${seoModel}]`, "running", "Structuring slug, optimizing keywords density, and crafting schemas...");
     
     let seoParams: any = {
-      title: decodeHtmlEntities(`${focusKeyword}: ${sourceTitle.slice(0, 45)} (Exposed 2026)`),
-      description: `Original, human-toned commentary on ${focusKeyword} breaking story with key evidence and charts.`,
+      title: decodeHtmlEntities(sourceTitle?.trim() || focusKeyword),
+      description: `An evidence-led overview of ${focusKeyword}, based on the supplied reporting and its confirmed context.`,
       focusKeyword: focusKeyword,
       keywords: [focusKeyword, niche, writer.id, "news", "original commentary"]
     };
