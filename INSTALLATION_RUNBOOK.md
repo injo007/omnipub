@@ -97,3 +97,11 @@ To ensure absolute service persistence, self-healing, and concurrency limits acr
 -   `Restart=always`: Automates instant service recovery upon container or engine crash.
 -   `RestartSec=10`: Spreading engine restarts safely to prevent crash-loops.
 -   `LimitNOFILE=65535`: Sets file descriptors to high limits to support highly concurrent queue workers.
+
+---
+
+## 5. Installation Documentation Maintenance
+
+Every correction or modification that changes installation, upgrade, configuration, recovery, verification, service dependencies, or operator-visible installer behavior **must be documented in this runbook in the same change**. Update the affected command, prerequisite, option description, and recovery guidance so a fresh operator can follow this document without relying on source-code history.
+
+When a change fixes a previously released installer issue, add a concise entry to the relevant recovery section that states the symptom, the corrected behavior, and the safe command to resume or verify the installation. Keep credentials, tokens, and other secrets out of examples and logs.
