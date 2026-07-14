@@ -716,7 +716,7 @@ function linguisticHumanizeFilter(content: string): string {
   return clean;
 }
 
-function sanitizeArticleContent(content: string): string {
+export function sanitizeArticleContent(content: string): string {
   if (!content) return "";
   let clean = normalizeResponsiveArticleMarkup(content.trim());
 
@@ -6006,14 +6006,6 @@ function cleanBannedAIFiller(text: any): string {
   return s;
 }
 
-function slugifyHeading(text: string): string {
-  return text
-    .replace(/<[^>]*>/g, "")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/(^-|-$)/g, "");
-}
-
 /** Keep generated article bodies semantic and controlled by the site theme. */
 function normalizeResponsiveArticleMarkup(content: string): string {
   return content
@@ -6217,12 +6209,10 @@ function runRankMathAudit(article: any): any {
 
 function optimizeArticleContentForSEO(content: any, focusKeyword: string, niche = "general", id?: string, tags: string[] = []): string {
   if (!content) return "";
-  let s = normalizeResponsiveArticleMarkup(typeof content === "string" ? cleanBannedAIFiller(content) : cleanBannedAIFiller(String(content)));
+  // The reader-facing application renders Markdown. Normalize every provider
+  // and repair response before any metadata-only optimization can touch it.
+  let s = sanitizeArticleContent(typeof content === "string" ? content : String(content));
   const lowerKeyword = focusKeyword.toLowerCase();
-  
-  // Detect if the content is HTML or Markdown
-  const hasMarkdownStructure = /^\s*##?\s+/m.test(s) || /^\s*###?\s+/m.test(s) || /^\s*[-*]\s+/m.test(s) || /^\s*\d+\.\s+/m.test(s);
-  const isHtml = !hasMarkdownStructure && (/<(p|h[1-6]|div|table)[^>]*>/i.test(s) || s.includes("<p>") || s.includes("<h2>") || s.includes("<h3>"));
   
   // Search metadata belongs in metadata. Do not inject keyword filler,
   // headings, or decorative tables into an evidence-led article body.
@@ -6242,74 +6232,12 @@ function optimizeArticleContentForSEO(content: any, focusKeyword: string, niche 
   // Never manufacture a placeholder or an unrelated authority link.
   const db = readDB();
   const internalLinkObj = findRelevantInternalLink({ niche, id, tags }, db);
-  const hasInternal = s.includes("href=\"/") || s.includes("href='/") || s.includes("](/");
+  const hasInternal = s.includes("](/");
   if (internalLinkObj && !hasInternal) {
-    s += isHtml
-      ? `\n\n<p>Related editorial coverage: <a href="${internalLinkObj.url}">${internalLinkObj.title}</a></p>`
-      : `\n\nRelated editorial coverage: [${internalLinkObj.title}](${internalLinkObj.url})`;
+    s += `\n\nRelated editorial coverage: [${internalLinkObj.title}](${internalLinkObj.url})`;
   }
 
-  // 3. Build a semantic table of contents only when the article needs one.
-  const hasToc = s.toLowerCase().includes("table of contents") || s.includes("wp:list");
-  if (!hasToc) {
-    if (isHtml) {
-      s = s.replace(/<(h2|h3)([^>]*)>([\s\S]*?)<\/\1>/gi, (full, tag, attrs, text) => {
-        if (/\bid\s*=/i.test(attrs)) return full;
-        const id = slugifyHeading(text);
-        return id ? `<${tag}${attrs} id="${id}">${text}</${tag}>` : full;
-      });
-      const headingRegex = /<(h2|h3)([^>]*)>([\s\S]*?)<\/\1>/gi;
-      const headers: Array<{ id: string; text: string }> = [];
-      let match;
-      while ((match = headingRegex.exec(s)) !== null) {
-        const text = match[3].replace(/<[^>]*>/g, "").trim();
-        const id = match[2].match(/\bid=("|')([^"']+)\1/i)?.[2] || slugifyHeading(text);
-        if (text && id) headers.push({ id, text });
-      }
-      const filteredHeaders = headers.slice(0, 6);
-      if (filteredHeaders.length > 2) {
-        const tocItems = filteredHeaders.map(h => {
-          return `<li><a href="#${h.id}">${h.text}</a></li>`;
-        });
-        const tocSection = `\n\n<nav class="omnipub-table-of-contents" aria-label="Table of contents">
-<p><strong>On this page</strong></p>
-<ul>
-${tocItems.join("\n")}
-</ul>
-</nav>\n\n`;
-        const firstClosingP = s.indexOf("</p>");
-        if (firstClosingP !== -1) {
-          s = s.slice(0, firstClosingP + 4) + tocSection + s.slice(firstClosingP + 4);
-        } else {
-          s = tocSection + s;
-        }
-      }
-    } else {
-      const headerLines = s.split("\n")
-        .map(line => line.trim())
-        .filter(line => line.startsWith("## ") || line.startsWith("### "))
-        .slice(0, 6);
-      
-      if (headerLines.length > 1) {
-        const tocItems = headerLines.map(line => {
-          const cleanText = line.replace(/^#+\s+/, "").replace(/[*_`]/g, "").trim();
-          const anchor = cleanText.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
-          return `- [${cleanText}](#${anchor})`;
-        });
-        
-        const tocSection = `\n\n### Table of Contents\n${tocItems.join("\n")}\n\n`;
-        const paragraphs = s.split("\n\n");
-        if (paragraphs.length > 1) {
-          paragraphs.splice(1, 0, tocSection);
-          s = paragraphs.join("\n\n");
-        } else {
-          s = tocSection + s;
-        }
-      }
-    }
-  }
-
-  return normalizeResponsiveArticleMarkup(cleanBannedAIFiller(s));
+  return sanitizeArticleContent(s);
 }
 
 function validateAndOptimizeSEOForWordPress(article: any, niche: string): any {
@@ -8116,6 +8044,7 @@ This article must follow this format rather than a generic newsroom template.
 - **Advanced Fact Integrity**: Ground every statement directly in verified claims from the Evidence Ledger. Perform active self-auditing as you write to guarantee 100% strict adherence to raw seed facts. Under no circumstances invent, embellish, or generalize any claims.
 - **Specificity Over Length**: Every paragraph must advance a named fact, a clearly labelled limitation, or an evidence-led interpretation. Do not pad a thin source with broad industry trends, travel imagery, universal claims about audiences, or generic conclusions. If the evidence is limited, write a concise article and state the boundary plainly.
 - **Natural Editorial Rhythm**: Use varied but purposeful sentence and paragraph lengths. Do not insert theatrical fragments, rhetorical questions, invented scenes, or stock transitions merely to create a style effect.
+- **No Unsupported Generalisations**: Do not write claims such as "many travellers are seeking", "private areas often", "this is reshaping", "the rise of", "a growing emphasis", or descriptions of wildlife, migration, access rules, conservation outcomes, or local communities unless the supplied evidence states them. Replace an unsupported generalisation with a specific source-backed point or remove it.
 - **Robotic Filler Stripping (ZERO TOLERANCE FOR AI SLOP)**: Strictly eliminate all predictable machine-learning phrases that fatigue readers and trigger AI detectors.
   - BANNED PHRASES: "at its core", "it is important to note", "delve", "testament to", "beacon", "paving the way", "moreover", "furthermore", "in conclusion", "it is worth noting", "tapestry", "vibrant", "rapidly evolving", "crucial", "underscores", "transformative".
 
@@ -8187,6 +8116,7 @@ Your primary task is to produce clear, reader-friendly journalism with a natural
 - Vary sentence and paragraph length only where it improves clarity. Do not add punchlines, scenes, anecdotes, sarcasm, or rhetorical questions that the evidence does not support.
 - Eliminate ALL robotic transitions and "AI Tells" (ZERO TOLERANCE): "At its core", "It is important to remember", "In a world where", "Moreover", "Furthermore", "In conclusion", "As we look to the future", "Not merely a X, but a Y", "Additionally", "Consequently", "Specifically", "beacon", "testament to", "delve", "paving the way", "it is worth noting", "tapestry", "vibrant", "rapidly evolving", "crucial", "underscores", "transformative".
 - Prefer precise, direct prose. Remove generic claims that cannot be traced to the Editorial Brief or Evidence Ledger.
+- Remove broad trend language (for example, "many travellers are seeking", "the rise of", "often", or "increasingly") unless the Evidence Ledger explicitly supports it.
 
 FORMAT PRESERVATION & SEMANTIC MARKUP:
 - Preserve the selected article format supplied in the audit notes. It is not acceptable to normalize every draft into the same hook, H2, pull-quote, table, and conclusion sequence.
@@ -8649,11 +8579,14 @@ appRouter.post("/api/articles/create", async (req, res) => {
 
   res.write(JSON.stringify({ taskId, step: "initiate", log: "Spawning Editorial Agent Council..." }) + "\n");
 
-  if (cleanSource.length < 400 && sourceUrl) {
+  // RSS summaries often look substantial while omitting the factual detail
+  // required for a useful rewrite. Always attempt one bounded retrieval from
+  // the selected source; a failed retrieval safely falls back to the summary.
+  if (sourceUrl && cleanSource.length < 12_000) {
     addLog("source", "Source Context Retriever", "running", "Retrieving a bounded factual excerpt from the selected source URL.");
     const retrieval = await retrieveSourceArticleContext(sourceUrl);
     if (retrieval.content) {
-      cleanSource = cleanSourceContent(`${cleanSource}\n${retrieval.content}`);
+      cleanSource = cleanSourceContent(`${cleanSource}\n${retrieval.content}`).slice(0, 12_000);
       isThinContent = cleanSource.length < 200;
       addLog("source", "Source Context Retriever", "success", `Retrieved ${retrieval.content.length} characters of source context for evidence-led research.`);
     } else {
@@ -9450,7 +9383,7 @@ appRouter.post("/api/articles/create", async (req, res) => {
                     break;
                 }
 
-                currentHtml = repairResult.repairedHtml;
+                currentHtml = sanitizeArticleContent(repairResult.repairedHtml);
                 
                 // Re-verify Claims
                 const repairClaimCheck = validateDraftClaimsAgainstLedger(currentHtml, claimsUsed, evidenceLedger);
@@ -9472,7 +9405,9 @@ appRouter.post("/api/articles/create", async (req, res) => {
         }
     }
     
-    editedDraft = currentHtml;
+    // Repairs are a separate provider boundary, so normalize once more before
+    // the body is persisted or displayed in the Markdown reader.
+    editedDraft = sanitizeArticleContent(currentHtml);
 
     let finalEditorialStatus = passedCompliance ? "Ready" : "Needs Editorial Review";
     let finalArticleStatus = passedCompliance ? "draft" : "manual_review";

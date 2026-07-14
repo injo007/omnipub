@@ -1,7 +1,7 @@
 process.env.NODE_ENV = "test";
 import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 import request from "supertest";
-import { buildApp } from "../../../server";
+import { buildApp, sanitizeArticleContent } from "../../../server";
 
 let app: any;
 
@@ -155,6 +155,22 @@ describe("POST /api/articles/create - Integration Flow", () => {
     // Check if the response was successful
     expect(res.status).toBe(200);
     expect(res.text).toContain('"step":"completed"');
+
+  });
+
+  it("normalizes provider HTML and removes generated publishing scaffolding", () => {
+    const content = sanitizeArticleContent(`
+      <article><h2>Private concessions</h2><p>Source-backed detail.</p>
+      <!-- INTERNAL_LINK_REQUIRED: Add one relevant internal link for this article -->
+      <!-- wp:table --><table><tr><th>Analytical Dimension</th></tr></table><!-- /wp:table -->
+      <nav><p>On this page</p></nav>
+    </article>`);
+
+    expect(content).toContain("## Private concessions");
+    expect(content).toContain("Source-backed detail.");
+    expect(content).not.toMatch(/<\/?(?:article|p|h[1-6]|nav|table)\b/i);
+    expect(content).not.toContain("INTERNAL_LINK_REQUIRED");
+    expect(content).not.toContain("Analytical Dimension");
   });
 
   it("2. invalid brief stops downstream execution", async () => {
