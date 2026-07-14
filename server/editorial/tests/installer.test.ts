@@ -20,6 +20,9 @@ describe("Ubuntu installer packaging contract", () => {
     expect(installer).toContain('server/editorial/nichePolicyService.ts');
     expect(installer).toContain('server/editorial/editorialTextService.ts');
     expect(installer).toContain('server/editorial/editorialReadinessService.ts');
+    expect(installer).toContain('configured provider routing without hidden Gemini editorial calls');
+    expect(installer).toContain('sourceDeconstructionService.ts');
+    expect(installer).toContain('originalArticlePlanService.ts');
     expect(installer).toContain('server/core/models/modelRegistry.ts');
     expect(installer).toContain("Release contract validated");
   });

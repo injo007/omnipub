@@ -3177,13 +3177,13 @@ function resolveProvider(modelId: string): "gemini" | "openai" | "openrouter" | 
 function getModelForStep(step: string, pipelineName: string, settings: any): string {
   const mSettings = settings?.modelSettings || {};
   const pipelines = mSettings.pipelines || {
-    cheap: { research: "gemini-2.5-flash", draft: "gemini-2.5-flash", editing: "gemini-2.5-flash", validation: "gemini-2.5-flash", seo: "gemini-2.5-flash" },
-    balanced: { research: "gemini-2.5-flash", draft: "gemini-2.5-pro", editing: "gemini-2.5-flash", validation: "gemini-2.5-flash", seo: "gemini-2.5-flash" },
-    premium: { research: "gemini-2.5-pro", draft: "gemini-2.5-pro", editing: "gemini-2.5-pro", validation: "gemini-2.5-pro", seo: "gemini-2.5-pro" }
+    cheap: { research: "MiniMax-M3", draft: "MiniMax-M3", editing: "MiniMax-M3", validation: "MiniMax-M3", seo: "MiniMax-M3" },
+    balanced: { research: "MiniMax-M3", draft: "MiniMax-M3", editing: "MiniMax-M3", validation: "MiniMax-M3", seo: "MiniMax-M3" },
+    premium: { research: "MiniMax-M3", draft: "MiniMax-M3", editing: "MiniMax-M3", validation: "MiniMax-M3", seo: "MiniMax-M3" }
   };
   
   const pipeline = pipelines[pipelineName] || pipelines.balanced;
-  return pipeline[step] || "gemini-2.5-flash";
+  return pipeline[step] || "MiniMax-M3";
 }
 
 function normalizeUrl(url: string): string {
@@ -3624,11 +3624,11 @@ export async function runLLMCompletion(params: any): Promise<any> {
       // Fallback to explicit default
       if (agentKey === "researchVerification") selectedModel = "moonshotai/kimi-k2.6:free";
       else if (agentKey === "brandVoiceWriter") selectedModel = "openrouter/free";
-      else if (agentKey === "naturalStyleEditor") selectedModel = "gemini-2.5-flash";
-      else if (agentKey === "seoOpportunity") selectedModel = "gemini-2.5-flash";
-      else if (agentKey === "originalityReadabilityValidator") selectedModel = "gemini-2.5-flash";
-      else if (agentKey === "qualitySafetyAuditor") selectedModel = "gemini-2.5-flash";
-      else selectedModel = "gemini-2.5-flash";
+      else if (agentKey === "naturalStyleEditor") selectedModel = "MiniMax-M3";
+      else if (agentKey === "seoOpportunity") selectedModel = "MiniMax-M3";
+      else if (agentKey === "originalityReadabilityValidator") selectedModel = "MiniMax-M3";
+      else if (agentKey === "qualitySafetyAuditor") selectedModel = "MiniMax-M3";
+      else selectedModel = "MiniMax-M3";
       source = "default";
     }
   }
@@ -3956,6 +3956,8 @@ export async function runLLMCompletion(params: any): Promise<any> {
             success = true;
             addNotification("success", "Playback Stabilized", `Rerouted agent execution stabilized on OpenRouter fallback.`);
           } catch (fbErr: any) {
+            finalStatus = "failed";
+            throw new Error(`Configured OpenRouter fallback ${fallbackTarget} failed: ${fbErr.message || fbErr}`);
             const errStr = JSON.stringify(fbErr).toLowerCase() + (fbErr.message || "").toLowerCase();
             const isQuota = errStr.includes("429") || errStr.includes("quota") || errStr.includes("resource has been exhausted") || errStr.includes("too many requests") || errStr.includes("exhausted");
             const nextFallback = isQuota ? "gemini-2.5-flash" : "gemini-2.5-pro";
@@ -4068,6 +4070,10 @@ export async function runLLMCompletion(params: any): Promise<any> {
           throw new Error(totalErr);
         }
       } else {
+        if (fbProvider !== "gemini") {
+          finalStatus = "failed";
+          throw new Error(`Configured fallback ${fallbackTarget} cannot run because credentials for its provider are unavailable.`);
+        }
         try {
           const geminiModel = (fbProvider === "gemini" && fallbackModelId) ? fallbackModelId : "gemini-2.5-flash";
           const fbResult = await runSingleGeminiInference(geminiModel, contents, systemInstruction, jsonMode, responseSchema, geminiApiKey);
@@ -4078,6 +4084,8 @@ export async function runLLMCompletion(params: any): Promise<any> {
           success = true;
           addNotification("success", "Playback Stabilized", `Rerouted agent execution stabilized on "${geminiModel}".`);
         } catch (fbErr1: any) {
+          finalStatus = "failed";
+          throw new Error(`Configured Gemini fallback ${fallbackTarget} failed: ${fbErr1.message || fbErr1}`);
           const errStr = JSON.stringify(fbErr1).toLowerCase() + (fbErr1.message || "").toLowerCase();
           const isQuota = errStr.includes("429") || errStr.includes("quota") || errStr.includes("resource has been exhausted") || errStr.includes("too many requests") || errStr.includes("exhausted");
           const nextFallback = isQuota ? "gemini-2.5-flash" : "gemini-2.5-pro";
@@ -7938,7 +7946,7 @@ async function detectNiche(niche: string, storyTitle: string, url: string, db?: 
   if (niche && niche !== "auto") return niche;
 
   const dbNiches = db?.niches || [];
-  if (ai && dbNiches.length > 0) {
+  if (dbNiches.length > 0) {
     try {
       const nicheListStr = dbNiches.map((n: any) => `"${n.id}": ${n.name} (${n.tagline})`).join(", ");
       const prompt = `You are a content classifier. Match the following article to the most appropriate niche ID from this list:
@@ -7949,14 +7957,13 @@ Article URL: "${url}"
 
 Return ONLY the single niche ID as a raw string. If none fit perfectly, return the closest matching ID.`;
 
-      const response = await Promise.race([
-        ai.models.generateContent({
-          model: "gemini-2.5-flash",
-          contents: prompt
-        }),
-        new Promise<any>((_, reject) => setTimeout(() => reject(new Error("Niche detection timeout")), 8000))
-      ]);
-      const matched = response.text?.trim().toLowerCase().replace(/[^a-z0-9-]+/g, "") || "";
+      const configuredModel = getModelForAgent("nicheDiscovery", db?.settings || DEFAULT_SETTINGS);
+      const response = await runLLMCompletion({
+        model: configuredModel,
+        agentName: "Niche Discovery Agent",
+        contents: prompt,
+      });
+      const matched = String(response || "").trim().toLowerCase().replace(/[^a-z0-9-]+/g, "");
       if (matched && dbNiches.some((n: any) => n.id === matched)) {
         console.log(`[AI Niche Detection] Matched "${storyTitle}" to niche "${matched}"`);
         return matched;
@@ -8667,7 +8674,7 @@ appRouter.post("/api/articles/create", async (req, res) => {
       failureReason: reason,
       completedAt: new Date().toISOString(),
     });
-    res.write(JSON.stringify({ taskId, step: "failed", log: additionalLogMsg || reason }) + "\n");
+    res.write(JSON.stringify({ taskId, step: "failed", terminalStatus: "failed", log: additionalLogMsg || reason }) + "\n");
     res.end();
   };
   
@@ -8681,7 +8688,7 @@ appRouter.post("/api/articles/create", async (req, res) => {
     stepModel?: string,
     executionMetadata?: any
   ) => {
-    const actualModel = executionMetadata?.modelActuallyUsed || stepModel || "gemini-2.5-flash";
+    const actualModel = executionMetadata?.modelActuallyUsed || stepModel || "untracked";
     const promptCharCount = promptText ? promptText.length : Math.ceil(output.length * 1.2);
     const outputCharCount = output.length + (changesMade ? changesMade.length : 0);
     
@@ -8710,9 +8717,9 @@ appRouter.post("/api/articles/create", async (req, res) => {
       userPrompt: executionMetadata?.userPrompt || promptText || "",
       compiledPrompt: executionMetadata?.compiledPrompt || (promptText ? promptText : ""),
       variables: executionMetadata?.variables || {},
-      modelRequested: executionMetadata?.modelRequested || stepModel || "gemini-2.5-flash",
-      providerResolved: executionMetadata?.providerResolved || "gemini",
-      runtimeClientUsed: executionMetadata?.runtimeClientUsed || "GoogleGenAI",
+      modelRequested: executionMetadata?.modelRequested || stepModel || "untracked",
+      providerResolved: executionMetadata?.providerResolved || (stepModel ? resolveProvider(stepModel) : "untracked"),
+      runtimeClientUsed: executionMetadata?.runtimeClientUsed || (stepModel ? (resolveProvider(stepModel) === "gemini" ? "GoogleGenAI" : resolveProvider(stepModel) === "openai" ? "OpenAI" : resolveProvider(stepModel) === "minimax" ? "MiniMaxEngine" : "OpenRouter") : "untracked"),
       modelActuallyUsed: actualModel,
       fallbackModelUsed: executionMetadata?.fallbackModelUsed,
       tokensInput: inputTokens,
@@ -9170,8 +9177,8 @@ appRouter.post("/api/articles/create", async (req, res) => {
     // -------------------------------------------------------------
     const deconstructions: any[] = [];
     for (const source of parsedResearchOutput.sources) {
-       addLog("deconstruct", "Source Deconstruction Engine", "running", `Deconstructing source structure: ${source.title}`);
-       const result = await deconstructSource(source.url, articleTraceId, cleanSource);
+       addLog("deconstruct", "Source Deconstruction Engine", "running", `Deconstructing source structure: ${source.title}`, undefined, undefined, rsModel);
+       const result = await deconstructSource(source.url, articleTraceId, cleanSource, rsModel);
        deconstructions.push(result);
     }
     
@@ -9180,11 +9187,11 @@ appRouter.post("/api/articles/create", async (req, res) => {
     // -------------------------------------------------------------
     const nicheEditorialPolicy = await resolveNicheEditorialPolicy(editorialContext.niche, editorialContext.sourceTitle);
     const playbook = nicheEditorialPolicy.playbook;
-    addLog("planning", "Strategic SEO Architect", "running", `Creating Original Article Plan from playbook ${playbook.playbookId}`);
+    addLog("planning", "Strategic SEO Architect", "running", `Creating Original Article Plan from playbook ${playbook.playbookId}`, undefined, undefined, seoOppModel);
     
     let originalArticlePlan: any = null;
     try {
-        originalArticlePlan = await createOriginalArticlePlan(articleTraceId, playbook, editorialBriefObj, deconstructions);
+        originalArticlePlan = await createOriginalArticlePlan(articleTraceId, playbook, editorialBriefObj, deconstructions, seoOppModel);
     } catch(e: any) {
         const planErrorDetails = e?.message || e?.toString() || "Unknown planning error";
         console.error("[PLANNING FAILED]", planErrorDetails, e);
@@ -10034,7 +10041,7 @@ appRouter.post("/api/articles/create", async (req, res) => {
     });
     addNotification("success", "Article editorial refinement draft ready", `Draft "${newArticle.title}" is ready and verified (Editorial Naturalness Score: ${newArticle.seo?.humanScore || 95}%).`);
 
-    res.write(JSON.stringify({ taskId, step: "completed", articleId: newArticle.id, log: "Article successfully queued as Original plagiarised-clean draft!" }) + "\n");
+    res.write(JSON.stringify({ taskId, step: "completed", terminalStatus: "completed", articleId: newArticle.id, log: "Article successfully queued as an original, evidence-gated draft." }) + "\n");
     res.end();
   } catch (err: any) {
     console.error("Editorial orchestrator crash:", err);
@@ -10080,7 +10087,7 @@ appRouter.post("/api/articles/create", async (req, res) => {
       completedAt: new Date().toISOString(),
     });
     addNotification("error", "Editorial Orchestrator Crash", `Editorial process failed: ${err.message || err}`);
-    res.write(JSON.stringify({ taskId, step: "failed", log: "Process terminated unexpectedly." }) + "\n");
+    res.write(JSON.stringify({ taskId, step: "failed", terminalStatus: "failed", log: "Process terminated unexpectedly." }) + "\n");
     res.end();
   }
 });

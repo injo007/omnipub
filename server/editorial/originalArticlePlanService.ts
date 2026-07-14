@@ -5,7 +5,8 @@ export async function createOriginalArticlePlan(
   articleTraceId: string,
   playbook: NichePlaybook,
   brief: EditorialBrief,
-  sourcesDeconstruction: SourceDeconstruction[]
+  sourcesDeconstruction: SourceDeconstruction[],
+  model: string,
 ): Promise<OriginalArticlePlan> {
   const providers = appContext.getStore();
   if (!providers?.llmCompletion) {
@@ -72,7 +73,7 @@ Return a JSON object conforming precisely to this schema:
       agent: "seoStrategist",
       step: "Planning Structure",
       prompt,
-      model: "gemini-2.5-flash", 
+      model,
       temperature: 0.3,
       responseFormat: "json_object"
     });

@@ -5,7 +5,8 @@ import { randomUUID as uuidv4 } from "crypto";
 export async function deconstructSource(
   sourceUrl: string,
   articleTraceId: string,
-  htmlContent: string
+  htmlContent: string,
+  model: string,
 ): Promise<SourceDeconstruction> {
   const providers = appContext.getStore();
   if (!providers?.llmCompletion) {
@@ -76,7 +77,7 @@ Return a valid JSON object matching this structure:
       agent: "sourceDeconstruction",
       step: "Deconstructing Source",
       prompt,
-      model: "gemini-2.5-flash",
+      model,
       temperature: 0.1,
       responseFormat: "json_object"
     });

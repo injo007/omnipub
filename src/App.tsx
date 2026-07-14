@@ -740,6 +740,7 @@ export default function App() {
   >([]);
   const [workflowCurrentStep, setWorkflowCurrentStep] = useState<string>("");
   const [isRewriting, setIsRewriting] = useState(false);
+  const [rewriteTerminalStatus, setRewriteTerminalStatus] = useState<"idle" | "running" | "completed" | "failed">("idle");
   const [rewritingStatusText, setRewritingStatusText] = useState("");
   const [showCouncilModal, setShowCouncilModal] = useState(false);
 
@@ -2102,6 +2103,7 @@ export default function App() {
     setSelectedSource(source);
     setShowCouncilModal(true);
     setIsRewriting(true);
+    setRewriteTerminalStatus("running");
     setActiveWorkflowLogs([]);
     setWorkflowCurrentStep("research");
 
@@ -2110,6 +2112,7 @@ export default function App() {
 
     setRewritingStatusText("Assembling Council & checking baseline facts...");
 
+    let terminalStatus: "completed" | "failed" | null = null;
     try {
       const response = await fetch("/api/articles/create", {
         method: "POST",
@@ -2143,6 +2146,14 @@ export default function App() {
       });
 
       if (!response.body) {
+        setRewriteTerminalStatus("failed");
+        setRewritingStatusText("Rewrite failed: the server did not provide a workflow stream.");
+        setIsRewriting(false);
+        return;
+      }
+      if (!response.ok) {
+        setRewriteTerminalStatus("failed");
+        setRewritingStatusText(`Rewrite failed: server returned HTTP ${response.status}.`);
         setIsRewriting(false);
         return;
       }
@@ -2167,6 +2178,13 @@ export default function App() {
             if (payload.step) {
               setWorkflowCurrentStep(payload.step);
               setRewritingStatusText(payload.log || "");
+              if (payload.terminalStatus === "failed" || payload.step === "failed") {
+                terminalStatus = "failed";
+                setRewriteTerminalStatus("failed");
+              } else if (payload.terminalStatus === "completed" || payload.step === "completed") {
+                terminalStatus = "completed";
+                setRewriteTerminalStatus("completed");
+              }
 
               if (payload.detail) {
                 setActiveWorkflowLogs((prev) => {
@@ -2195,9 +2213,14 @@ export default function App() {
         );
       } else {
         console.error("Agentic flow error:", err);
+        setRewritingStatusText(`Rewrite failed: ${err.message || "network or workflow error"}`);
       }
+      setRewriteTerminalStatus("failed");
     } finally {
       setIsRewriting(false);
+      if (terminalStatus !== "completed") {
+        setRewriteTerminalStatus("failed");
+      }
       rewriteAbortControllerRef.current = null;
       fetchArticles(); // Reload newly created dynamic drafted article
     }
@@ -2573,6 +2596,8 @@ export default function App() {
             const decoder = new TextDecoder();
             let partialLine = "";
             let createdArticleId = "";
+            let workflowCompleted = false;
+            let workflowFailed = false;
 
             if (reader) {
               try {
@@ -2597,6 +2622,12 @@ export default function App() {
                       }
                       if (payload.articleId) {
                         createdArticleId = payload.articleId;
+                      }
+                      if (payload.terminalStatus === "failed" || payload.step === "failed") {
+                        workflowFailed = true;
+                      }
+                      if (payload.terminalStatus === "completed" || payload.step === "completed") {
+                        workflowCompleted = true;
                       }
 
                       // Stream visual details only if this is the batch leader
@@ -2635,6 +2666,13 @@ export default function App() {
             }
 
             if (autopilotStopRequestRef.current) {
+              return;
+            }
+
+            if (workflowFailed || !workflowCompleted) {
+              setAutopilotLog(
+                `⛔ [Job ${jobNum}/${totalJobs}] Workflow did not complete successfully. The article remains held for editorial review and will not be illustrated or published.`,
+              );
               return;
             }
 
@@ -3539,9 +3577,17 @@ export default function App() {
                                       Processing Step{" "}
                                       <RefreshCw className="w-3 h-3 animate-spin inline-block ml-0.5" />
                                     </span>
-                                  ) : (
+                                  ) : rewriteTerminalStatus === "completed" ? (
                                     <span className="text-emerald-600 dark:text-emerald-400 font-bold flex items-center gap-1">
                                       ● successfully generated!
+                                    </span>
+                                  ) : rewriteTerminalStatus === "failed" ? (
+                                    <span className="text-rose-600 dark:text-rose-400 font-bold flex items-center gap-1">
+                                      ● workflow failed — saved for review
+                                    </span>
+                                  ) : (
+                                    <span className="text-slate-500 dark:text-slate-400 font-bold flex items-center gap-1">
+                                      ● awaiting workflow
                                     </span>
                                   )}
                                 </span>
