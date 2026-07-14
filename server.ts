@@ -7483,6 +7483,56 @@ appRouter.post("/api/saas-settings/test-openrouter", async (req, res) => {
   }
 });
 
+// Test MiniMax's native OpenAI-compatible endpoint. This is intentionally
+// separate from the generic agent test so a configured direct MiniMax route is
+// never mistaken for an OpenRouter model.
+appRouter.post("/api/saas-settings/test-minimax", async (req, res) => {
+  const { modelId, apiKey } = req.body;
+  const db = readDB();
+  const mSettings = db.settings?.modelSettings || DEFAULT_SETTINGS.modelSettings;
+  const keyToUse = apiKey || mSettings.minimaxApiKey || process.env.MINIMAX_API_KEY;
+  const requestedModel = modelId || "MiniMax-M3";
+  const route = resolveModelRoute(requestedModel);
+
+  if (route.provider !== "minimax") {
+    return res.status(400).json({
+      status: "failed",
+      message: `Model "${requestedModel}" resolves to ${route.provider}, not the native MiniMax provider.`,
+    });
+  }
+  if (!keyToUse) {
+    return res.json({
+      status: "failed",
+      message: "MiniMax API key is empty. Enter it in Settings before running a health check.",
+    });
+  }
+
+  const markStart = Date.now();
+  try {
+    const result = await runSingleMiniMaxInference(
+      route.modelId,
+      "Return only the word 'OK'.",
+      undefined,
+      false,
+      keyToUse,
+    );
+    return res.json({
+      status: "success",
+      message: "MiniMax native endpoint handshake completed successfully.",
+      latency: Date.now() - markStart,
+      modelUsed: route.modelId,
+      provider: "minimax",
+      responsePreview: result.text.trim() || "OK",
+    });
+  } catch (err: any) {
+    return res.json({
+      status: "failed",
+      message: `MiniMax endpoint error: ${err.message || err}`,
+      latency: Date.now() - markStart,
+    });
+  }
+});
+
 // Test Agent model connectivity
 appRouter.post("/api/saas-settings/test-agent-model", async (req, res) => {
   const { modelId, agentId } = req.body;

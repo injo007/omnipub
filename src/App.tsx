@@ -5,6 +5,7 @@
 
 import React, { useState, useEffect, useRef } from "react";
 import { AgentModelSelector } from "./components/AgentModelSelector";
+import { ProviderHealthCheck } from "./components/ProviderHealthCheck";
 import {
   Rss,
   Users,
@@ -6636,6 +6637,7 @@ export default function App() {
                                   }}
                                   className="w-full text-xs text-slate-850 dark:text-white bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg p-2 focus:outline-none focus:ring-1 focus:ring-indigo-500 font-sans shadow-inner"
                                 />
+                                <ProviderHealthCheck endpoint="/api/saas-settings/test-gemini" apiKey={saasConfig.modelSettings.geminiApiKey} modelId="gemini-2.5-flash" />
                               </div>
 
                               {/* Card B: OpenRouter */}
@@ -6665,6 +6667,7 @@ export default function App() {
                                   }}
                                   className="w-full text-xs text-slate-850 dark:text-white bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg p-2 focus:outline-none focus:ring-1 focus:ring-indigo-500 font-sans shadow-inner"
                                 />
+                                <ProviderHealthCheck endpoint="/api/saas-settings/test-openrouter" apiKey={saasConfig.modelSettings.openrouterApiKey} modelId="cohere/north-mini-code:free" />
                               </div>
 
                               {/* Card C: MiniMax */}
@@ -6694,6 +6697,7 @@ export default function App() {
                                   }}
                                   className="w-full text-xs text-slate-850 dark:text-white bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg p-2 focus:outline-none focus:ring-1 focus:ring-indigo-500 font-sans shadow-inner"
                                 />
+                                <ProviderHealthCheck endpoint="/api/saas-settings/test-minimax" apiKey={saasConfig.modelSettings.minimaxApiKey} modelId="MiniMax-M3" />
                               </div>
 
                               {/* Card D: OpenAI */}
