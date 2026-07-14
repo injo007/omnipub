@@ -25,7 +25,6 @@ import { validateEditorialBrief } from "./server/editorial/editorialBriefService
 import { addEvidenceEntry, checkTimeSensitiveFacts, validateDraftClaimsAgainstLedger } from "./server/editorial/evidenceLedgerService";
 
 import { deconstructSource } from "./server/editorial/sourceDeconstructionService";
-import { selectNichePlaybook } from "./server/editorial/nichePlaybookService";
 import { createOriginalArticlePlan } from "./server/editorial/originalArticlePlanService";
 import { analyzeOriginality } from "./server/editorial/originalityAnalysisService";
 import { analyzeNaturalness } from "./server/editorial/naturalnessAnalysisService";
@@ -36,6 +35,7 @@ import { evaluateEditorialQuality } from "./server/editorial/editorialQualitySer
 import { assessMediaAsset, type MediaAssetAssessment } from "./server/editorial/imageQualityService";
 import { assessResearchIntegrity } from "./server/editorial/researchIntegrityService";
 import { selectArticleFormat, type ArticleFormatProfile } from "./server/editorial/articleFormatService";
+import { resolveNicheEditorialPolicy } from "./server/editorial/nichePolicyService";
 import { PublishingQueueService, setPushToWordPressAdapter } from "./server/editorial/publishingQueueService";
 import { FinalArticlePackage } from "./server/editorial/typesPhaseD";
 
@@ -9177,7 +9177,8 @@ appRouter.post("/api/articles/create", async (req, res) => {
     // -------------------------------------------------------------
     // PHASE C: Niche Playbook & Original Article Plan
     // -------------------------------------------------------------
-    const playbook = selectNichePlaybook(editorialContext.niche, editorialContext.storyType);
+    const nicheEditorialPolicy = await resolveNicheEditorialPolicy(editorialContext.niche, editorialContext.sourceTitle);
+    const playbook = nicheEditorialPolicy.playbook;
     addLog("planning", "Strategic SEO Architect", "running", `Creating Original Article Plan from playbook ${playbook.playbookId}`);
     
     let originalArticlePlan: any = null;
@@ -9195,6 +9196,7 @@ appRouter.post("/api/articles/create", async (req, res) => {
     editorialContext.targetStructure = originalArticlePlan.plannedSections.join(", ");
     editorialContext.seoStrategy = originalArticlePlan.originalAngle;
     const recentFormatIds = (db.articles || [])
+      .filter((article: any) => article.niche === niche)
       .slice(-12)
       .map((article: any) => article.contentFormat || article?.pipelineRecords?.articleFormat?.id)
       .filter(Boolean);
@@ -9203,6 +9205,7 @@ appRouter.post("/api/articles/create", async (req, res) => {
       readerIntent: editorialBriefObj.readerIntent,
       evidenceLedger,
       recentFormatIds,
+      allowedFormatIds: nicheEditorialPolicy.allowedFormatIds,
     });
 
 
@@ -9900,6 +9903,7 @@ appRouter.post("/api/articles/create", async (req, res) => {
         researchBrief: parsedResearchOutput,
         writerAssignment: { writerId: writer.id, name: writer.name, voiceStyle: writer.voiceStyle },
         articleFormat: { ...articleFormat, finalStructureManifest },
+        nicheEditorialPolicy: { policyId: nicheEditorialPolicy.policyId, version: nicheEditorialPolicy.version, playbookId: playbook.playbookId },
         claimsUsed,
         validationResults: { adSensePassed: passedCompliance, safetyPassed: passedCompliance, violations: finalQuality?.blockingFailures || [], fabricatedCheck, timeSensitiveCheck },
         repairRecords,

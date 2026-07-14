@@ -16,6 +16,7 @@ let missingPasswordWarningShown = false;
 
 const ALLOWED_TABLES = new Set([
   "niches",
+  "niche_playbooks",
   "writers",
   "feeds",
   "articles",
@@ -119,6 +120,14 @@ export async function initSchema(): Promise<void> {
     // Niches
     await client.query(`
       CREATE TABLE IF NOT EXISTS niches (
+        id VARCHAR(255) PRIMARY KEY,
+        data JSONB NOT NULL,
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS niche_playbooks (
         id VARCHAR(255) PRIMARY KEY,
         data JSONB NOT NULL,
         updated_at TIMESTAMPTZ DEFAULT NOW()

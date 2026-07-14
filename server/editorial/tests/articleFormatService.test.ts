@@ -20,4 +20,12 @@ describe("article format selection", () => {
     const format = selectArticleFormat({ articleTraceId: "trace-format-b", evidenceLedger: [] });
     expect(["evidence_led_analysis", "reader_explainer", "decision_guide"]).toContain(format.id);
   });
+
+  it("honors the formats permitted by the niche policy", () => {
+    expect(selectArticleFormat({
+      articleTraceId: "trace-format-c",
+      evidenceLedger: ledger,
+      allowedFormatIds: ["decision_guide"],
+    }).id).toBe("decision_guide");
+  });
 });

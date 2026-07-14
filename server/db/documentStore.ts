@@ -4,6 +4,7 @@ import { getPool } from "./postgres";
 
 const COLLECTION_TABLES = {
   niches: "niches",
+  niche_playbooks: "niche_playbooks",
   writers: "writers",
   feeds: "feeds",
   articles: "articles",

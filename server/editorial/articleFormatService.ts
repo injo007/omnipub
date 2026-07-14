@@ -70,9 +70,12 @@ export function selectArticleFormat(input: {
   readerIntent?: string;
   evidenceLedger?: Array<{ sourceDate?: string; sourceUrl?: string }>;
   recentFormatIds?: string[];
+  allowedFormatIds?: ArticleFormatId[];
 }): ArticleFormatProfile {
   const recent = new Set(input.recentFormatIds || []);
+  const allowed = input.allowedFormatIds?.length ? new Set(input.allowedFormatIds) : null;
   const viable = FORMAT_PROFILES.filter((profile) => {
+    if (allowed && !allowed.has(profile.id)) return false;
     if (profile.id === "chronology_brief") return (input.evidenceLedger || []).some((entry) => Boolean(entry.sourceDate));
     if (profile.id === "comparison_brief") return new Set((input.evidenceLedger || []).map((entry) => entry.sourceUrl).filter(Boolean)).size >= 2;
     return true;
