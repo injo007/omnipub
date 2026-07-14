@@ -3585,8 +3585,11 @@ export default function App() {
                                       ● successfully generated!
                                     </span>
                                   ) : rewriteTerminalStatus === "failed" ? (
-                                    <span className="text-rose-600 dark:text-rose-400 font-bold flex items-center gap-1">
-                                      ● workflow failed — saved for review
+                                    <span
+                                      className="text-rose-600 dark:text-rose-400 font-bold flex items-center gap-1 max-w-full"
+                                      title={rewritingStatusText || "workflow failed — saved for review"}
+                                    >
+                                      ● {rewritingStatusText || "workflow failed — saved for review"}
                                     </span>
                                   ) : (
                                     <span className="text-slate-500 dark:text-slate-400 font-bold flex items-center gap-1">

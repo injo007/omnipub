@@ -20,6 +20,29 @@ function normalizedUrl(value: string): string {
   return value.trim().replace(/\/$/, "");
 }
 
+/**
+ * A feed URL often carries tracking parameters while an LLM returns the
+ * canonical article URL.  Those are still the same declared source.  Compare
+ * the publication host and path only; query strings are deliberately excluded
+ * from provenance matching, never from the stored source URL.
+ */
+function canonicalPublicationLocation(value: string): string | null {
+  try {
+    const url = new URL(value);
+    const host = url.hostname.toLowerCase().replace(/^www\./, "");
+    const path = url.pathname.replace(/\/+$/, "") || "/";
+    return `${url.protocol}//${host}${path}`;
+  } catch {
+    return null;
+  }
+}
+
+function isSameDeclaredArticle(first: string, second: string): boolean {
+  const firstLocation = canonicalPublicationLocation(first);
+  const secondLocation = canonicalPublicationLocation(second);
+  return Boolean(firstLocation && secondLocation && firstLocation === secondLocation);
+}
+
 function isPublicationUrl(value: string): boolean {
   try {
     const url = new URL(value);
@@ -31,6 +54,53 @@ function isPublicationUrl(value: string): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * Reconciles a model's canonical rendition of the supplied seed URL with the
+ * exact source URL stored by the workflow. This fixes benign RSS tracking URL
+ * differences without accepting a different publisher or article as evidence.
+ */
+export function reconcileDeclaredSourceReferences<T extends ResearchEvidenceRecord>(
+  sources: ResearchSourceRecord[] | undefined,
+  evidence: T[] | undefined,
+  declaredSource?: ResearchSourceRecord,
+): { sources: ResearchSourceRecord[]; evidence: T[] } {
+  const inputSources = Array.isArray(sources) ? sources : [];
+  const inputEvidence = Array.isArray(evidence) ? evidence : [];
+  if (!declaredSource?.url || !isPublicationUrl(declaredSource.url)) {
+    return { sources: inputSources, evidence: inputEvidence };
+  }
+
+  const matchingSource = inputSources.find((source) =>
+    Boolean(source?.url && isSameDeclaredArticle(source.url, declaredSource.url!)),
+  );
+  const hasMatchingEvidence = inputEvidence.some((entry) =>
+    Boolean(entry?.sourceUrl && isSameDeclaredArticle(entry.sourceUrl, declaredSource.url!)),
+  );
+
+  const canonicalSource: ResearchSourceRecord = {
+    url: declaredSource.url,
+    title: declaredSource.title?.trim() || matchingSource?.title?.trim() || "Declared source",
+    publisher: declaredSource.publisher?.trim() || matchingSource?.publisher?.trim() || "Declared publisher",
+  };
+
+  // A matching evidence record is sufficient proof that the model used the
+  // declared article even if it omitted the redundant top-level source row.
+  const reconciledSources = inputSources.map((source) =>
+    source?.url && isSameDeclaredArticle(source.url, declaredSource.url!)
+      ? canonicalSource
+      : source,
+  );
+  if (!matchingSource && hasMatchingEvidence) reconciledSources.push(canonicalSource);
+
+  const reconciledEvidence = inputEvidence.map((entry) =>
+    entry?.sourceUrl && isSameDeclaredArticle(entry.sourceUrl, declaredSource.url!)
+      ? { ...entry, sourceUrl: declaredSource.url }
+      : entry,
+  ) as T[];
+
+  return { sources: reconciledSources, evidence: reconciledEvidence };
 }
 
 /** Ensures the evidence ledger is internally traceable before drafting begins. */

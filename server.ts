@@ -33,7 +33,7 @@ import { attemptRepair } from "./server/editorial/editorialRepairService";
 import { createVersion } from "./server/editorial/articleVersionService";
 import { evaluateEditorialQuality } from "./server/editorial/editorialQualityService";
 import { assessMediaAsset, type MediaAssetAssessment } from "./server/editorial/imageQualityService";
-import { assessResearchIntegrity } from "./server/editorial/researchIntegrityService";
+import { assessResearchIntegrity, reconcileDeclaredSourceReferences } from "./server/editorial/researchIntegrityService";
 import { selectArticleFormat, type ArticleFormatProfile } from "./server/editorial/articleFormatService";
 import { resolveNicheEditorialPolicy } from "./server/editorial/nichePolicyService";
 import { assessEditorialReadiness } from "./server/editorial/editorialReadinessService";
@@ -9027,6 +9027,29 @@ appRouter.post("/api/articles/create", async (req, res) => {
     if (!parsedResearchOutput.sources || !Array.isArray(parsedResearchOutput.sources)) {
       parsedResearchOutput.sources = [];
     }
+
+    // The provider can legitimately normalize a feed URL by removing its RSS
+    // tracking parameters. Reconcile only that exact publication/article back
+    // to the declared seed URL; unrelated or invented URLs still fail below.
+    const declaredSource = sourceUrl ? (() => {
+      try {
+        const url = new URL(sourceUrl);
+        return {
+          url: sourceUrl,
+          title: sourceTitle || "Declared source",
+          publisher: url.hostname.replace(/^www\./i, "") || "Declared publisher",
+        };
+      } catch {
+        return undefined;
+      }
+    })() : undefined;
+    const reconciledResearch = reconcileDeclaredSourceReferences(
+      parsedResearchOutput.sources,
+      parsedResearchOutput.evidenceLedger || [],
+      declaredSource,
+    );
+    parsedResearchOutput.sources = reconciledResearch.sources;
+    parsedResearchOutput.evidenceLedger = reconciledResearch.evidence as EvidenceLedgerEntry[];
     
     const highStakesNiches = new Set(["destination", "hotel", "travel", "wellness", "health", "medical", "business", "business_finance", "finance", "investment"]);
     const minNeededSources = highStakesNiches.has(String(detectedNiche || niche || "").toLowerCase()) ? 2 : 1;
@@ -9036,10 +9059,27 @@ appRouter.post("/api/articles/create", async (req, res) => {
       minNeededSources,
     );
     if (!researchIntegrity.passed) {
+      const integrityDetail = researchIntegrity.reasons.join(" ");
+      addLog(
+        "research_integrity",
+        "Research Integrity Gate",
+        "failed",
+        `Research response was rejected: ${integrityDetail}`,
+        JSON.stringify({
+          validSourceCount: researchIntegrity.validSourceCount,
+          requiredSourceCount: minNeededSources,
+          declaredSourceUrl: declaredSource?.url || null,
+          returnedSources: parsedResearchOutput.sources,
+          evidenceCount: parsedResearchOutput.evidenceLedger?.length || 0,
+        }),
+        researchPromptObj.compiledPrompt,
+        rsModel,
+        researchMeta,
+      );
       abortAndPersist(
         "Research integrity gate failed",
         "RESEARCH_INTEGRITY_FAILED",
-        `Research integrity gate failed: ${researchIntegrity.reasons.join(" ")} Needs manual review.`,
+        `Research integrity gate failed: ${integrityDetail} Needs manual review.`,
       );
       return;
     }
