@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 
 interface ProviderHealthCheckProps {
-  endpoint: "/api/saas-settings/test-gemini" | "/api/saas-settings/test-openrouter" | "/api/saas-settings/test-minimax";
+  endpoint: "/api/saas-settings/test-gemini" | "/api/saas-settings/test-openai" | "/api/saas-settings/test-openrouter" | "/api/saas-settings/test-minimax";
   apiKey?: string;
   modelId: string;
 }

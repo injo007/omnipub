@@ -6727,7 +6727,13 @@ export default function App() {
                                   }}
                                   className="w-full text-xs text-slate-850 dark:text-white bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg p-2 focus:outline-none focus:ring-1 focus:ring-indigo-500 font-sans shadow-inner"
                                 />
+                                <ProviderHealthCheck endpoint="/api/saas-settings/test-openai" apiKey={saasConfig.modelSettings.openaiApiKey} modelId="gpt-4.1" />
                               </div>
+                            </div>
+                            <div className="mt-3 grid grid-cols-1 md:grid-cols-3 gap-2 rounded-xl border border-indigo-100 bg-indigo-50/60 p-3 text-[9px] leading-relaxed text-slate-600 dark:border-slate-800 dark:bg-slate-900/60 dark:text-slate-300">
+                              <p><strong className="text-indigo-700 dark:text-indigo-300">1. Add only the keys you use.</strong> Credentials are stored separately; an empty key simply disables that native route.</p>
+                              <p><strong className="text-emerald-700 dark:text-emerald-300">2. Choose a model by provider.</strong> NVIDIA, Anthropic, Kimi, GLM, DeepSeek and Llama use your OpenRouter key unless you enter a custom native integration.</p>
+                              <p><strong className="text-rose-700 dark:text-rose-300">3. Test before publishing.</strong> The buttons run a small live handshake without saving the currently edited credential.</p>
                             </div>
                           </div>
 

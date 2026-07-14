@@ -3165,7 +3165,7 @@ function calculateCost(model: string, inputTokens: number, outputTokens: number)
   return (inputTokens / 1000000) * modelConfig.inputCostPerM + (outputTokens / 1000000) * modelConfig.outputCostPerM;
 }
 
-function resolveProvider(modelId: string): "gemini" | "openrouter" | "minimax" {
+function resolveProvider(modelId: string): "gemini" | "openai" | "openrouter" | "minimax" {
   if (!modelId || modelId === "none" || modelId.toLowerCase().includes("none") || modelId === "local" || modelId === "browser-assistant") {
     return "gemini";
   }
@@ -3554,6 +3554,36 @@ async function runSingleMiniMaxInference(
   };
 }
 
+async function runSingleOpenAIInference(
+  modelName: string,
+  contents: string,
+  systemInstruction?: string,
+  jsonMode?: boolean,
+  apiKey?: string,
+): Promise<{ text: string; inputTokens: number; outputTokens: number }> {
+  if (!apiKey) {
+    throw new Error("OpenAI API key is missing. Specify it in your Settings.");
+  }
+  const openai = new OpenAI({ apiKey, timeout: 120000 });
+  const messages: any[] = [];
+  if (systemInstruction) messages.push({ role: "system", content: systemInstruction });
+  messages.push({ role: "user", content: contents });
+  const response = await openai.chat.completions.create({
+    model: modelName,
+    messages,
+    response_format: jsonMode ? { type: "json_object" } : undefined,
+    max_tokens: 8192,
+  });
+  if (!response?.choices?.[0]) {
+    throw new Error("OpenAI API returned no completion choices.");
+  }
+  return {
+    text: response.choices[0].message?.content || "",
+    inputTokens: response.usage?.prompt_tokens || 0,
+    outputTokens: response.usage?.completion_tokens || 0,
+  };
+}
+
 // -------------------------------------------------------------
 // Unified LLM Completion Handler with Provider Routing
 // -------------------------------------------------------------
@@ -3574,6 +3604,7 @@ export async function runLLMCompletion(params: any): Promise<any> {
   const mSettings = saasConfig.modelSettings || DEFAULT_SETTINGS.modelSettings;
   
   const geminiApiKey = mSettings.geminiApiKey || process.env.GEMINI_API_KEY;
+  const openAIApiKey = mSettings.openaiApiKey || process.env.OPENAI_API_KEY;
   const openrouterApiKey = mSettings.openrouterApiKey || process.env.OPENROUTER_API_KEY;
   const minimaxApiKey = mSettings.minimaxApiKey || process.env.MINIMAX_API_KEY;
 
@@ -3617,6 +3648,8 @@ export async function runLLMCompletion(params: any): Promise<any> {
   let runtimeClient: "GoogleGenAI" | "OpenRouter" | "OpenAI" | "ImageEngine" | "MiniMaxEngine" = "OpenRouter";
   if (resolvedProvider === "gemini") {
     runtimeClient = "GoogleGenAI";
+  } else if (resolvedProvider === "openai") {
+    runtimeClient = "OpenAI";
   } else if (resolvedProvider === "openrouter") {
     runtimeClient = "OpenRouter";
   } else if (resolvedProvider === "minimax") {
@@ -3703,7 +3736,7 @@ export async function runLLMCompletion(params: any): Promise<any> {
 
   const keyToUse = resolvedProvider === "gemini" 
     ? geminiApiKey 
-    : (resolvedProvider === "minimax" ? minimaxApiKey : openrouterApiKey);
+    : (resolvedProvider === "openai" ? openAIApiKey : (resolvedProvider === "minimax" ? minimaxApiKey : openrouterApiKey));
 
   // Attempt the user-selected model
   for (attempt = 1; attempt <= 3; attempt++) {
@@ -3749,6 +3782,14 @@ export async function runLLMCompletion(params: any): Promise<any> {
         text = response.choices[0].message?.content || "";
         inputTokens = response.usage?.prompt_tokens || 0;
         outputTokens = response.usage?.completion_tokens || 0;
+        if (inputTokens === 0) calculateTokensHeuristic(text);
+        success = true;
+        break;
+      } else if (resolvedProvider === "openai") {
+        const result = await runSingleOpenAIInference(selectedModel, contents, systemInstruction, jsonMode, keyToUse);
+        text = result.text;
+        inputTokens = result.inputTokens;
+        outputTokens = result.outputTokens;
         if (inputTokens === 0) calculateTokensHeuristic(text);
         success = true;
         break;
@@ -3990,6 +4031,23 @@ export async function runLLMCompletion(params: any): Promise<any> {
               }
             }
           }
+      } else if (fbProvider === "openai" && openAIApiKey) {
+        try {
+          const fbResult = await runSingleOpenAIInference(fallbackModelId, contents, systemInstruction, jsonMode, openAIApiKey);
+          text = fbResult.text;
+          inputTokens = fbResult.inputTokens;
+          outputTokens = fbResult.outputTokens;
+          if (inputTokens === 0) calculateTokensHeuristic(text);
+          fallbackModelUsed = fallbackModelId;
+          success = true;
+          addNotification("success", "Playback Stabilized", `Rerouted agent execution stabilized on OpenAI fallback "${fallbackModelId}".`);
+        } catch (fbErr: any) {
+          finalStatus = "failed";
+          const totalErr = `Configured OpenAI fallback ${fallbackTarget} failed: ${fbErr.message || fbErr}`;
+          console.error(`[LLM Fallback Failure] ${totalErr}`);
+          addNotification("error", "Configured Fallback Failed", totalErr);
+          throw new Error(totalErr);
+        }
       } else if (fbProvider === "minimax" && minimaxApiKey) {
         try {
           const fbResult = await runSingleMiniMaxInference(fallbackModelId, contents, systemInstruction, jsonMode, minimaxApiKey);
@@ -7533,6 +7591,35 @@ appRouter.post("/api/saas-settings/test-minimax", async (req, res) => {
   }
 });
 
+// Test OpenAI directly. OpenRouter-hosted OpenAI models should use the
+// OpenRouter diagnostic instead, keeping key ownership explicit.
+appRouter.post("/api/saas-settings/test-openai", async (req, res) => {
+  const { modelId, apiKey } = req.body;
+  const db = readDB();
+  const mSettings = db.settings?.modelSettings || DEFAULT_SETTINGS.modelSettings;
+  const keyToUse = apiKey || mSettings.openaiApiKey || process.env.OPENAI_API_KEY;
+  const requestedModel = modelId || "gpt-4.1";
+  const route = resolveModelRoute(requestedModel.startsWith("openai:") ? requestedModel : `openai:${requestedModel}`);
+
+  if (!keyToUse) {
+    return res.json({ status: "failed", message: "OpenAI API key is empty. Enter it in Settings before running a health check." });
+  }
+  const markStart = Date.now();
+  try {
+    const result = await runSingleOpenAIInference(route.modelId, "Return only the word 'OK'.", undefined, false, keyToUse);
+    return res.json({
+      status: "success",
+      message: "OpenAI native endpoint handshake completed successfully.",
+      latency: Date.now() - markStart,
+      modelUsed: route.modelId,
+      provider: "openai",
+      responsePreview: result.text.trim() || "OK",
+    });
+  } catch (err: any) {
+    return res.json({ status: "failed", message: `OpenAI endpoint error: ${err.message || err}`, latency: Date.now() - markStart });
+  }
+});
+
 // Test Agent model connectivity
 appRouter.post("/api/saas-settings/test-agent-model", async (req, res) => {
   const { modelId, agentId } = req.body;
@@ -8430,7 +8517,7 @@ function handleBlockingAgentFailure(params: {
 }) {
   const { agentName, stepKey, stepName, selectedModel, error, addLog } = params;
   const provider = resolveProvider(selectedModel);
-  const runtimeClient = provider === "gemini" ? "GoogleGenAI" : "OpenRouter";
+  const runtimeClient = provider === "gemini" ? "GoogleGenAI" : provider === "openai" ? "OpenAI" : provider === "minimax" ? "MiniMaxEngine" : "OpenRouter";
   
   const errorReason = error?.message || error?.toString() || "Unknown API Error";
   const customMessage = `Workflow blocked: ${agentName} failed on model "${selectedModel}". Failover is disabled. Article was not marked as ready.`;

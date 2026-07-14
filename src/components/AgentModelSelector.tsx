@@ -48,12 +48,25 @@ export function AgentModelSelector({
           <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
           <option value="gemini-3.1-pro-preview">Gemini 3.1 Pro (Preview)</option>
         </optgroup>
-        <optgroup label="OpenRouter" className="text-emerald-400 font-mono text-[10px]">
+        <optgroup label="OpenAI (native key)" className="text-sky-400 font-mono text-[10px]">
+          <option value="openai:gpt-4.1">GPT-4.1 — Native OpenAI</option>
+          <option value="openai:gpt-4o-mini">GPT-4o mini — Native OpenAI</option>
+        </optgroup>
+        <optgroup label="OpenRouter — resilience & open models" className="text-emerald-400 font-mono text-[10px]">
           <option value="custom-openrouter">✦ Custom OpenRouter Model</option>
           <option value="cohere/north-mini-code:free">Cohere North Mini Code (Resilience)</option>
           <option value="deepseek/deepseek-chat">DeepSeek V3 (Fast)</option>
           <option value="meta-llama/llama-3.3-70b-instruct">Llama 3.3 70B</option>
+        </optgroup>
+        <optgroup label="OpenRouter — Anthropic" className="text-amber-400 font-mono text-[10px]">
           <option value="anthropic/claude-3.5-sonnet">Claude 3.5 Sonnet</option>
+        </optgroup>
+        <optgroup label="OpenRouter — NVIDIA" className="text-lime-400 font-mono text-[10px]">
+          <option value="nvidia/nemotron-3-super-120b-a12b:free">Nemotron 3 Super 120B</option>
+        </optgroup>
+        <optgroup label="OpenRouter — Kimi & GLM" className="text-cyan-400 font-mono text-[10px]">
+          <option value="moonshotai/kimi-k2.6:free">Kimi K2.6</option>
+          <option value="z-ai/glm-4.5-air:free">GLM 4.5 Air</option>
         </optgroup>
         <optgroup label="MiniMax" className="text-rose-400 font-mono text-[10px]">
           <option value="MiniMax-M3">MiniMax M3 (Primary)</option>
@@ -72,8 +85,8 @@ export function AgentModelSelector({
   const getPlaceholderText = (isFallback: boolean) => {
     if (optionsMode === "image") return "e.g. Nanobana....";
     const activeVal = isFallback ? fallbackModelValue : modelValue;
-    if (activeVal === "custom-minimax") return "e.g. minimax/abab6.5g-chat";
-    return "e.g. openrouter/free";
+    if (activeVal === "custom-minimax") return "e.g. MiniMax-M3";
+    return "e.g. provider/model-id (verify availability in your OpenRouter account)";
   };
 
   return (
