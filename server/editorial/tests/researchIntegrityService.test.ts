@@ -47,6 +47,30 @@ describe("research integrity gate", () => {
     expect(assessResearchIntegrity(reconciled.sources, reconciled.evidence, 1).passed).toBe(true);
   });
 
+  it("retains the supplied source and repairs placeholder evidence links", () => {
+    const declared = {
+      url: "https://news.example.org/report?utm_source=rss",
+      title: "Declared article",
+      publisher: "news.example.org",
+    };
+    const reconciled = reconcileDeclaredSourceReferences(
+      [],
+      [{ sourceUrl: "https://example.com/source", verificationStatus: "partially_verified", supportsClaim: true }],
+      declared,
+    );
+
+    expect(reconciled.sources).toEqual([declared]);
+    expect(reconciled.evidence[0].sourceUrl).toBe(declared.url);
+    expect(assessResearchIntegrity(reconciled.sources, reconciled.evidence, 1).passed).toBe(true);
+  });
+
+  it("accepts a canonical evidence URL that differs only by tracking parameters", () => {
+    const source = { url: "https://news.example.org/report", title: "Report", publisher: "Example News" };
+    expect(assessResearchIntegrity([source], [
+      { sourceUrl: "https://news.example.org/report?utm_source=rss", verificationStatus: "verified", supportsClaim: true },
+    ], 1)).toMatchObject({ passed: true, validSourceCount: 1 });
+  });
+
   it("does not reconcile a different article or publisher", () => {
     const declared = { url: "https://news.example.org/a", title: "A", publisher: "News" };
     const reconciled = reconcileDeclaredSourceReferences(

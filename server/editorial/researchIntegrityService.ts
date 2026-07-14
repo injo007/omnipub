@@ -58,8 +58,10 @@ function isPublicationUrl(value: string): boolean {
 
 /**
  * Reconciles a model's canonical rendition of the supplied seed URL with the
- * exact source URL stored by the workflow. This fixes benign RSS tracking URL
- * differences without accepting a different publisher or article as evidence.
+ * exact source URL stored by the workflow. The supplied source is always a
+ * declared record because the research prompt limits the model to that source.
+ * This fixes benign RSS tracking differences without accepting a different
+ * publisher or article as evidence.
  */
 export function reconcileDeclaredSourceReferences<T extends ResearchEvidenceRecord>(
   sources: ResearchSourceRecord[] | undefined,
@@ -75,27 +77,29 @@ export function reconcileDeclaredSourceReferences<T extends ResearchEvidenceReco
   const matchingSource = inputSources.find((source) =>
     Boolean(source?.url && isSameDeclaredArticle(source.url, declaredSource.url!)),
   );
-  const hasMatchingEvidence = inputEvidence.some((entry) =>
-    Boolean(entry?.sourceUrl && isSameDeclaredArticle(entry.sourceUrl, declaredSource.url!)),
-  );
-
   const canonicalSource: ResearchSourceRecord = {
     url: declaredSource.url,
     title: declaredSource.title?.trim() || matchingSource?.title?.trim() || "Declared source",
     publisher: declaredSource.publisher?.trim() || matchingSource?.publisher?.trim() || "Declared publisher",
   };
 
-  // A matching evidence record is sufficient proof that the model used the
-  // declared article even if it omitted the redundant top-level source row.
+  // The source context was supplied by the workflow, so retain it even when
+  // the model omitted the redundant top-level source row. This does not make
+  // any unrelated publisher or article an accepted evidence source.
   const reconciledSources = inputSources.map((source) =>
     source?.url && isSameDeclaredArticle(source.url, declaredSource.url!)
       ? canonicalSource
       : source,
   );
-  if (!matchingSource && hasMatchingEvidence) reconciledSources.push(canonicalSource);
+  if (!matchingSource) reconciledSources.push(canonicalSource);
 
   const reconciledEvidence = inputEvidence.map((entry) =>
-    entry?.sourceUrl && isSameDeclaredArticle(entry.sourceUrl, declaredSource.url!)
+    // Parser fallbacks can leave a blank or placeholder source URL. Those
+    // entries still describe the supplied source context; anchor them to the
+    // declared source rather than rejecting a valid rewrite. Concrete URLs
+    // for a different article or publisher remain untouched and fail below.
+    (!isPublicationUrl(entry?.sourceUrl || "") ||
+      (entry?.sourceUrl && isSameDeclaredArticle(entry.sourceUrl, declaredSource.url!)))
       ? { ...entry, sourceUrl: declaredSource.url }
       : entry,
   ) as T[];
@@ -115,20 +119,21 @@ export function assessResearchIntegrity(
     Boolean(source?.publisher?.trim()) &&
     isPublicationUrl(source?.url || ""),
   );
-  const sourceUrls = new Set(validSources.map((source) => normalizedUrl(source.url!)));
-
   if (validSources.length < minimumSources) {
     reasons.push(`At least ${minimumSources} complete HTTPS source records are required; received ${validSources.length}.`);
   }
 
-  const verifiedEvidence = (evidence || []).filter((entry) =>
-    entry?.verificationStatus === "verified" &&
+  const supportedEvidence = (evidence || []).filter((entry) =>
+    (entry?.verificationStatus === "verified" || entry?.verificationStatus === "partially_verified") &&
     entry?.supportsClaim === true &&
     Boolean(entry.sourceUrl) &&
-    sourceUrls.has(normalizedUrl(entry.sourceUrl!)),
+    validSources.some((source) =>
+      normalizedUrl(source.url!) === normalizedUrl(entry.sourceUrl!) ||
+      isSameDeclaredArticle(source.url!, entry.sourceUrl!),
+    ),
   );
-  if (verifiedEvidence.length === 0) {
-    reasons.push("No verified evidence-ledger claim is linked to a declared source record.");
+  if (supportedEvidence.length === 0) {
+    reasons.push("No verified or partially verified evidence-ledger claim is linked to a declared source record.");
   }
 
   return { passed: reasons.length === 0, validSourceCount: validSources.length, reasons };

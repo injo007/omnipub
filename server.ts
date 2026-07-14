@@ -8652,6 +8652,9 @@ appRouter.post("/api/articles/create", async (req, res) => {
     isAutoOptimized = true;
   }
   const detectedNiche = await detectNiche(niche, sourceTitle, sourceUrl, db);
+  const highStakesNiches = new Set(["destination", "hotel", "travel", "wellness", "health", "medical", "business", "business_finance", "finance", "investment"]);
+  const isHighStakesNiche = highStakesNiches.has(String(detectedNiche || niche || "").toLowerCase());
+  let independentSourceReviewRequired = false;
   let cleanSource = cleanSourceContent(sourceDescription);
   let isThinContent = false;
   
@@ -9051,8 +9054,10 @@ appRouter.post("/api/articles/create", async (req, res) => {
     parsedResearchOutput.sources = reconciledResearch.sources;
     parsedResearchOutput.evidenceLedger = reconciledResearch.evidence as EvidenceLedgerEntry[];
     
-    const highStakesNiches = new Set(["destination", "hotel", "travel", "wellness", "health", "medical", "business", "business_finance", "finance", "investment"]);
-    const minNeededSources = highStakesNiches.has(String(detectedNiche || niche || "").toLowerCase()) ? 2 : 1;
+    // Research operates only on supplied source context and must never invent
+    // a second publisher. Integrity therefore requires one traceable source;
+    // high-stakes single-source drafts are held for review later in the flow.
+    const minNeededSources = 1;
     const researchIntegrity = assessResearchIntegrity(
       parsedResearchOutput.sources,
       parsedResearchOutput.evidenceLedger,
@@ -9283,12 +9288,13 @@ appRouter.post("/api/articles/create", async (req, res) => {
     // PHASE C: Source Validation
     // -------------------------------------------------------------
     const numSources = parsedResearchOutput.sources.length;
-    const minSourcesNeeded = highStakesNiches.has(String(detectedNiche || niche || "").toLowerCase()) ? 2 : 1;
+    const minSourcesNeeded = isHighStakesNiche ? 2 : 1;
     
-    // For tests, do not block unless simulated
-    if (numSources < minSourcesNeeded && process.env.NODE_ENV !== "test" && !sourceTitle?.includes("Test Prod")) {
-         abortAndPersist(`Insufficient independent sources for this niche. Required: ${minSourcesNeeded}, Found: ${numSources}.`, "NEEDS_RESEARCH", "Source validation failed.", evidenceLedger);
-         return;
+    if (numSources < minSourcesNeeded) {
+         // Continue the rewrite using its traceable seed evidence, but never
+         // auto-publish a high-stakes article without independent corroboration.
+         independentSourceReviewRequired = true;
+         addLog("research_integrity", "Source Coverage Gate", "warn", `Only ${numSources}/${minSourcesNeeded} independent sources are available. Continuing as a manual-review draft; automatic publishing is disabled.`, undefined, undefined, rsModel);
     }
 
     // -------------------------------------------------------------
@@ -9668,6 +9674,12 @@ appRouter.post("/api/articles/create", async (req, res) => {
 
     let finalEditorialStatus = passedCompliance ? "Ready" : "Needs Editorial Review";
     let finalArticleStatus = passedCompliance ? "draft" : "manual_review";
+
+    if (independentSourceReviewRequired) {
+        finalEditorialStatus = "Needs Source Review";
+        finalArticleStatus = "manual_review";
+        addLog("validation", "Source Coverage Gate", "warn", "Draft completed with one traceable source and requires independent-source review before publishing.");
+    }
     
     if (finalQuality && finalQuality.totalScore) {
        safetyScore = finalQuality.totalScore;
