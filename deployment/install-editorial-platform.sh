@@ -29,7 +29,9 @@ HOST_RAM_MB=0
 HOST_DISK_GB=0
 REMOTE_BACKUP_ENABLED="${REMOTE_BACKUP_ENABLED:-false}"
 
-# Production-only can run on a small host; staging remains an opt-in full profile.
+# Production-only can run on a small host; its disk target is advisory so hosts
+# provisioned at roughly 40 GB are not rejected because of filesystem rounding.
+# Staging remains an opt-in full profile with a strict disk minimum.
 MIN_PRODUCTION_CPU=1
 MIN_PRODUCTION_RAM_MB=1800
 MIN_PRODUCTION_DISK_GB=40
@@ -313,9 +315,12 @@ function run_preflights() {
         fi
         log "INFO" "Full production-and-staging profile selected."
     else
-        if (( HOST_CPU_COUNT < MIN_PRODUCTION_CPU || HOST_RAM_MB < MIN_PRODUCTION_RAM_MB || HOST_DISK_GB < MIN_PRODUCTION_DISK_GB )); then
-            log "ERROR" "Production-only requires at least ${MIN_PRODUCTION_CPU} CPU, ${MIN_PRODUCTION_RAM_MB} MB RAM, and ${MIN_PRODUCTION_DISK_GB} GB free disk. Detected: ${HOST_CPU_COUNT} CPUs, ${HOST_RAM_MB} MB RAM, ${HOST_DISK_GB} GB free."
+        if (( HOST_CPU_COUNT < MIN_PRODUCTION_CPU || HOST_RAM_MB < MIN_PRODUCTION_RAM_MB )); then
+            log "ERROR" "Production-only requires at least ${MIN_PRODUCTION_CPU} CPU and ${MIN_PRODUCTION_RAM_MB} MB RAM. Detected: ${HOST_CPU_COUNT} CPUs, ${HOST_RAM_MB} MB RAM."
             exit 3
+        fi
+        if (( HOST_DISK_GB < MIN_PRODUCTION_DISK_GB )); then
+            log "WARN" "Production-only recommends ${MIN_PRODUCTION_DISK_GB} GB free disk. Detected: ${HOST_DISK_GB} GB free; continuing without staging. Monitor available space during image builds and database operation."
         fi
         log "WARN" "Production-only profile selected for this host (${HOST_CPU_COUNT} CPUs, ${HOST_RAM_MB} MB RAM, ${HOST_DISK_GB} GB free). Staging is disabled to prevent memory exhaustion."
     fi

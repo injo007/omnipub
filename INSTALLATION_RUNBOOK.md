@@ -15,7 +15,7 @@ This document defines installation workflows for operators setting up fresh phys
 |---|---|---|
 | **CPU Cores** | 8 Cores (vCPU) | 1 production-only / 4 with staging |
 | **RAM Space** | 16 GB DDR4/DDR5 | 2 GB production-only / 8 GB with staging |
-| **Storage NVMe**| 160 GB NVMe | 40 GB production-only / 80 GB with staging |
+| **Storage NVMe**| 160 GB NVMe | 40 GB recommended for production-only / 80 GB required with staging |
 
 ---
 
@@ -78,6 +78,7 @@ The platform uses a local, self-contained PostgreSQL instance running alongside 
 ### Recovery from older or interrupted installers
 
 -   An interrupted run is resumable: rerun the same `install` command. Completed setup and PostgreSQL volumes are preserved.
+-   A production-only installation with approximately 40 GB provisioned storage can report `39 GB free` after filesystem overhead and rounding. This is now a warning rather than a rejection; the installer continues without staging. Keep at least 40 GB free where possible and monitor disk use during image builds and database operation.
 -   If `docker ps` is empty and deployment metadata is missing, inspect `/var/log/editorial-platform/installer.log`; installation stopped before containers were started.
 -   A blank PostgreSQL password or credential-vault key is generated and saved in root-only configuration.
 -   A malformed credential-vault key from an incomplete deployment is replaced automatically. The installer never rotates the key automatically after deployment metadata exists.

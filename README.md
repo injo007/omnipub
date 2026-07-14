@@ -12,7 +12,7 @@ To install the platform on a fresh physical or virtual Linux server, follow thes
 *   **Host OS**: Ubuntu Server 24.04 LTS (x86_64)
 *   **Permissions**: Strict `sudo` or `root` privileges.
 *   **Production hostname**: A real DNS hostname you control, with an `A` record resolving to the server before installation. Placeholder domains and raw-IP HTTPS are rejected.
-*   **Production-only minimum**: 1 vCPU, 2 GB RAM, 40 GB available disk. This profile uses reduced worker concurrency and does not start staging.
+*   **Production-only minimum**: 1 vCPU and 2 GB RAM. 40 GB available disk is recommended; hosts just below that target receive a warning and continue without staging.
 *   **Production + staging minimum**: 4 vCPU, 8 GB RAM, 80 GB available disk.
 *   **Recommended sizing**: 8 vCPU, 16 GB RAM, 160 GB NVMe SSD.
 *   **Model credential**: `OPENROUTER_API_KEY` (recommended) or `MINIMAX_API_KEY` is required. PostgreSQL and credential-vault secrets can be generated securely by the installer.

@@ -34,4 +34,10 @@ describe("Master Bash Installer Unit Checks", () => {
     expect(content).toContain("LOCK_FILE=");
     expect(content).toContain("acquire_lock");
   });
+
+  it("should warn, rather than reject, when production-only disk space is below the recommended target", () => {
+    const content = fs.readFileSync(scriptPath, "utf-8");
+    expect(content).toContain("Production-only recommends ${MIN_PRODUCTION_DISK_GB} GB free disk");
+    expect(content).not.toContain("Production-only requires at least ${MIN_PRODUCTION_CPU} CPU, ${MIN_PRODUCTION_RAM_MB} MB RAM, and ${MIN_PRODUCTION_DISK_GB} GB free disk");
+  });
 });
