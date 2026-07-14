@@ -9431,6 +9431,10 @@ appRouter.post("/api/articles/create", async (req, res) => {
     let finalFabricatedCheck: any = fabricatedCheck;
     let finalFreshnessCheck: any = timeSensitiveCheck;
     let finalReadiness: any = null;
+    const recentSameNicheArticles = (db.articles || [])
+      .filter((article: any) => article.niche === niche && article.content && article.id !== articleTraceId)
+      .slice(-12)
+      .map((article: any) => ({ id: article.id, title: article.title, content: article.content }));
     
     // Save initial version
     try {
@@ -9443,7 +9447,7 @@ appRouter.post("/api/articles/create", async (req, res) => {
     addLog("validation", "Lead Quality & Safety Compliance Inspector", "running", `Initiating PHASE C Quality, Naturalness, and Originality loops...`);
 
     while (repairAttempts <= maxRepairs) {
-        originalityData = await analyzeOriginality(articleTraceId, currentHtml, deconstructions);
+        originalityData = await analyzeOriginality(articleTraceId, currentHtml, deconstructions, recentSameNicheArticles);
         naturalnessData = await analyzeNaturalness(articleTraceId, currentHtml);
         writerVoiceData = await validateWriterVoice(articleTraceId, currentHtml, writerProfile);
         finalClaimValidation = validateDraftClaimsAgainstLedger(currentHtml, claimsUsed, evidenceLedger);

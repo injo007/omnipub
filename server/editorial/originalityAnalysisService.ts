@@ -4,6 +4,12 @@ import { extractEditorialTextBlocks } from "./editorialTextService";
 const EXCLUSION_WORDS = new Set(['the', 'and', 'a', 'to', 'of', 'in', 'is', 'it', 'that', 'for', 'on', 'with', 'as', 'was', 'at', 'by', 'an', 'be', 'this', 'which', 'or', 'from', 'but', 'not', 'are', 'were', 'have', 'had', 'has', 'they', 'their', 'we', 'our', 'you', 'your', 'he', 'his', 'she', 'her', 'it', 'its']);
 const COMMON_NICHE_TERMS = new Set(['football', 'match', 'goal', 'team', 'stadium', 'league', 'player', 'travel', 'hotel', 'flight', 'destination']);
 
+export interface PublishedArticleReference {
+    id: string;
+    title?: string;
+    content: string;
+}
+
 function extractQuotations(text: string): string[] {
     const quotes = text.match(/"([^"]+)"/g) || [];
     return quotes.map(q => q.replace(/"/g, ''));
@@ -37,7 +43,8 @@ function jaccardSimilarity(str1: string, str2: string) {
 export async function analyzeOriginality(
   articleTraceId: string,
   draftHtml: string,
-  sources: SourceDeconstruction[]
+  sources: SourceDeconstruction[],
+  publishedArticles: PublishedArticleReference[] = [],
 ): Promise<OriginalityAnalysis> {
   let passed = true;
   let overallOriginalityScore = 100;
@@ -125,6 +132,43 @@ export async function analyzeOriginality(
                 overallOriginalityScore = Math.min(overallOriginalityScore, 70);
             }
         }
+      }
+    }
+  }
+
+  // The source check prevents copying; this archive check prevents the platform
+  // from repeatedly publishing the same opening and heading architecture.
+  // It is deliberately limited to recent same-niche articles supplied by the
+  // caller, rather than treating the wider web as internal source material.
+  for (const article of publishedArticles) {
+    const archivedBlocks = extractEditorialTextBlocks(article.content);
+    if (!archivedBlocks.text || archivedBlocks.paragraphs.length === 0) continue;
+
+    const openingSimilarity = jaccardSimilarity(draftParagraphs[0] || "", archivedBlocks.paragraphs[0] || "");
+    if (openingSimilarity > 0.55) {
+      passed = false;
+      overallOriginalityScore = Math.min(overallOriginalityScore, 70);
+      failingPassages.push({
+        sourceId: `archive:${article.id}`,
+        paragraphText: draftParagraphs[0] || "",
+        similarityType: "ARCHIVE_OPENING_SIMILARITY",
+        similarityScore: openingSimilarity * 100,
+      });
+      structuralWarnings.push(`Opening substantially resembles recent article${article.title ? `: ${article.title}` : ""}.`);
+      repairInstructions.push("Use a distinct opening angle; do not reuse a recent article's framing.");
+    }
+
+    if (draftHeadings.length >= 2 && archivedBlocks.headings.length >= 2) {
+      const matchedHeadings = draftHeadings.filter((heading) => archivedBlocks.headings.some((archived) =>
+        heading.length > 10 && normalizePunctuation(heading) === normalizePunctuation(archived),
+      )).length;
+      const archiveHeadingSimilarity = (matchedHeadings / Math.max(draftHeadings.length, archivedBlocks.headings.length)) * 100;
+      headingSimTotal = Math.max(headingSimTotal, archiveHeadingSimilarity);
+      if (archiveHeadingSimilarity > 50) {
+        passed = false;
+        overallOriginalityScore = Math.min(overallOriginalityScore, 70);
+        structuralWarnings.push(`Heading architecture substantially resembles recent article${article.title ? `: ${article.title}` : ""}.`);
+        repairInstructions.push("Create a new section sequence instead of reusing recent internal heading architecture.");
       }
     }
   }

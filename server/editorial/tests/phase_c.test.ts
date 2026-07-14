@@ -68,6 +68,16 @@ describe('Phase C - Originality Analysis', () => {
     const res = await analyzeOriginality('trace1', draft, sources as any);
     expect(res.passed).toBe(true);
   });
+
+  it('blocks an opening and heading flow reused from a recent internal article', async () => {
+    const opening = 'The verified announcement changes how readers should understand the product and the limits of the current evidence.';
+    const draft = `## What changed\n\n${opening}\n\n## Why the evidence matters\n\nThe documented details separate confirmed information from unresolved questions for readers.`;
+    const archived = `## What changed\n\n${opening}\n\n## Why the evidence matters\n\nAn earlier article used the same explanatory route and should not be repeated.`;
+    const res = await analyzeOriginality('trace1', draft, [], [{ id: 'previous-article', title: 'Earlier coverage', content: archived }]);
+    expect(res.passed).toBe(false);
+    expect(res.failingPassages.some(p => p.similarityType === 'ARCHIVE_OPENING_SIMILARITY')).toBe(true);
+    expect(res.structuralWarnings.join(' ')).toMatch(/recent article/i);
+  });
 });
 
 describe('Phase C - Naturalness Analysis', () => {
