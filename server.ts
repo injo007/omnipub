@@ -7942,6 +7942,55 @@ export function cleanSourceContent(input: string): string {
   return clean;
 }
 
+function isPublicSourceUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    if (!["http:", "https:"].includes(url.protocol)) return false;
+    const host = url.hostname.toLowerCase();
+    if (host === "localhost" || host.endsWith(".localhost") || host === "::1" || host.startsWith("127.") || host.startsWith("10.") || host.startsWith("192.168.")) return false;
+    const private172 = host.match(/^172\.(\d+)\./);
+    return !private172 || Number(private172[1]) < 16 || Number(private172[1]) > 31;
+  } catch {
+    return false;
+  }
+}
+
+/** Retrieves a bounded factual source excerpt before an LLM is asked to assess it. */
+export async function retrieveSourceArticleContext(sourceUrl: string): Promise<{ content: string; reason?: string }> {
+  if (!isPublicSourceUrl(sourceUrl)) {
+    return { content: "", reason: "The supplied source URL is not a permitted public HTTP(S) address." };
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 12_000);
+  try {
+    const response = await fetch(sourceUrl, {
+      signal: controller.signal,
+      headers: {
+        "User-Agent": "Mozilla/5.0 (compatible; EditorialPlatform/1.0; +https://example.invalid)",
+        "Accept": "text/html,application/xhtml+xml",
+      },
+    });
+    if (!response.ok) return { content: "", reason: `Source returned HTTP ${response.status}.` };
+    const contentType = response.headers.get("content-type") || "";
+    if (!contentType.includes("html")) return { content: "", reason: `Source returned unsupported content type ${contentType || "unknown"}.` };
+
+    const html = await response.text();
+    const articleHtml = html.match(/<article\b[^>]*>[\s\S]*?<\/article>/i)?.[0] || html;
+    const description = html.match(/<meta[^>]+(?:name|property)=["'](?:description|og:description)["'][^>]+content=["']([^"']+)["']/i)?.[1] || "";
+    const paragraphs = [...articleHtml.matchAll(/<p\b[^>]*>([\s\S]*?)<\/p>/gi)]
+      .map((match) => match[1])
+      .join("\n");
+    const content = cleanSourceContent(`${description}\n${paragraphs}`).slice(0, 12_000);
+    if (content.length < 180) return { content: "", reason: "The source did not expose enough readable article text." };
+    return { content };
+  } catch (error: any) {
+    return { content: "", reason: error?.name === "AbortError" ? "Source retrieval timed out after 12 seconds." : `Source retrieval failed: ${error?.message || String(error)}` };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 async function detectNiche(niche: string, storyTitle: string, url: string, db?: any): Promise<string> {
   if (niche && niche !== "auto") return niche;
 
@@ -8603,7 +8652,7 @@ appRouter.post("/api/articles/create", async (req, res) => {
     isAutoOptimized = true;
   }
   const detectedNiche = await detectNiche(niche, sourceTitle, sourceUrl, db);
-  const cleanSource = cleanSourceContent(sourceDescription);
+  let cleanSource = cleanSourceContent(sourceDescription);
   let isThinContent = false;
   
   if (cleanSource.length < 200) {
@@ -8794,6 +8843,18 @@ appRouter.post("/api/articles/create", async (req, res) => {
   }
 
   res.write(JSON.stringify({ taskId, step: "initiate", log: "Spawning Editorial Agent Council..." }) + "\n");
+
+  if (cleanSource.length < 400 && sourceUrl) {
+    addLog("source", "Source Context Retriever", "running", "Retrieving a bounded factual excerpt from the selected source URL.");
+    const retrieval = await retrieveSourceArticleContext(sourceUrl);
+    if (retrieval.content) {
+      cleanSource = cleanSourceContent(`${cleanSource}\n${retrieval.content}`);
+      isThinContent = cleanSource.length < 200;
+      addLog("source", "Source Context Retriever", "success", `Retrieved ${retrieval.content.length} characters of source context for evidence-led research.`);
+    } else {
+      addLog("source", "Source Context Retriever", "warn", `Source context could not be retrieved. Research will use only the RSS excerpt. Reason: ${retrieval.reason || "unknown"}`);
+    }
+  }
   
   if (riskWarning) {
     addLog("initiate", "Orchestrator Risk Advisor", "warn", riskWarning);
@@ -8883,7 +8944,7 @@ appRouter.post("/api/articles/create", async (req, res) => {
         jsonMode: true,
         agentName: "Research Verification Agent",
         returnFullMetadata: true,
-        sourceArticleLength: sourceDescription ? sourceDescription.length : 0,
+        sourceArticleLength: editorialContext.cleanSourceContent.length,
         responseSchema: {
           type: Type.OBJECT,
           properties: {
@@ -9020,7 +9081,7 @@ appRouter.post("/api/articles/create", async (req, res) => {
         jsonMode: true,
         agentName: "SEO Opportunity Agent",
         returnFullMetadata: true,
-        sourceArticleLength: sourceDescription ? sourceDescription.length : 0,
+        sourceArticleLength: editorialContext.cleanSourceContent.length,
         responseSchema: {
           type: Type.OBJECT,
           properties: {

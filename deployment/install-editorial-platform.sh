@@ -190,6 +190,7 @@ function validate_application_source() {
     ! grep -q 'model: "gemini-2.5-flash"' "${candidate}/server/editorial/originalArticlePlanService.ts" && \
     grep -q 'terminalStatus: "completed"' "${candidate}/server.ts" && \
     grep -q 'terminalStatus: "failed"' "${candidate}/server.ts" && \
+    grep -q 'retrieveSourceArticleContext' "${candidate}/server.ts" && \
     grep -q 'dist/migrate-json-to-postgres.cjs' "${candidate}/package.json" && \
     grep -q 'articleFormatService' "${candidate}/server.ts"
 }
@@ -255,7 +256,7 @@ function prepare_application_source() {
     fi
 
     log "INFO" "Application source staged at $SOURCE_DIR (revision: $APP_SOURCE_COMMIT)."
-    log "INFO" "Release contract validated: PostgreSQL migration, configured provider routing without hidden Gemini editorial calls, terminal workflow states with failure diagnostics, niche-policy, editorial-format, Markdown quality-analysis, and editorial readiness modules are included in the staged source."
+    log "INFO" "Release contract validated: PostgreSQL migration, configured provider routing without hidden Gemini editorial calls, source-context retrieval, terminal workflow states with failure diagnostics, niche-policy, editorial-format, Markdown quality-analysis, and editorial readiness modules are included in the staged source."
 }
 
 # --- Preflight Validation ---
