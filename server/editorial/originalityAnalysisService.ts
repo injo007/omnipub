@@ -1,5 +1,5 @@
 import { OriginalityAnalysis, SourceDeconstruction } from "./types";
-import { parseHTML } from "linkedom";
+import { extractEditorialTextBlocks } from "./editorialTextService";
 
 const EXCLUSION_WORDS = new Set(['the', 'and', 'a', 'to', 'of', 'in', 'is', 'it', 'that', 'for', 'on', 'with', 'as', 'was', 'at', 'by', 'an', 'be', 'this', 'which', 'or', 'from', 'but', 'not', 'are', 'were', 'have', 'had', 'has', 'they', 'their', 'we', 'our', 'you', 'your', 'he', 'his', 'she', 'her', 'it', 'its']);
 const COMMON_NICHE_TERMS = new Set(['football', 'match', 'goal', 'team', 'stadium', 'league', 'player', 'travel', 'hotel', 'flight', 'destination']);
@@ -44,9 +44,9 @@ export async function analyzeOriginality(
   const failingPassages: { sourceId: string; paragraphText: string; similarityType: string; similarityScore: number }[] = [];
   const repairInstructions: string[] = [];
 
-  const { document } = parseHTML(`<div>${draftHtml}</div>`);
-  const draftParagraphs = Array.from(document.querySelectorAll("p")).map(p => p.textContent || "");
-  const draftHeadings = Array.from(document.querySelectorAll("h1, h2, h3, h4, h5, h6")).map(h => h.textContent || "");
+  const draftBlocks = extractEditorialTextBlocks(draftHtml);
+  const draftParagraphs = draftBlocks.paragraphs;
+  const draftHeadings = draftBlocks.headings;
 
   let structuralWarnings: string[] = [];
   let headingSimTotal = 0;

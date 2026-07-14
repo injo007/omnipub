@@ -184,6 +184,7 @@ function validate_application_source() {
     [[ -f "${candidate}/server/core/models/modelRegistry.ts" ]] && \
     [[ -f "${candidate}/server/editorial/articleFormatService.ts" ]] && \
     [[ -f "${candidate}/server/editorial/nichePolicyService.ts" ]] && \
+    [[ -f "${candidate}/server/editorial/editorialTextService.ts" ]] && \
     grep -q 'dist/migrate-json-to-postgres.cjs' "${candidate}/package.json" && \
     grep -q 'articleFormatService' "${candidate}/server.ts"
 }
@@ -249,7 +250,7 @@ function prepare_application_source() {
     fi
 
     log "INFO" "Application source staged at $SOURCE_DIR (revision: $APP_SOURCE_COMMIT)."
-    log "INFO" "Release contract validated: PostgreSQL migration, provider routing, niche-policy, and editorial-format modules are included in the staged source."
+    log "INFO" "Release contract validated: PostgreSQL migration, provider routing, niche-policy, editorial-format, and Markdown quality-analysis modules are included in the staged source."
 }
 
 # --- Preflight Validation ---
