@@ -175,6 +175,65 @@ describe("Editorial Types and Schemas", () => {
     expect(result.success).toBe(false);
   });
 
+  it("12b1. Empty or incomplete declared sources are rejected at the research boundary", () => {
+    const result = parseAndValidateResearchOutput(JSON.stringify({
+      articleTraceId: "trace-1",
+      researchBrief: {
+        topic: "Travel update", readerIntent: "Plan a trip", whyItMattersNow: "The service has changed.",
+        verifiedFacts: [], unverifiedClaims: [], conflictingClaims: [], freshnessWarnings: [],
+        recommendedAngles: [], readerQuestions: [], riskFlags: [],
+      },
+      sources: [{ url: "https://example.com/source", title: "", publisher: "Example" }],
+      evidenceLedger: [{
+        claimId: "claim-1", articleId: "article-1", articleTraceId: "trace-1", claimText: "The ferry runs daily.",
+        sourceUrl: "https://example.com/source", sourceTitle: "Source", publisher: "Example", sourceDate: "2026-07-15",
+        accessedAt: "2026-07-15T00:00:00.000Z", sourceType: "article", isPrimarySource: false, confidence: 0.9,
+        freshnessStatus: "current", verificationStatus: "verified", supportsClaim: true, contradictsClaim: false,
+        riskLevel: "low", addedByAgent: "research", notes: "Directly stated by the source.",
+      }],
+    }));
+
+    expect(result.success).toBe(false);
+  });
+
+  it("12c. Structured research-brief entries use declared text fields, but unrecognised objects remain invalid", () => {
+    const validResearchOutput = {
+      articleTraceId: "trace-1",
+      researchBrief: {
+        topic: "Travel update",
+        readerIntent: "Plan a trip",
+        whyItMattersNow: "The service has changed.",
+        verifiedFacts: [{ fact: "The ferry runs daily." }],
+        unverifiedClaims: [{ content: "No further claim is confirmed." }],
+        conflictingClaims: [],
+        freshnessWarnings: [],
+        recommendedAngles: [],
+        readerQuestions: [],
+        riskFlags: [],
+      },
+      sources: [{ url: "https://example.com/source", title: "Source", publisher: "Example" }],
+      evidenceLedger: [{
+        claimId: "claim-1", articleId: "article-1", articleTraceId: "trace-1", claimText: "The ferry runs daily.",
+        sourceUrl: "https://example.com/source", sourceTitle: "Source", publisher: "Example", sourceDate: "2026-07-15",
+        accessedAt: "2026-07-15T00:00:00.000Z", sourceType: "article", isPrimarySource: false, confidence: 0.9,
+        freshnessStatus: "current", verificationStatus: "verified", supportsClaim: true, contradictsClaim: false,
+        riskLevel: "low", addedByAgent: "research", notes: "Directly stated by the source.",
+      }],
+    };
+
+    const normalized = parseAndValidateResearchOutput(JSON.stringify(validResearchOutput));
+    expect(normalized.success).toBe(true);
+    if (normalized.success) {
+      expect(normalized.data?.researchBrief.verifiedFacts).toEqual(["The ferry runs daily."]);
+      expect(normalized.data?.researchBrief.unverifiedClaims).toEqual(["No further claim is confirmed."]);
+    }
+
+    expect(parseAndValidateResearchOutput(JSON.stringify({
+      ...validResearchOutput,
+      researchBrief: { ...validResearchOutput.researchBrief, verifiedFacts: [{ source: "Example" }] },
+    })).success).toBe(false);
+  });
+
   it("13. Second invalid research result triggers manual review", () => {
     // Pipeline state checks
     let states: any[] = [];

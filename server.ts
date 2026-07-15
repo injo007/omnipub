@@ -8806,7 +8806,7 @@ appRouter.post("/api/articles/create", async (req, res) => {
     if (!researchParseRes.success) {
        const parseDetail = typeof researchParseRes.error === "string"
          ? researchParseRes.error
-         : JSON.stringify(researchParseRes.error?.issues || researchParseRes.error || "Unknown schema error").slice(0, 1200);
+         : JSON.stringify(researchParseRes.error ?? "Unknown schema error").slice(0, 1200);
        abortAndPersist(`Invalid Research Output schema: ${parseDetail}`, "RESEARCH_FAILED", `Research response could not be validated: ${parseDetail}`);
        return;
     } else {

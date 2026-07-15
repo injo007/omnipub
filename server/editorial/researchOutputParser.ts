@@ -1,7 +1,73 @@
 import { ResearchOutputSchema } from "./schemas";
 import { ResearchOutput } from "./types";
 
-export function parseAndValidateResearchOutput(rawOutput: unknown): { success: boolean; data?: ResearchOutput; error?: any } {
+const researchBriefTextKeys = [
+  "claimText",
+  "fact",
+  "text",
+  "claim",
+  "summary",
+  "description",
+  "statement",
+  "title",
+  "content",
+  "value",
+  "label",
+];
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+/**
+ * Providers sometimes return a structured fact object in a research-brief
+ * list even though OmniPub stores the brief as plain strings. Extract only a
+ * declared text field; never stringify an object, create a fallback fact, or
+ * alter the evidence ledger.
+ */
+function extractResearchBriefText(value: unknown): string | undefined {
+  if (typeof value === "string" && value.trim()) return value.trim();
+  if (!isRecord(value)) return undefined;
+
+  for (const key of researchBriefTextKeys) {
+    const candidate = value[key];
+    if (typeof candidate === "string" && candidate.trim()) {
+      return candidate.trim();
+    }
+  }
+  return undefined;
+}
+
+function normalizeResearchBriefLists(rawData: Record<string, unknown>): void {
+  if (!isRecord(rawData.researchBrief)) return;
+
+  const researchBrief = rawData.researchBrief;
+
+  const listFields = [
+    "verifiedFacts",
+    "unverifiedClaims",
+    "conflictingClaims",
+    "freshnessWarnings",
+    "recommendedAngles",
+    "readerQuestions",
+    "riskFlags",
+  ];
+
+  for (const field of listFields) {
+    const currentValue = researchBrief[field];
+    if (!Array.isArray(currentValue)) continue;
+
+    const normalizedItems = currentValue.map(extractResearchBriefText);
+    // Leave unrecognized objects intact so the schema rejects malformed
+    // provider output rather than silently discarding potentially important
+    // context. Known structured brief entries become their declared text.
+    if (normalizedItems.every((item) => typeof item === "string")) {
+      researchBrief[field] = normalizedItems;
+    }
+  }
+}
+
+export function parseAndValidateResearchOutput(rawOutput: unknown): { success: boolean; data?: ResearchOutput; error?: unknown } {
   try {
     let cleanString: string;
     if (typeof rawOutput === "string") {
@@ -76,11 +142,13 @@ export function parseAndValidateResearchOutput(rawOutput: unknown): { success: b
       }
     }
 
-    const rawData = JSON.parse(cleanString);
+    const rawData: unknown = JSON.parse(cleanString);
 
-    if (!rawData || typeof rawData !== "object") {
+    if (!isRecord(rawData)) {
       return { success: false, error: "Parsed JSON is not an object" };
     }
+
+    normalizeResearchBriefLists(rawData);
 
     // Research output is the factual boundary for later stages. Do not invent
     // placeholder sources, claims, dates, or verification status merely to

@@ -259,6 +259,32 @@ describe("POST /api/articles/create - Integration Flow", () => {
     expect(callCount).toBe(2);
   });
 
+  it("3c. structured research-brief entries are normalized without weakening evidence validation", async () => {
+    setTestAdapterMock(async (params) => {
+      const successAdapter = getSuccessMock();
+      if (params.agentName === "Research Verification Agent") {
+        const result = await successAdapter(params);
+        const output = JSON.parse(result.text);
+        output.researchBrief.verifiedFacts = [
+          { fact: "Item costs $50 in 2026", source: "X reporting" },
+          { claimText: "Bus arrives every 10 minutes", source: "Reuters context" },
+        ];
+        output.researchBrief.unverifiedClaims = [{ text: "No additional claim was supplied." }];
+        return { ...result, text: JSON.stringify(output) };
+      }
+      return await successAdapter(params);
+    });
+
+    const res = await request(app).post("/api/articles/create").send({
+      niche: "Travel",
+      sourceTitle: "Test",
+      sourceUrl: "https://example.com",
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.text).toContain('"step":"completed"');
+  });
+
   it("4. unknown claim ID blocks flow", async () => {
     setTestAdapterMock(async (params) => {
       const successAdapter = getSuccessMock();

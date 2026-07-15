@@ -92,16 +92,16 @@ export const ResearchBriefSchema = z.object({
 });
 
 export const SourceRecordSchema = z.object({
-  url: z.string(),
-  title: z.string(),
-  publisher: z.string()
+  url: z.string().trim().min(1, "source url is required"),
+  title: z.string().trim().min(1, "source title is required"),
+  publisher: z.string().trim().min(1, "source publisher is required")
 });
 
 export const ResearchOutputSchema = z.object({
   articleTraceId: z.string(),
   researchBrief: ResearchBriefSchema,
-  sources: z.array(SourceRecordSchema),
-  evidenceLedger: z.array(EvidenceLedgerEntrySchema).optional() // We can generate this from ResearchAgent but allow it to be supplemented
+  sources: z.array(SourceRecordSchema).min(1, "At least one declared source is required"),
+  evidenceLedger: z.array(EvidenceLedgerEntrySchema).min(1, "Evidence ledger must not be empty")
 });
 
 export const WriterAssignmentSchema = z.object({
