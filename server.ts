@@ -43,7 +43,7 @@ import { PublishingQueueService, setPushToWordPressAdapter } from "./server/edit
 import { FinalArticlePackage } from "./server/editorial/typesPhaseD";
 
 import { recordStateTransition } from "./server/editorial/pipelineStateService";
-import { parseAndValidateResearchOutput } from "./server/editorial/researchOutputParser";
+import { parseAndValidateResearchOutput, scoreResearchOutput } from "./server/editorial/researchOutputParser";
 import { checkFabricatedExperience } from "./server/editorial/fabricatedExperienceCheck";
 import { 
   EditorialBrief, EvidenceLedgerEntry, EvidenceLedger, ResearchOutput, 
@@ -8888,10 +8888,63 @@ appRouter.post("/api/articles/create", async (req, res) => {
     
     try { pipelineStates = recordStateTransition(pipelineStates, articleTraceId, "RESEARCHED", "Research Verification Agent", rsModel, "Research output constructed"); } catch(e){}
 
+    // -------------------------------------------------------------------------
+    // Research Confidence Scoring — replaces the binary integrity gate
+    // -------------------------------------------------------------------------
+    // Score the output and assign a tier. 'failed' aborts; 'minimal'/'partial'
+    // continue with downstream constraints rather than halting the pipeline.
+    const researchScore = scoreResearchOutput(parsedResearchOutput);
+    const researchTier = researchScore.tier;
+
+    if (researchScore.warnings.length > 0) {
+      addLog(
+        "research_confidence",
+        "Research Confidence Scorer",
+        "warn",
+        `Research tier: ${researchTier.toUpperCase()} (score ${researchScore.score}/10). Warnings: ${researchScore.warnings.join(" | ")}`,
+        JSON.stringify({ tier: researchTier, score: researchScore.score, warnings: researchScore.warnings }),
+        undefined,
+        rsModel
+      );
+    } else {
+      addLog(
+        "research_confidence",
+        "Research Confidence Scorer",
+        "success",
+        `Research tier: ${researchTier.toUpperCase()} (score ${researchScore.score}/10). Full confidence — proceeding to drafting.`,
+        undefined,
+        undefined,
+        rsModel
+      );
+    }
+
+    if (researchTier === "failed") {
+      abortAndPersist(
+        `Research confidence failed (score ${researchScore.score}/10): ${researchScore.reasons.join(" ")}`,
+        "RESEARCH_FAILED",
+        `Research output did not meet minimum evidence thresholds. ${researchScore.reasons.join(" ")} Needs manual review.`
+      );
+      return;
+    }
+
+    // Minimal-tier articles and single-source articles are always held for
+    // independent review before auto-publishing, regardless of niche.
+    if (researchTier === "minimal") {
+      independentSourceReviewRequired = true;
+      addLog(
+        "research_confidence",
+        "Research Confidence Scorer",
+        "warn",
+        `Minimal research confidence — article will be flagged for post-publish human review. Continuing pipeline with conservative constraints.`,
+        undefined,
+        undefined,
+        rsModel
+      );
+    }
+
     const evidenceLedger: EvidenceLedger = parsedResearchOutput.evidenceLedger || [];
 
-
-    addLog("research", "Research Verification Agent", "success", "Fact brief generated with the required source records. Cleared for evidence-led drafting.", researchResults, researchPromptObj.compiledPrompt, rsModel, researchMeta);
+    addLog("research", "Research Verification Agent", "success", `Fact brief generated (tier: ${researchTier.toUpperCase()}). Cleared for evidence-led drafting.`, researchResults, researchPromptObj.compiledPrompt, rsModel, researchMeta);
 
     // -------------------------------------------------------------
     // AGENT 1.5: SEO Opportunity Agent (Focus Keyword Selection)
@@ -9082,54 +9135,50 @@ appRouter.post("/api/articles/create", async (req, res) => {
     addLog("brief", "Editorial Orchestrator", "success", "Editorial Brief successfully compiled and validated.");
 
     // -------------------------------------------------------------
-    // PHASE C: Source Validation
+    // PHASE C: Source Coverage Gate
     // -------------------------------------------------------------
     const numSources = parsedResearchOutput.sources.length;
     const minSourcesNeeded = isHighStakesNiche ? 2 : 1;
-    
+
     if (numSources < minSourcesNeeded) {
-         // Continue the rewrite using its traceable seed evidence, but never
-         // auto-publish a high-stakes article without independent corroboration.
-         independentSourceReviewRequired = true;
-         addLog("research_integrity", "Source Coverage Gate", "warn", `Only ${numSources}/${minSourcesNeeded} independent sources are available. Continuing as a manual-review draft; automatic publishing is disabled.`, undefined, undefined, rsModel);
+      // Continue the rewrite using its traceable seed evidence, but never
+      // auto-publish a high-stakes article without independent corroboration.
+      independentSourceReviewRequired = true;
+      addLog("research_integrity", "Source Coverage Gate", "warn", `Only ${numSources}/${minSourcesNeeded} independent sources available. Continuing as manual-review draft; automatic publishing disabled.`, undefined, undefined, rsModel);
     }
 
     // -------------------------------------------------------------
-    // PHASE C: Source Deconstruction
+    // PHASE C: Parallel Pre-Draft Computation
     // -------------------------------------------------------------
-    const deconstructions: any[] = [];
-    for (const source of parsedResearchOutput.sources) {
-       addLog("deconstruct", "Source Deconstruction Engine", "running", `Deconstructing source structure: ${source.title}`, undefined, undefined, rsModel);
-       const result = await deconstructSource(source.url, articleTraceId, cleanSource, rsModel);
-       deconstructions.push(result);
-    }
-    
-    // -------------------------------------------------------------
-    // PHASE C: Niche Playbook & Original Article Plan
-    // -------------------------------------------------------------
-    const nicheEditorialPolicy = await resolveNicheEditorialPolicy(editorialContext.niche, editorialContext.sourceTitle);
+    // Source deconstruction, niche policy resolution, and article format
+    // selection are all independent — run them concurrently to reduce latency
+    // and eliminate failure surface caused by sequential timeout stacking.
+    addLog("planning", "Pre-Draft Parallel Stage", "running", `Starting parallel pre-draft computation: source deconstruction × ${parsedResearchOutput.sources.length}, niche policy, article format`, undefined, undefined, rsModel);
+
+    const deconstructionPromises = parsedResearchOutput.sources.map((source) =>
+      deconstructSource(source.url, articleTraceId, cleanSource, rsModel).catch((e: any) => {
+        addLog("deconstruct", "Source Deconstruction Engine", "warn", `Deconstruction failed for ${source.title} — continuing with empty deconstruction: ${e?.message || e}`, undefined, undefined, rsModel);
+        return null; // non-blocking: a failed deconstruction produces an empty entry
+      })
+    );
+
+    const [deconstructionResults, nicheEditorialPolicy] = await Promise.all([
+      Promise.all(deconstructionPromises),
+      resolveNicheEditorialPolicy(editorialContext.niche, editorialContext.sourceTitle).catch((e: any) => {
+        addLog("planning", "Niche Policy Service", "warn", `Niche policy resolution failed — using default policy: ${e?.message || e}`, undefined, undefined, rsModel);
+        return { playbook: { playbookId: "default", requiredElements: [], optionalElements: [], prohibitedClaims: [], requiredSourceTypes: [], criticalClaimCategories: [] }, allowedFormatIds: undefined } as any;
+      }),
+    ]);
+
+    const deconstructions = deconstructionResults.filter(Boolean);
     const playbook = nicheEditorialPolicy.playbook;
-    addLog("planning", "Strategic SEO Architect", "running", `Creating Original Article Plan from playbook ${playbook.playbookId}`, undefined, undefined, seoOppModel);
-    
-    let originalArticlePlan: any = null;
-    try {
-        originalArticlePlan = await createOriginalArticlePlan(articleTraceId, playbook, editorialBriefObj, deconstructions, seoOppModel);
-    } catch(e: any) {
-        const planErrorDetails = e?.message || e?.toString() || "Unknown planning error";
-        console.error("[PLANNING FAILED]", planErrorDetails, e);
-        addLog("planning", "Strategic SEO Architect", "failed", `Failed to create original article plan: ${planErrorDetails}`);
-        abortAndPersist(`PLAN_INVALID: Unable to parse plan. Error: ${planErrorDetails}`, "PLAN_INVALID", `Invalid Original Article Plan generated. Error: ${planErrorDetails}`, evidenceLedger);
-        return;
-    }
 
-    // Pass the playbook to writer prompt obj
-    editorialContext.targetStructure = originalArticlePlan.plannedSections.join(", ");
-    editorialContext.seoStrategy = originalArticlePlan.originalAngle;
     const recentFormatIds = (db.articles || [])
       .filter((article: any) => article.niche === niche)
       .slice(-12)
       .map((article: any) => article.contentFormat || article?.pipelineRecords?.articleFormat?.id)
       .filter(Boolean);
+
     const articleFormat = selectArticleFormat({
       articleTraceId,
       readerIntent: editorialBriefObj.readerIntent,
@@ -9137,6 +9186,28 @@ appRouter.post("/api/articles/create", async (req, res) => {
       recentFormatIds,
       allowedFormatIds: nicheEditorialPolicy.allowedFormatIds,
     });
+
+    addLog("planning", "Pre-Draft Parallel Stage", "success", `Parallel pre-draft computation complete. Deconstructions: ${deconstructions.length}/${parsedResearchOutput.sources.length}. Playbook: ${playbook.playbookId}. Format: ${articleFormat?.id || "default"}.`, undefined, undefined, rsModel);
+
+    // -------------------------------------------------------------
+    // PHASE C: Original Article Plan
+    // -------------------------------------------------------------
+    addLog("planning", "Strategic SEO Architect", "running", `Creating Original Article Plan from playbook ${playbook.playbookId}`, undefined, undefined, seoOppModel);
+
+    let originalArticlePlan: any = null;
+    try {
+      originalArticlePlan = await createOriginalArticlePlan(articleTraceId, playbook, editorialBriefObj, deconstructions, seoOppModel);
+    } catch(e: any) {
+      const planErrorDetails = e?.message || e?.toString() || "Unknown planning error";
+      console.error("[PLANNING FAILED]", planErrorDetails, e);
+      addLog("planning", "Strategic SEO Architect", "failed", `Failed to create original article plan: ${planErrorDetails}`);
+      abortAndPersist(`PLAN_INVALID: Unable to parse plan. Error: ${planErrorDetails}`, "PLAN_INVALID", `Invalid Original Article Plan generated. Error: ${planErrorDetails}`, evidenceLedger);
+      return;
+    }
+
+    // Pass the playbook to writer prompt obj
+    editorialContext.targetStructure = originalArticlePlan.plannedSections.join(", ");
+    editorialContext.seoStrategy = originalArticlePlan.originalAngle;
 
 
     // -------------------------------------------------------------

@@ -235,25 +235,48 @@ describe("Editorial Types and Schemas", () => {
   });
 
   it("13. Second invalid research result triggers manual review", () => {
-    // Pipeline state checks
+    // Walk through the full valid chain to DRAFT_FAILED, then escalate
     let states: any[] = [];
+    states = recordStateTransition(states, "t1", "DISCOVERED", "scraper", "none", "Found");
+    states = recordStateTransition(states, "t1", "RESEARCHING", "researcher", "model", "Started");
     states = recordStateTransition(states, "t1", "RESEARCH_FAILED", "researcher", "model", "Parse failed");
+    // RESEARCH_FAILED → RESEARCHING (retry) → then on second attempt fail → DRAFT path would eventually hit manual review
+    // Simulate: after research retry fails we land at RESEARCH_FAILED again, then via RESEARCHING to RESEARCHED
+    // For this test: confirm DRAFT_FAILED → NEEDS_MANUAL_REVIEW is legal
+    states = recordStateTransition(states, "t1", "RESEARCHING", "researcher", "model", "Retry");
+    states = recordStateTransition(states, "t1", "RESEARCHED", "researcher", "model", "Succeeded on retry");
+    states = recordStateTransition(states, "t1", "BRIEF_BUILDING", "orchestrator", "none", "");
+    states = recordStateTransition(states, "t1", "BRIEF_READY", "orchestrator", "none", "");
+    states = recordStateTransition(states, "t1", "DRAFTING", "writer", "model", "");
+    states = recordStateTransition(states, "t1", "DRAFT_FAILED", "writer", "model", "Draft failed");
     states = recordStateTransition(states, "t1", "NEEDS_MANUAL_REVIEW", "coordinator", "logic", "Failed 2 loops");
-    expect(states[1].newState).toBe("NEEDS_MANUAL_REVIEW");
+    expect(states[states.length - 1].newState).toBe("NEEDS_MANUAL_REVIEW");
   });
 
   it("13b. Source-grounding states and approval states are valid workflow transitions", () => {
+    // Must walk the full valid chain — the strict transition graph enforces no skips
     let states: any[] = [];
+    states = recordStateTransition(states, "t1", "DISCOVERED", "scraper", "none", "Found");
+    states = recordStateTransition(states, "t1", "RESEARCHING", "researcher", "model", "Started");
+    states = recordStateTransition(states, "t1", "RESEARCHED", "researcher", "model", "Done");
+    states = recordStateTransition(states, "t1", "BRIEF_BUILDING", "orchestrator", "none", "");
+    states = recordStateTransition(states, "t1", "BRIEF_READY", "orchestrator", "none", "");
+    states = recordStateTransition(states, "t1", "DRAFTING", "writer", "model", "");
+    states = recordStateTransition(states, "t1", "DRAFTED", "writer", "model", "");
+    states = recordStateTransition(states, "t1", "NATURAL_EDITING", "editor", "model", "");
     states = recordStateTransition(states, "t1", "NATURAL_EDITED", "editor", "model", "Style editing complete");
     states = recordStateTransition(states, "t1", "SOURCE_GROUNDING", "grounding", "model", "Grounding started");
     states = recordStateTransition(states, "t1", "SOURCE_GROUNDED", "grounding", "model", "Grounding passed");
+    states = recordStateTransition(states, "t1", "VALIDATING", "validator", "model", "");
     states = recordStateTransition(states, "t1", "APPROVED_FOR_PUBLISHING", "orchestrator", "logic", "All gates passed");
-    expect(states.map((state) => state.newState)).toEqual([
-      "NATURAL_EDITED",
-      "SOURCE_GROUNDING",
-      "SOURCE_GROUNDED",
-      "APPROVED_FOR_PUBLISHING",
-    ]);
+    const stateNames = states.map((s) => s.newState);
+    expect(stateNames).toContain("NATURAL_EDITED");
+    expect(stateNames).toContain("SOURCE_GROUNDING");
+    expect(stateNames).toContain("SOURCE_GROUNDED");
+    expect(stateNames).toContain("APPROVED_FOR_PUBLISHING");
+    // Verify correct ordering
+    expect(stateNames.indexOf("NATURAL_EDITED")).toBeLessThan(stateNames.indexOf("SOURCE_GROUNDING"));
+    expect(stateNames.indexOf("SOURCE_GROUNDED")).toBeLessThan(stateNames.indexOf("APPROVED_FOR_PUBLISHING"));
   });
 
   it("14. Pipeline state transitions are persisted", () => {
@@ -263,11 +286,24 @@ describe("Editorial Types and Schemas", () => {
     expect(states[1].previousState).toBe("DISCOVERED");
   });
 
-  it("14b. Reject invalid transitions", () => {
+  it("14b. Reject invalid state names and illegal transitions", () => {
     let states: any[] = [];
+    // Unknown state name is rejected
     expect(() => {
       recordStateTransition(states, "t1", "INVALID_MAD_UP_STATE" as any, "scraper", "none", "Found");
-    }).toThrow("Invalid state: INVALID_MAD_UP_STATE");
+    }).toThrow("INVALID_MAD_UP_STATE");
+
+    // Illegal skip: NONE → SOURCE_GROUNDED (skips required chain)
+    expect(() => {
+      recordStateTransition([], "t1", "SOURCE_GROUNDED" as any, "grounding", "model", "skip attempt");
+    }).toThrow("Illegal pipeline state transition");
+
+    // Confirmed: DISCOVERED → RESEARCHING is legal
+    let validStates: any[] = [];
+    expect(() => {
+      validStates = recordStateTransition(validStates, "t1", "DISCOVERED", "scraper", "none", "Found");
+      validStates = recordStateTransition(validStates, "t1", "RESEARCHING", "researcher", "model", "Started");
+    }).not.toThrow();
   });
   
   it("15. Existing writer profiles remain intact", () => {

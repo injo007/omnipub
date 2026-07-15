@@ -1,6 +1,98 @@
 import { ResearchOutputSchema } from "./schemas";
 import { ResearchOutput } from "./types";
 
+// ---------------------------------------------------------------------------
+// Research Confidence Tier
+// ---------------------------------------------------------------------------
+// Instead of a binary pass/fail gate, we score the research output and
+// assign it a tier. Downstream stages use the tier to apply proportionally
+// stricter rules rather than halting the entire pipeline on partial output.
+//
+//  high     → ≥2 sources, all metadata complete, ≥3 ledger entries
+//  partial  → 1 complete source, ≥1 ledger entry (single-source warning)
+//  minimal  → some evidence present but below ideal thresholds (post-pub review)
+//  failed   → no usable evidence; orchestrator should retry then abort
+// ---------------------------------------------------------------------------
+
+export type ResearchConfidenceTier = "high" | "partial" | "minimal" | "failed";
+
+export interface ResearchConfidenceScore {
+  tier: ResearchConfidenceTier;
+  score: number;           // 0–10 composite
+  reasons: string[];       // human-readable diagnostics
+  warnings: string[];      // non-blocking notes passed to downstream stages
+}
+
+export function scoreResearchOutput(output: ResearchOutput): ResearchConfidenceScore {
+  const reasons: string[] = [];
+  const warnings: string[] = [];
+  let score = 0;
+
+  // ── Source count ──────────────────────────────────────────────────────────
+  const sourceCount = output.sources?.length ?? 0;
+  if (sourceCount >= 2) {
+    score += 3;
+  } else if (sourceCount === 1) {
+    score += 1;
+    warnings.push("Single source: article will be flagged for independent review before auto-publish.");
+  } else {
+    reasons.push("No declared sources.");
+  }
+
+  // ── Source metadata completeness ──────────────────────────────────────────
+  const sourcesWithFullMetadata = (output.sources ?? []).filter(
+    (s) => s.url?.trim() && s.title?.trim() && s.publisher?.trim()
+  );
+  if (sourcesWithFullMetadata.length === sourceCount && sourceCount > 0) {
+    score += 2;
+  } else if (sourcesWithFullMetadata.length > 0) {
+    score += 1;
+    warnings.push(
+      `${sourceCount - sourcesWithFullMetadata.length} source(s) have incomplete metadata (url/title/publisher).`
+    );
+  } else if (sourceCount > 0) {
+    reasons.push("All declared sources are missing required metadata fields.");
+  }
+
+  // ── Evidence ledger depth ─────────────────────────────────────────────────
+  const ledgerCount = output.evidenceLedger?.length ?? 0;
+  if (ledgerCount >= 3) {
+    score += 3;
+  } else if (ledgerCount >= 1) {
+    score += 1;
+    warnings.push(`Thin evidence ledger (${ledgerCount} entr${ledgerCount === 1 ? "y" : "ies"}); factual gate will apply stricter thresholds.`);
+  } else {
+    reasons.push("Evidence ledger is empty.");
+  }
+
+  // ── Verified claim ratio ──────────────────────────────────────────────────
+  const verifiedCount = (output.evidenceLedger ?? []).filter(
+    (e) => e.verificationStatus === "verified"
+  ).length;
+  if (ledgerCount > 0 && verifiedCount / ledgerCount >= 0.5) {
+    score += 2;
+  } else if (verifiedCount > 0) {
+    score += 1;
+    warnings.push("Less than half of ledger claims are fully verified; grounding editor will apply conservative constraints.");
+  } else if (ledgerCount > 0) {
+    warnings.push("No verified claims in ledger; article will require human review before publishing.");
+  }
+
+  // ── Tier assignment ───────────────────────────────────────────────────────
+  let tier: ResearchConfidenceTier;
+  if (score >= 8) {
+    tier = "high";
+  } else if (score >= 5) {
+    tier = "partial";
+  } else if (score >= 2) {
+    tier = "minimal";
+  } else {
+    tier = "failed";
+  }
+
+  return { tier, score, reasons, warnings };
+}
+
 const researchBriefTextKeys = [
   "claimText",
   "fact",
