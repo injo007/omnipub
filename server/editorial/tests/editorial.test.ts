@@ -158,12 +158,36 @@ describe("Editorial Types and Schemas", () => {
     expect(p1.success).toBe(false);
   });
 
+  it("12b. Incomplete research output is rejected instead of receiving invented evidence", () => {
+    const result = parseAndValidateResearchOutput(JSON.stringify({
+      articleTraceId: "trace-1",
+      researchBrief: {},
+      sources: [],
+      evidenceLedger: [],
+    }));
+    expect(result.success).toBe(false);
+  });
+
   it("13. Second invalid research result triggers manual review", () => {
     // Pipeline state checks
     let states: any[] = [];
     states = recordStateTransition(states, "t1", "RESEARCH_FAILED", "researcher", "model", "Parse failed");
     states = recordStateTransition(states, "t1", "NEEDS_MANUAL_REVIEW", "coordinator", "logic", "Failed 2 loops");
     expect(states[1].newState).toBe("NEEDS_MANUAL_REVIEW");
+  });
+
+  it("13b. Source-grounding states and approval states are valid workflow transitions", () => {
+    let states: any[] = [];
+    states = recordStateTransition(states, "t1", "NATURAL_EDITED", "editor", "model", "Style editing complete");
+    states = recordStateTransition(states, "t1", "SOURCE_GROUNDING", "grounding", "model", "Grounding started");
+    states = recordStateTransition(states, "t1", "SOURCE_GROUNDED", "grounding", "model", "Grounding passed");
+    states = recordStateTransition(states, "t1", "APPROVED_FOR_PUBLISHING", "orchestrator", "logic", "All gates passed");
+    expect(states.map((state) => state.newState)).toEqual([
+      "NATURAL_EDITED",
+      "SOURCE_GROUNDING",
+      "SOURCE_GROUNDED",
+      "APPROVED_FOR_PUBLISHING",
+    ]);
   });
 
   it("14. Pipeline state transitions are persisted", () => {
@@ -223,7 +247,8 @@ describe("Editorial Types and Schemas", () => {
 });
 
 import { segmentSentencesFromHtml } from "../htmlSegmenter";
-import { validateDraftClaimsAgainstLedger } from "../evidenceLedgerService";
+import { findUngroundedGenericPassageFindings, findUngroundedGenericPassages, validateDraftClaimsAgainstLedger } from "../evidenceLedgerService";
+import { parseSourceGroundingOutput } from "../sourceGroundingService";
 
 describe("HTML Parsing and Segmentation", () => {
   it("1. Segment sentences correctly with periods, exclamation, and question marks", () => {
@@ -248,5 +273,74 @@ describe("HTML Parsing and Segmentation", () => {
     expect(sentences[1]).toBe("First paragraph.");
     expect(sentences[2]).toBe("List item 1");
     expect(sentences[3]).toBe("List item 2.");
+  });
+});
+
+describe("Source-grounding quality signals", () => {
+  it("blocks a numeric claim that is absent from the evidence ledger", () => {
+    const result = validateDraftClaimsAgainstLedger(
+      "The service costs $999.",
+      ["c1"],
+      [{ claimId: "c1", claimText: "The service costs $50." } as any],
+    );
+
+    expect(result.passed).toBe(false);
+    expect(result.unsupportedPassages).toContain("The service costs $999.");
+  });
+
+  it("blocks a quotation that does not occur in the evidence ledger", () => {
+    const result = validateDraftClaimsAgainstLedger(
+      'The company said "we will double capacity."',
+      ["c1"],
+      [{ claimId: "c1", claimText: "The company said it will open on Tuesday." } as any],
+    );
+
+    expect(result.passed).toBe(false);
+    expect(result.unsupportedPassages).toHaveLength(1);
+  });
+
+  it("accepts an evidence-backed numeric claim and direct quotation", () => {
+    const result = validateDraftClaimsAgainstLedger(
+      'The service costs $50. The company said "the project opens on Tuesday."',
+      ["c1", "c2"],
+      [
+        { claimId: "c1", claimText: "The service costs $50." },
+        { claimId: "c2", claimText: "The company said the project opens on Tuesday." },
+      ] as any,
+    );
+
+    expect(result.passed).toBe(true);
+    expect(result.supportedPassages).toHaveLength(2);
+  });
+
+  it("flags a stock label that is not grounded in the evidence ledger", () => {
+    const passages = findUngroundedGenericPassages(
+      "## Sustainable Practices\n\nWindstar demonstrates that indulgence does not have to come at the planet's expense.",
+      [{ claimId: "c1", claimText: "Windstar carries 150 to 350 guests." } as any],
+    );
+
+    expect(passages).toHaveLength(1);
+    expect(passages[0]).toContain("Sustainable Practices");
+  });
+
+  it("keeps a stock label when surrounding text is concretely supported", () => {
+    const findings = findUngroundedGenericPassageFindings(
+      "The resort offers personalized service: one host manages airport transfers, dining reservations, and daily activity planning.",
+      [{ claimId: "c1", claimText: "Each villa has one host who manages airport transfers, dining reservations, and daily activity planning." } as any],
+    );
+
+    expect(findings).toEqual([]);
+  });
+
+  it("requires valid source-grounding JSON and known evidence claim IDs", () => {
+    expect(parseSourceGroundingOutput("not JSON", ["c1"])).toMatchObject({ success: false });
+    expect(parseSourceGroundingOutput(JSON.stringify({
+      groundedArticleMarkdown: "This source-led article is deliberately long enough to satisfy the required article threshold while preserving the only supported factual statement.",
+      claimIdsUsed: ["unknown"],
+    }), ["c1"])).toMatchObject({ success: false });
+    expect(parseSourceGroundingOutput(JSON.stringify({
+      groundedArticleMarkdown: "This source-led article is deliberately long enough to satisfy the required article threshold while preserving the only supported factual statement.",
+      claimIdsUsed: ["c1", "c1"],
+    }), ["c1"])).toMatchObject({ success: true, data: { claimIdsUsed: ["c1"] } });
   });
 });

@@ -76,6 +76,16 @@ describe("POST /api/articles/create - Integration Flow", () => {
              })
         };
       }
+      if (agentName === "Evidence Grounding Editor") {
+        return {
+          text: JSON.stringify({
+            groundedArticleMarkdown: "Item costs $50 in 2026\n\nBus arrives every 10 minutes\n\nThis source-led draft keeps the verified details available to readers without adding general claims outside the evidence ledger.",
+            claimIdsUsed: ["c1", "c2"],
+            removedUnsupportedPassages: [],
+            qualityNotes: ["Kept the article inside the available evidence."],
+          }),
+        };
+      }
       if (agentName === "SEO Opportunity Agent") return { text: JSON.stringify({ focusKeyword: "key", secondaryKeywords: ["k2"], searchIntent: "info", readerPromise: "promise", seoTitleOptions: [], h1: "h1", slug: "slug", metaDescription: "desc", suggestedH2s: ["First Structure Section"], faqQuestions: [], internalLinkIdeas: [], imageAltText: "alt" }) };
       if (agentName === "Source Deconstruction Engine") {
          return {
@@ -299,7 +309,17 @@ describe("POST /api/articles/create - Integration Flow", () => {
                articleTraceId: "trace-abc",
                editedArticleHtml: "<p>I stayed at the property last summer and found the rooms exceptionally quiet. This is a long draft paragraph added to meet the minimal length constraint of one hundred characters required by the platform's brand-safe verification gate.</p>",
                preservedClaimIds: ["c1"]
-             })
+          })
+        };
+      }
+      if (params.agentName === "Evidence Grounding Editor") {
+        return {
+          text: JSON.stringify({
+            groundedArticleMarkdown: "I stayed at the property last summer and found the rooms exceptionally quiet. This draft is deliberately long enough to reach the platform's minimum article-content threshold for the fabricated-experience gate.",
+            claimIdsUsed: ["c1"],
+            removedUnsupportedPassages: [],
+            qualityNotes: [],
+          }),
         };
       }
       return await successAdapter(params);
@@ -312,6 +332,25 @@ describe("POST /api/articles/create - Integration Flow", () => {
     });
     expect(res.text).toContain("PUBLISH_BLOCKED");
     expect(res.text).toContain("Fabricated experience detected");
+  });
+
+  it("7b. malformed source-grounding output fails closed into manual review", async () => {
+    setTestAdapterMock(async (params) => {
+      const successAdapter = getSuccessMock();
+      if (params.agentName === "Evidence Grounding Editor") {
+        return { text: "not valid JSON" };
+      }
+      return await successAdapter(params);
+    });
+
+    const res = await request(app).post("/api/articles/create").send({
+      niche: "Travel",
+      sourceTitle: "Test",
+      sourceUrl: "https://example.com",
+    });
+
+    expect(res.text).toContain("SOURCE_GROUNDING_UNAVAILABLE");
+    expect(res.text).toContain("NEEDS_MANUAL_REVIEW");
   });
 
   it("8. stale structured visa claim blocks flow", async () => {

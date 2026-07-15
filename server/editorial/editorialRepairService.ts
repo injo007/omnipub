@@ -87,7 +87,8 @@ export async function attemptRepair(
   repairInstructions: string[],
   claims: unknown[],
   agent: string,
-  cycle: number
+  cycle: number,
+  evidenceContext: Array<{ claimId?: string; claimText?: string; sourceUrl?: string; sourceTitle?: string; publisher?: string; verificationStatus?: string; supportsClaim?: boolean }> = [],
 ): Promise<RepairResult> {
   const providers = appContext.getStore();
   if (!providers?.llmCompletion) {
@@ -107,12 +108,14 @@ export async function attemptRepair(
     };
   }
 
+  const permittedClaimIds = claims.filter((claim): claim is string => typeof claim === "string");
+  const relevantEvidence = evidenceContext.filter((claim) => permittedClaimIds.includes(claim.claimId || ""));
   const prompt = `You are the Editorial Repair Specialist for a publication-quality workflow.
 
 Repair the supplied article HTML only where necessary to resolve the listed quality failures.
 
 Non-negotiable rules:
-1. Keep the article's factual scope inside the verified claim IDs. Do not add facts, quotes, numbers, dates, names, recommendations, or first-person experiences.
+1. Keep the article's factual scope inside the supplied verified evidence records. Do not add facts, quotes, numbers, dates, names, recommendations, or first-person experiences.
 2. Preserve valid HTML structure and return a complete replacement article, not a diff or commentary.
 3. Replace copied or formulaic passages with a genuinely fresh editorial expression; do not imitate source phrasing or structure.
 4. Apply every repair instruction without weakening the article's clarity or brand voice.
@@ -121,7 +124,8 @@ Non-negotiable rules:
 Article trace: ${articleTraceId}
 Repair cycle: ${cycle}
 Failure type: ${failureType}
-Verified claim IDs that may remain in scope: ${JSON.stringify(claims)}
+Verified claim IDs that may remain in scope: ${JSON.stringify(permittedClaimIds)}
+Relevant verified evidence records: ${JSON.stringify(relevantEvidence)}
 Failing passages: ${JSON.stringify(failingPassages)}
 Repair instructions: ${JSON.stringify(repairInstructions)}
 
@@ -130,7 +134,7 @@ ${currentHtml}`;
 
   try {
     const response = await providers.llmCompletion({
-      agent: "Natural Style Editor",
+      agent: "Lead Quality & Safety Compliance Inspector",
       step: "Targeted Editorial Repair",
       prompt,
       responseFormat: "json_object",

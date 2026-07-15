@@ -99,6 +99,10 @@ To ensure absolute service persistence, self-healing, and concurrency limits acr
 -   `RestartSec=10`: Spreading engine restarts safely to prevent crash-loops.
 -   `LimitNOFILE=65535`: Sets file descriptors to high limits to support highly concurrent queue workers.
 
+### D. Editorial Workflow Release Verification
+
+The installed application includes a source-grounding editorial stage after the natural-style edit. It removes unsupported generic abstractions and requires a source-specific Markdown revision before an article can continue to publishing. No new installer option or credential is required; after an application upgrade, run `verify` and create one non-production test article to confirm that its workflow log includes **Source-Grounding Editor** and that the reader preview contains no raw HTML or publishing placeholders.
+
 ---
 
 ## 5. Installation Documentation Maintenance

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { assessResearchIntegrity, reconcileDeclaredSourceReferences } from "../researchIntegrityService";
+import { assessResearchIntegrity, normalizeReconciledSourceReferences, reconcileDeclaredSourceReferences } from "../researchIntegrityService";
 
 const sources = [
   { url: "https://primary.example-news.org/report", title: "Primary reporting", publisher: "Example News" },
@@ -7,6 +7,37 @@ const sources = [
 ];
 
 describe("research integrity gate", () => {
+  it("normalizes complete reconciled sources and removes canonical duplicates", () => {
+    const normalized = normalizeReconciledSourceReferences([
+      { url: "https://news.example.org/report?utm_source=rss", title: "Report", publisher: "Example News" },
+      { url: "https://news.example.org/report", title: "Duplicate report", publisher: "Example News" },
+    ]);
+
+    expect(normalized.sources).toEqual([
+      { url: "https://news.example.org/report?utm_source=rss", title: "Report", publisher: "Example News" },
+    ]);
+    expect(normalized.rejected).toEqual([
+      expect.objectContaining({ reason: "duplicate_canonical_source" }),
+    ]);
+  });
+
+  it("rejects sources that cannot meet the downstream complete-reference contract", () => {
+    const normalized = normalizeReconciledSourceReferences([
+      { title: "Missing URL", publisher: "Example News" },
+      { url: "not a URL", title: "Invalid URL", publisher: "Example News" },
+      { url: "https://news.example.org/missing-title", publisher: "Example News" },
+      { url: "https://news.example.org/missing-publisher", title: "Missing publisher" },
+    ]);
+
+    expect(normalized.sources).toEqual([]);
+    expect(normalized.rejected.map((entry) => entry.reason)).toEqual([
+      "missing_url",
+      "invalid_url",
+      "missing_title",
+      "missing_publisher",
+    ]);
+  });
+
   it("accepts evidence that is traceable to declared HTTPS sources", () => {
     expect(assessResearchIntegrity(sources, [
       { sourceUrl: sources[0].url, verificationStatus: "verified", supportsClaim: true },

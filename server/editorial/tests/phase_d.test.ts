@@ -3,6 +3,7 @@ import { PhaseDOrchestrator } from '../phaseDOrchestrator';
 import { generateHash, generateApprovedEditorialHash, sanitizeHtml } from '../finalArticlePackageService';
 import { PhaseDInputContract } from '../typesPhaseD';
 import { InMemoryPhaseDPackageRepository } from '../phaseDPackageRepository';
+import { buildWordpressPayload } from '../wordpressPayloadBuilder';
 
 describe('Phase D - Unit Tests', () => {
     
@@ -46,6 +47,16 @@ describe('Phase D - Unit Tests', () => {
         expect(decision).toBe("APPROVED_FOR_PUBLISHING");
         expect(pkg).toBeDefined();
         expect(pkg?.articleId).toBe("a1");
+    });
+
+    it('uses the approved Phase C body as the WordPress payload body', async () => {
+        const orchestrator = new PhaseDOrchestrator(new InMemoryPhaseDPackageRepository());
+        const input = { ...validBaseInput, approvedBodyHtml: "<p>Approved grounded revision</p>" };
+        const hash = generateApprovedEditorialHash(input, input.approvedBodyHtml);
+        const { pkg } = await orchestrator.executePhaseD(input, hash);
+
+        expect(pkg).toBeDefined();
+        expect(buildWordpressPayload(pkg!).content).toBe(input.approvedBodyHtml);
     });
 
     it('Test', async () => {

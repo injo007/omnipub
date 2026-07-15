@@ -4,6 +4,18 @@ export interface ResearchSourceRecord {
   publisher?: string;
 }
 
+/** A source record safe for the downstream research and deconstruction stages. */
+export interface CompleteResearchSourceRecord {
+  url: string;
+  title: string;
+  publisher: string;
+}
+
+export interface RejectedResearchSourceRecord {
+  source: ResearchSourceRecord;
+  reason: "missing_url" | "invalid_url" | "missing_title" | "missing_publisher" | "duplicate_canonical_source";
+}
+
 export interface ResearchEvidenceRecord {
   sourceUrl?: string;
   verificationStatus?: string;
@@ -57,6 +69,53 @@ function isPublicationUrl(value: string): boolean {
 }
 
 /**
+ * Converts reconciled source records into the complete records required by
+ * research output and source deconstruction. It deliberately refuses to
+ * manufacture titles, publishers, or URLs from placeholder values.
+ */
+export function normalizeReconciledSourceReferences(
+  sources: ResearchSourceRecord[] | undefined,
+): { sources: CompleteResearchSourceRecord[]; rejected: RejectedResearchSourceRecord[] } {
+  const completeSources: CompleteResearchSourceRecord[] = [];
+  const rejected: RejectedResearchSourceRecord[] = [];
+  const canonicalLocations = new Set<string>();
+
+  for (const source of Array.isArray(sources) ? sources : []) {
+    const url = typeof source?.url === "string" ? source.url.trim() : "";
+    const title = typeof source?.title === "string" ? source.title.trim() : "";
+    const publisher = typeof source?.publisher === "string" ? source.publisher.trim() : "";
+
+    if (!url) {
+      rejected.push({ source, reason: "missing_url" });
+      continue;
+    }
+    if (!isPublicationUrl(url)) {
+      rejected.push({ source, reason: "invalid_url" });
+      continue;
+    }
+    if (!title) {
+      rejected.push({ source, reason: "missing_title" });
+      continue;
+    }
+    if (!publisher) {
+      rejected.push({ source, reason: "missing_publisher" });
+      continue;
+    }
+
+    const canonicalLocation = canonicalPublicationLocation(url);
+    if (!canonicalLocation || canonicalLocations.has(canonicalLocation)) {
+      rejected.push({ source, reason: "duplicate_canonical_source" });
+      continue;
+    }
+
+    canonicalLocations.add(canonicalLocation);
+    completeSources.push({ url, title, publisher });
+  }
+
+  return { sources: completeSources, rejected };
+}
+
+/**
  * Reconciles a model's canonical rendition of the supplied seed URL with the
  * exact source URL stored by the workflow. The supplied source is always a
  * declared record because the research prompt limits the model to that source.
@@ -79,8 +138,8 @@ export function reconcileDeclaredSourceReferences<T extends ResearchEvidenceReco
   );
   const canonicalSource: ResearchSourceRecord = {
     url: declaredSource.url,
-    title: declaredSource.title?.trim() || matchingSource?.title?.trim() || "Declared source",
-    publisher: declaredSource.publisher?.trim() || matchingSource?.publisher?.trim() || "Declared publisher",
+    title: declaredSource.title?.trim() || matchingSource?.title?.trim(),
+    publisher: declaredSource.publisher?.trim() || matchingSource?.publisher?.trim(),
   };
 
   // The source context was supplied by the workflow, so retain it even when

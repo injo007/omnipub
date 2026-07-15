@@ -22,7 +22,9 @@ import { resolveModelProvider, resolveModelRoute } from "./server/core/models/mo
 
 // --- Editorial Core Imports ---
 import { validateEditorialBrief } from "./server/editorial/editorialBriefService";
-import { addEvidenceEntry, checkTimeSensitiveFacts, validateDraftClaimsAgainstLedger } from "./server/editorial/evidenceLedgerService";
+import { addEvidenceEntry, checkTimeSensitiveFacts, findUngroundedGenericPassages, validateDraftClaimsAgainstLedger } from "./server/editorial/evidenceLedgerService";
+import { parseSourceGroundingOutput } from "./server/editorial/sourceGroundingService";
+import { assessPublicationEligibility } from "./server/editorial/publicationEligibilityService";
 
 import { deconstructSource } from "./server/editorial/sourceDeconstructionService";
 import { createOriginalArticlePlan } from "./server/editorial/originalArticlePlanService";
@@ -33,7 +35,7 @@ import { attemptRepair } from "./server/editorial/editorialRepairService";
 import { createVersion } from "./server/editorial/articleVersionService";
 import { evaluateEditorialQuality } from "./server/editorial/editorialQualityService";
 import { assessMediaAsset, type MediaAssetAssessment } from "./server/editorial/imageQualityService";
-import { assessResearchIntegrity, reconcileDeclaredSourceReferences } from "./server/editorial/researchIntegrityService";
+import { assessResearchIntegrity, normalizeReconciledSourceReferences, reconcileDeclaredSourceReferences } from "./server/editorial/researchIntegrityService";
 import { selectArticleFormat, type ArticleFormatProfile } from "./server/editorial/articleFormatService";
 import { resolveNicheEditorialPolicy } from "./server/editorial/nichePolicyService";
 import { assessEditorialReadiness } from "./server/editorial/editorialReadinessService";
@@ -653,67 +655,10 @@ function convertMarkdownToWpHtml(markdown: string): string {
 }
 
 function linguisticHumanizeFilter(content: string): string {
-  if (!content) return "";
-  let clean = content;
-
-  const replacements: { pattern: RegExp; replacer: string }[] = [
-    { pattern: /\bFurthermore,\b/g, replacer: "What's more," },
-    { pattern: /\bFurthermore\b/gi, replacer: "Plus" },
-    { pattern: /\bMoreover,\b/g, replacer: "Truth is," },
-    { pattern: /\bMoreover\b/gi, replacer: "Besides" },
-    { pattern: /\bIn conclusion,\b/g, replacer: "Bottom line is," },
-    { pattern: /\bIn conclusion\b/gi, replacer: "Look, at the end of the day" },
-    { pattern: /\bAdditionally,\b/g, replacer: "Also," },
-    { pattern: /\bAdditionally\b/gi, replacer: "Plus" },
-    { pattern: /\bConsequently,\b/g, replacer: "So," },
-    { pattern: /\bConsequently\b/gi, replacer: "As a result" },
-    { pattern: /\bSpecifically,\b/g, replacer: "To be exact," },
-    { pattern: /\bSpecifically\b/gi, replacer: "Particularly" },
-    { pattern: /\bNotably,\b/g, replacer: "And interestingly enough," },
-    { pattern: /\bNotably\b/gi, replacer: "Mind you" },
-    { pattern: /\bInterestingly,\b/g, replacer: "Oddly enough," },
-    { pattern: /\bInterestingly\b/gi, replacer: "Honestly" },
-    { pattern: /\bAs a result,\b/g, replacer: "So," },
-    { pattern: /\bIn contrast,\b/g, replacer: "On the flip side," },
-    { pattern: /\bIn contrast\b/gi, replacer: "On the flip side" },
-    { pattern: /\bOn the other hand,\b/g, replacer: "Then again," },
-    { pattern: /\bOn the other hand\b/gi, replacer: "On the other flip of the coin" },
-    { pattern: /\balbeit\b/gi, replacer: "even if" },
-    { pattern: /\bat its core\b/gi, replacer: "essentially" },
-    { pattern: /\bit is important to remember\b/gi, replacer: "keep in mind" },
-    { pattern: /\bit's important to remember\b/gi, replacer: "don't forget" },
-    { pattern: /\bit is worth noting\b/gi, replacer: "by the way" },
-    { pattern: /\bit's worth noting\b/gi, replacer: "mind you" },
-    { pattern: /\ba testament to\b/gi, replacer: "proof of" },
-    { pattern: /\bpaving the way\b/gi, replacer: "setting the stage" },
-    { pattern: /\bpaved the way\b/gi, replacer: "set the stage" },
-    { pattern: /\bdelve into\b/gi, replacer: "look at" },
-    { pattern: /\bdelving into\b/gi, replacer: "checking out" },
-    { pattern: /\bdelves into\b/gi, replacer: "explores" },
-    { pattern: /\bunlock the potential of\b/gi, replacer: "tap into" },
-    { pattern: /\bunlocking the potential\b/gi, replacer: "opening up" },
-    { pattern: /\btapestry of\b/gi, replacer: "mix of" },
-    { pattern: /\bbeacon of\b/gi, replacer: "example of" },
-    { pattern: /\bnestled in\b/gi, replacer: "tucked in" },
-    { pattern: /\bgame-changer\b/gi, replacer: "big deal" },
-    { pattern: /\brevolutionary\b/gi, replacer: "clever" },
-    { pattern: /\bparamount importance\b/gi, replacer: "crucial role" },
-    { pattern: /\bunwavering\b/gi, replacer: "steady" },
-    { pattern: /\bpivotal role\b/gi, replacer: "key role" },
-    { pattern: /\bcatalyst for\b/gi, replacer: "spark for" },
-    { pattern: /\bonly time will tell\b/gi, replacer: "we'll see what happens" },
-    { pattern: /\bone of the most significant\b/gi, replacer: "a major" },
-    { pattern: /\bstands out from the crowd\b/gi, replacer: "stands out" },
-    { pattern: /\bultimately,\b/gi, replacer: "In the end," },
-    { pattern: /\bultimately\b/gi, replacer: "in the end" },
-    { pattern: /\bindeed\b/gi, replacer: "honestly" }
-  ];
-
-  for (const item of replacements) {
-    clean = clean.replace(item.pattern, item.replacer);
-  }
-
-  return clean;
+  // A synonym swap cannot make prose human. It can turn clean editorial copy
+  // into affected wording after the model has finished. Style belongs to the
+  // writer/editor stages; this boundary preserves the approved prose.
+  return content || "";
 }
 
 export function sanitizeArticleContent(content: string): string {
@@ -775,7 +720,8 @@ export function sanitizeArticleContent(content: string): string {
       .trim();
   }
 
-  // 5. Force linguistic humanizer filter to strip and clean all AI tells the detectors look for
+  // 5. Preserve approved editorial wording. This helper intentionally performs
+  // no post-generation synonym swapping; quality belongs in the editor stages.
   clean = linguisticHumanizeFilter(clean);
 
   return clean;
@@ -3459,6 +3405,9 @@ function getFallbackResearchVerificationJSON(): string {
 function getAgentKeyFromName(name: string): string {
   const norm = name.toLowerCase();
   if (norm.includes("research")) return "researchVerification";
+  // Source grounding is a quality/safety capability and must inherit that
+  // configured route and fallback policy instead of silently using drafting.
+  if (norm.includes("source-grounding") || norm.includes("source grounding") || norm.includes("evidence grounding")) return "qualitySafetyAuditor";
   if (norm.includes("brand voice") || norm.includes("writer")) return "brandVoiceWriter";
   if (
     norm.includes("natural style") || 
@@ -6752,6 +6701,10 @@ setPushToWordPressAdapter(pushToWordPress);
 
 // Helper to convert an article draft to a complete FinalArticlePackage and save it
 async function createPackageFromArticle(article: any, siteId: string, scheduledPublishAt?: string | null): Promise<FinalArticlePackage> {
+  const eligibility = assessPublicationEligibility(article);
+  if (!eligibility.passed) {
+    throw new Error(`Article is not approved for publication: ${eligibility.reasons.join(" ")}`);
+  }
   const adminDb = getDocumentStore();
   const packageId = `pkg_${article.id}_${Date.now()}`;
   const wordCount = (article.content || "").split(/\s+/).filter((w: string) => w.length > 0).length;
@@ -6765,9 +6718,9 @@ async function createPackageFromArticle(article: any, siteId: string, scheduledP
   const pkg: FinalArticlePackage = {
     packageId,
     articleId: article.id,
-    workflowRunId: `wf_${article.id}`,
+    workflowRunId: article.workflowRunId || `wf_${article.id}`,
     packageVersion: 1,
-    sourceArticleVersionId: "ver_1",
+    sourceArticleVersionId: article.approvedRevision.versionId,
     createdAt: new Date().toISOString(),
     createdBy: "Manual_Queue",
     packageStatus: scheduledPublishAt ? "SCHEDULED" : "APPROVED_FOR_PUBLISHING",
@@ -6795,15 +6748,26 @@ async function createPackageFromArticle(article: any, siteId: string, scheduledP
     },
 
     sourcesAndVerification: {
-      normalizedSourceReferences: [],
-      citations: [],
+      normalizedSourceReferences: article.pipelineRecords.evidenceLedger.map((claim: any) => ({
+        url: claim.sourceUrl,
+        title: claim.sourceTitle,
+        publisher: claim.publisher,
+      })),
+      citations: article.pipelineRecords.evidenceLedger.map((claim: any) => ({
+        claimId: claim.claimId,
+        claimText: claim.claimText,
+        sourceUrl: claim.sourceUrl,
+        sourceTitle: claim.sourceTitle,
+        publisher: claim.publisher,
+        requiresAttribution: claim.requiresAttribution === true,
+      })),
       attributionRecords: [],
       sourcePolicyDecision: true,
-      factualVerificationSnapshot: { passed: true, score: 100, claimsChecked: 0, claimsUnverified: 0, details: "Legacy sync conversion" } as any,
-      originalitySnapshot: { passed: true, score: 100 } as any,
-      naturalnessSnapshot: { passed: true, score: 100 } as any,
-      voiceValidationSnapshot: { passed: true, score: 100 } as any,
-      completePhaseCQualitySnapshot: { approved: true, quality_grade: "A" } as any
+      factualVerificationSnapshot: article.pipelineRecords.validationResults.claimValidation,
+      originalitySnapshot: article.pipelineRecords.validationResults.originality,
+      naturalnessSnapshot: article.pipelineRecords.validationResults.naturalness,
+      voiceValidationSnapshot: article.pipelineRecords.validationResults.writerVoice,
+      completePhaseCQualitySnapshot: article.pipelineRecords.validationResults.editorialQuality,
     },
 
     media: {
@@ -6822,10 +6786,11 @@ async function createPackageFromArticle(article: any, siteId: string, scheduledP
     },
 
     auditAndProvenance: {
-      upstreamProvidersAndModels: [],
-      repairAttemptCount: 0,
-      sourceVersionHashes: {},
-      finalPackageHash: "",
+      upstreamProvidersAndModels: Object.values(article.modelUsageProof || {})
+        .filter((value): value is string => typeof value === "string"),
+      repairAttemptCount: article.pipelineRecords.repairRecords?.length || 0,
+      sourceVersionHashes: { approvedContent: article.approvedRevision.contentHash },
+      finalPackageHash: article.approvedRevision.contentHash,
       qualityConfigurationVersion: "1.0.0",
       promptConfigurationVersionReferences: [],
       costSummary: {},
@@ -6872,6 +6837,10 @@ appRouter.post("/api/publishing-queue/enqueue", async (req, res) => {
     }
 
     const article = db.articles[articleIndex];
+    const eligibility = assessPublicationEligibility(article);
+    if (!eligibility.passed) {
+      return res.status(409).json({ error: "Article is not approved for publication.", reasons: eligibility.reasons });
+    }
     
     // Choose siteId (fallback to niche WordPress settings if not passed)
     let selectedSiteId = siteId;
@@ -7404,11 +7373,20 @@ appRouter.post("/api/articles/:id/push-wp", async (req, res) => {
     return res.status(404).json({ error: "Article not found" });
   }
 
+  const eligibility = assessPublicationEligibility(db.articles[index]);
+  if (!eligibility.passed) {
+    return res.status(409).json({ error: "Article is not approved for publication.", reasons: eligibility.reasons });
+  }
+
   // Pre-validate and optimize article before push to ensure meta limits and keyword safety
   const optimizedArticle = validateAndOptimizeSEOForWordPress(db.articles[index], db.articles[index].niche);
   db.articles[index] = optimizedArticle;
 
   const article = db.articles[index];
+  const postOptimizationEligibility = assessPublicationEligibility(article);
+  if (!postOptimizationEligibility.passed) {
+    return res.status(409).json({ error: "WordPress optimization changed or invalidated the approved article revision.", reasons: postOptimizationEligibility.reasons });
+  }
   
   if (!article.seo || Object.keys(article.seo).length === 0) {
     console.warn(`[WP PUSH WARNING] Article ${req.params.id} has no SEO metadata in DB. Push will use defaults.`);
@@ -7929,11 +7907,12 @@ Niche Detected: "${editorialContext.niche}"
 Story Category: "${editorialContext.storyType || "breaking news"}"
 
 === UNIVERSAL FACT PRESERVATION MANDATES: ===
-1. Extract only the undisputed core facts present in the supplied source context (dates, specifications, verified events, direct participants).
-2. Separate supported reporting from speculation, rumor, or opinion. Do not claim that you opened, browsed, or independently verified the source URL unless that material was supplied to you.
-3. The seed URL above is mandatory: include it as a declared source and attach every evidence-ledger claim to a declared source URL. Never invent a second publisher, URL, quote, or source record.
-4. Identify facts that remain unverified or cannot be supported by the supplied material.
-5. Provide structured evidence entries for the Evidence Ledger. Every important claim needs a unique "claimId" string. "articleTraceId" must perfectly equal: "${articleTraceId}".
+1. Extract only the undisputed facts present in the supplied source context (dates, specifications, verified events, direct participants).
+2. Build a useful, granular fact ledger rather than a short abstract. Capture concrete names, locations, quantities, product/service details, policies, examples, qualifications, and disclosures when they appear in the supplied text. Each claimText must be an atomic, publishable fact that a writer can use without re-reading the source.
+3. Separate supported reporting from speculation, rumor, or opinion. Do not claim that you opened, browsed, or independently verified the source URL unless that material was supplied to you.
+4. The seed URL above is mandatory: include it as a declared source and attach every evidence-ledger claim to a declared source URL. Never invent a second publisher, URL, quote, or source record.
+5. Identify facts that remain unverified or cannot be supported by the supplied material.
+6. Provide structured evidence entries for the Evidence Ledger. Every important claim needs a unique "claimId" string. Do not replace source-specific details with general labels such as "personalised service", "sustainability", "authenticity", or "exclusive access" when the source gives a concrete example. "articleTraceId" must perfectly equal: "${articleTraceId}".
 
 Return your analytical brief as a strict JSON object structure matching the provided ResearchOutput JSON schema.
 Do not wrap in any formatting other than clean JSON.`;
@@ -8039,8 +8018,10 @@ This article must follow this format rather than a generic newsroom template.
 - Forbidden patterns: ${articleFormat.forbiddenPatterns.join("; ")}.
 - Do not add a pull quote, table, FAQ, timeline, list, or final-summary section merely for decoration. Use a format element only when the selected format calls for it and the evidence supports it.
 
-=== DEEP HUMAN-CENTRIC NARRATIVE ARCHITECTURE & EDITORIAL NATURALNESS ===
-- **Narrative Depth**: Do not just summarize facts sequentially. Weave a compelling, investigative narrative arc that captures the 'why' behind the news. Frame stories using human stakes, deep analytical curiosity, and constructive critique. Explore historical patterns, technical or cultural context, and real-world implications.
+=== SOURCE-LED EDITORIAL ARCHITECTURE ===
+- **Reader Value**: Turn the evidence into a clear answer to the reader's question. Lead with the most consequential, specific point—not generic praise, a mood-setting scene, or a claim about what audiences want.
+- **Concrete Detail**: When the ledger contains named places, products, programmes, policies, quantities, operations, or examples, explain those details. Do not compress them into vague labels such as "personalised service", "authenticity", "sustainability", "exclusive access", or "comfort and luxury".
+- **Original Analysis**: Reorganise the evidence around a useful reader question or trade-off. Do not mirror the seed headline's numbered sequence or paragraph order. Do not manufacture a broader trend, market context, or conclusion that is absent from the evidence.
 - **Advanced Fact Integrity**: Ground every statement directly in verified claims from the Evidence Ledger. Perform active self-auditing as you write to guarantee 100% strict adherence to raw seed facts. Under no circumstances invent, embellish, or generalize any claims.
 - **Specificity Over Length**: Every paragraph must advance a named fact, a clearly labelled limitation, or an evidence-led interpretation. Do not pad a thin source with broad industry trends, travel imagery, universal claims about audiences, or generic conclusions. If the evidence is limited, write a concise article and state the boundary plainly.
 - **Natural Editorial Rhythm**: Use varied but purposeful sentence and paragraph lengths. Do not insert theatrical fragments, rhetorical questions, invented scenes, or stock transitions merely to create a style effect.
@@ -8057,8 +8038,7 @@ This article must follow this format rather than a generic newsroom template.
 1. You may ONLY USE FACTS from the provided Evidence Ledger. DO NOT INVENT or hallucinate specific real-world visual event occurrences, fictitious outfits/fabrics, local venue descriptors, or fictitious crowd interactions.
 2. Stick strictly to the actual fact-payload.
 3. Keep the content deeply analytical, elegant, and highly articulate. No childish novelistic storytelling elements.
-4. ABSOLUTE ZERO AI PROSE OR FAKE BYLINES: NEVER include any fake writer names, fictive author elements, bios, or signatures in the title or content. Never reference any artificial scores, "editorial intelligence metrics", humanScores, or programmatic procedures. It must appear 100% written by an independent, objective human journalist.
-5. The draft MUST score a high "Editorial Naturalness Score", entirely clearing advanced AI content detection checks (< 5% AI probability flag). Keep paragraph construction highly asymmetrical and avoid predictability.`;
+4. NEVER include fake writer names, fictive author elements, bios, signatures, artificial scores, or references to the publishing workflow. Write direct, readable journalism—do not try to manipulate AI-detection tools or use artificial sentence variation.`;
 
   const userPrompt = `Write a premium longform article based on this news brief:
 Seed Title: "${editorialContext.sourceTitle}"
@@ -8179,6 +8159,56 @@ Do not wrap in any other object. Return only the JSON block. Ensure all fields a
   return { systemPrompt, userPrompt, variables, compiledPrompt };
 }
 
+function buildEvidenceGroundingEditorPrompt(
+  editorialContext: EditorialContext,
+  editorialBriefObj: EditorialBrief,
+  evidenceLedger: EvidenceLedger,
+  draft: string,
+) {
+  const systemPrompt = `You are the Source-Grounding Editor for a publication-quality editorial workflow.
+Your job is to make the draft genuinely useful, specific, and faithful to the supplied evidence. You are not a copy editor and you are not an AI-detector optimiser.
+
+NON-NEGOTIABLE RULES:
+1. Every factual assertion must be supported by an Evidence Ledger claim. Delete or recast unsupported assertions; never invent a replacement fact.
+2. Preserve and explain concrete source details. A draft that turns named places, services, quantities, policies, programmes, disclosures, or examples into broad claims such as "authenticity", "sustainability", "personalised service", or "exclusive access" fails this task.
+3. Rebuild the article when necessary around a reader question or a clear editorial angle. Do not retain a weak numbered list merely because the seed story used one, and do not copy the source's wording or sequence.
+4. Do not add market trends, motivations, outcomes, comparisons, prices, recommendations, or claims about what travellers/consumers/companies generally do unless an exact ledger claim supports them.
+5. Return semantic Markdown only. No raw HTML, table of contents, decorative tables, external links, CTA, byline, score, or commentary.`;
+
+  const userPrompt = `Revise this article into a source-led, reader-ready piece.
+
+Article brief:
+${JSON.stringify(editorialBriefObj, null, 2)}
+
+Verified Evidence Ledger (the complete factual boundary):
+${JSON.stringify(evidenceLedger, null, 2)}
+
+Source context for fact checking only. Use it to verify that the draft has not
+flattened the ledger's concrete details, but do not introduce a fact that is
+missing from the ledger or reuse its sentences, headings, order, or list structure:
+"""
+${editorialContext.cleanSourceContent}
+"""
+
+Current draft:
+"""
+${draft}
+"""
+
+Before writing, identify weak abstractions and unsupported passages internally. Then produce an original article that gives the reader concrete information from the ledger. Prefer a concise, well-developed article over padded sections. Keep the focus keyword natural: "${editorialContext.focusKeyword || ""}".
+
+Return only this JSON object:
+{
+  "groundedArticleMarkdown": "complete replacement article in Markdown",
+  "claimIdsUsed": ["only IDs from the Evidence Ledger"],
+  "removedUnsupportedPassages": ["short descriptions"],
+  "qualityNotes": ["short editorial notes"]
+}`;
+
+  const compiledPrompt = `[SYSTEM]\n${systemPrompt}\n\n[USER]\n${userPrompt}`;
+  return { systemPrompt, userPrompt, variables: { draftLength: draft.length, evidenceCount: evidenceLedger.length }, compiledPrompt };
+}
+
 function extractArticleStructureManifest(markdown: string): string[] {
   return (markdown.match(/^#{2,3}\s+.+$/gm) || [])
     .map((heading) => heading.replace(/^#+\s+/, "").trim())
@@ -8190,7 +8220,7 @@ function buildQualitySafetyAuditPrompt(editorialContext: EditorialContext, draft
   const systemPrompt = `You are our Lead Quality & Safety Compliance Inspector. 
 Your role is to rigorously audit content against strict publishing policies, assess editorial naturalness, and ensure brand-safety compliance.`;
 
-  const userPrompt = `Audit the following longform article draft for factual compliance, brand safety guidelines, and "humanScore" (Editorial Naturalness Score).
+  const userPrompt = `Audit the following longform article draft for factual compliance, brand safety guidelines, clarity, and reader usefulness.
 
 Article Draft:
 """
@@ -8200,10 +8230,10 @@ ${draft}
 Niche: "${editorialContext.niche}"
 
 Check with extreme rigor for:
-1. Editorial Naturalness (humanScore): Evaluate the draft on a 1-100 scale for how authentic, conversational, and human it reads. Look for burstiness and varied sentence lengths. If you do not detect extreme robotic artifacts or perfectly symmetrical AI paragraphs, you MUST score humanScore above 95. If the draft reads like a professional, engaging article, output humanScore: 98 or 100.
+1. Specificity and reader value: Does each section offer source-backed information, or does it rely on empty labels and broad trend claims?
 2. Factual inventions: Are there fabricated quotes, specs, dates, prices, or fake subheads?
 3. Defamatory / Legal risk: Does the draft include insults, unverified criminal accusations, or victim mockery?
-4. Formatting issues: Are there weird HTML structures or sandbox elements?
+4. Formatting issues: Are there raw HTML structures, placeholders, or publishing scaffolding?
 
 If the draft is acceptable to publish and doesn't violate safety, "passed" should be true.
 Return a precise JSON compliance result card matching the response schema.`;
@@ -8771,11 +8801,10 @@ appRouter.post("/api/articles/create", async (req, res) => {
     // to the declared seed URL; unrelated or invented URLs still fail below.
     const declaredSource = sourceUrl ? (() => {
       try {
-        const url = new URL(sourceUrl);
+        new URL(sourceUrl);
         return {
           url: sourceUrl,
-          title: sourceTitle || "Declared source",
-          publisher: url.hostname.replace(/^www\./i, "") || "Declared publisher",
+          ...(sourceTitle?.trim() ? { title: sourceTitle.trim() } : {}),
         };
       } catch {
         return undefined;
@@ -8786,7 +8815,17 @@ appRouter.post("/api/articles/create", async (req, res) => {
       parsedResearchOutput.evidenceLedger || [],
       declaredSource,
     );
-    parsedResearchOutput.sources = reconciledResearch.sources;
+    const normalizedResearchSources = normalizeReconciledSourceReferences(reconciledResearch.sources);
+    if (normalizedResearchSources.rejected.length > 0) {
+      addLog(
+        "research",
+        "Source Reconciliation",
+        "warn",
+        `Excluded ${normalizedResearchSources.rejected.length} incomplete or duplicate source record(s) after reconciliation.`,
+        JSON.stringify(normalizedResearchSources.rejected),
+      );
+    }
+    parsedResearchOutput.sources = normalizedResearchSources.sources;
     parsedResearchOutput.evidenceLedger = reconciledResearch.evidence as EvidenceLedgerEntry[];
     
     // Research operates only on supplied source context and must never invent
@@ -9260,6 +9299,67 @@ appRouter.post("/api/articles/create", async (req, res) => {
     try { pipelineStates = recordStateTransition(pipelineStates, articleTraceId, "NATURAL_EDITED", "Natural Style Editor", hmModel, "Editing complete"); } catch(e){}
     addLog("editing", "Natural Style Editor", "success", "Completed editorial refinement and preserved verified claim boundaries.", editedDraft, editingPromptObj.compiledPrompt, hmModel, hmMeta);
 
+    // A style pass alone can make a draft smoother while leaving it abstract.
+    // This independent editor has the authority to remove that filler and must
+    // return a source-specific replacement before the article can proceed.
+    const groundingModel = getModelForAgent("qualitySafetyAuditor", saasConfig, pipeline);
+    const groundingPromptObj = buildEvidenceGroundingEditorPrompt(
+      editorialContext,
+      editorialBriefObj,
+      evidenceLedger,
+      editedDraft,
+    );
+    let groundingMeta: any = null;
+    try {
+      try { pipelineStates = recordStateTransition(pipelineStates, articleTraceId, "SOURCE_GROUNDING", "Source-Grounding Editor", groundingModel, "Started"); } catch(e){}
+      addLog("editing", `Source-Grounding Editor [using ${groundingModel}]`, "running", "Replacing generic abstractions with verified, source-specific detail.");
+      const runVal = await runLLMCompletion({
+        model: groundingModel,
+        contents: groundingPromptObj.userPrompt,
+        systemInstruction: groundingPromptObj.systemPrompt,
+        jsonMode: true,
+        agentName: "Evidence Grounding Editor",
+        returnFullMetadata: true,
+        sourceArticleLength: editorialContext.cleanSourceContent.length,
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            groundedArticleMarkdown: { type: Type.STRING },
+            claimIdsUsed: { type: Type.ARRAY, items: { type: Type.STRING } },
+            removedUnsupportedPassages: { type: Type.ARRAY, items: { type: Type.STRING } },
+            qualityNotes: { type: Type.ARRAY, items: { type: Type.STRING } },
+          },
+          required: ["groundedArticleMarkdown", "claimIdsUsed"],
+        },
+        variables: groundingPromptObj.variables,
+      });
+      groundingMeta = runVal.metadata;
+      const parsedGrounding = parseSourceGroundingOutput(
+        runVal.text,
+        evidenceLedger.map((claim) => claim.claimId),
+      );
+      if (!parsedGrounding.success) {
+        throw new Error(parsedGrounding.error);
+      }
+      const candidate = sanitizeArticleContent(parsedGrounding.data.groundedArticleMarkdown);
+      const groundedClaimIds = parsedGrounding.data.claimIdsUsed;
+      const groundingValidation = validateDraftClaimsAgainstLedger(candidate, groundedClaimIds, evidenceLedger);
+      const genericPassages = findUngroundedGenericPassages(candidate, evidenceLedger);
+      if (!candidate || candidate.length < 100 || !groundingValidation.passed || genericPassages.length > 0) {
+        throw new Error("Source-Grounding Editor did not return a valid, evidence-bounded replacement article.");
+      }
+      editedDraft = candidate;
+      claimsUsed = Array.from(new Set([...claimsUsed, ...groundedClaimIds]));
+      try { pipelineStates = recordStateTransition(pipelineStates, articleTraceId, "SOURCE_GROUNDED", "Source-Grounding Editor", groundingModel, "Source-specific revision validated"); } catch(e){}
+      addLog("editing", "Source-Grounding Editor", "success", "Verified source-specific editorial pass completed.", editedDraft, groundingPromptObj.compiledPrompt, groundingModel, groundingMeta);
+    } catch (err: any) {
+      const reason = `SOURCE_GROUNDING_UNAVAILABLE: ${err?.message || "No usable source-specific revision returned."}`;
+      try { pipelineStates = recordStateTransition(pipelineStates, articleTraceId, "NEEDS_MANUAL_REVIEW", "Source-Grounding Editor", groundingModel, reason); } catch(e){}
+      addLog("editing", "Source-Grounding Editor", "failed", `${reason} The system will not publish a generic fallback.`, undefined, groundingPromptObj.compiledPrompt, groundingModel, groundingMeta);
+      abortAndPersist(reason, "NEEDS_MANUAL_REVIEW", reason, evidenceLedger);
+      return;
+    }
+
     // -------------------------------------------------------------
     // FACTUAL GATE CHECKS (Phase B implementation)
     // -------------------------------------------------------------
@@ -9283,7 +9383,7 @@ appRouter.post("/api/articles/create", async (req, res) => {
     // -------------------------------------------------------------
     // PHASE C: Analysis, Repair, and Compliance Loop
     // -------------------------------------------------------------
-    const safetyModel = getModelForAgent("qualitySafetyAuditor", saasConfig, pipeline);
+    const safetyModel = groundingModel;
     const valModel = getModelForAgent("originalityReadabilityValidator", saasConfig, pipeline);
     let safetyScore = 100;
     
@@ -9318,6 +9418,15 @@ appRouter.post("/api/articles/create", async (req, res) => {
         naturalnessData = await analyzeNaturalness(articleTraceId, currentHtml);
         writerVoiceData = await validateWriterVoice(articleTraceId, currentHtml, writerProfile);
         finalClaimValidation = validateDraftClaimsAgainstLedger(currentHtml, claimsUsed, evidenceLedger);
+        const finalGenericPassages = findUngroundedGenericPassages(currentHtml, evidenceLedger);
+        if (finalGenericPassages.length > 0) {
+          finalClaimValidation = {
+            ...finalClaimValidation,
+            passed: false,
+            unsupportedPassages: [...finalClaimValidation.unsupportedPassages, ...finalGenericPassages],
+            requiresResearch: true,
+          };
+        }
         finalFabricatedCheck = checkFabricatedExperience(currentHtml, []);
         finalFreshnessCheck = checkTimeSensitiveFacts(evidenceLedger);
         finalReadiness = assessEditorialReadiness({
@@ -9348,7 +9457,8 @@ appRouter.post("/api/articles/create", async (req, res) => {
         const failingPassages: string[] = [
           ...(originalityData.failingPassages || []).map((passage: any) => passage.draftPassage || passage.paragraphText || passage.sourcePassage || "").filter(Boolean),
           ...(naturalnessData.failingPassages || []),
-          ...(writerVoiceData.detectedDeviations || [])
+          ...(writerVoiceData.detectedDeviations || []),
+          ...(finalClaimValidation.unsupportedPassages || [])
         ];
         
         if (originalityData.overallOriginalityScore < 75) repairNotes.push(`Originality is only ${originalityData.overallOriginalityScore}%, target is at least 75%.`);
@@ -9370,7 +9480,8 @@ appRouter.post("/api/articles/create", async (req, res) => {
                     repairNotes, // instructions
                     claimsUsed, // protected claim IDs
                     "Lead Quality & Safety Compliance Inspector",
-                    repairAttempts
+                    repairAttempts,
+                    evidenceLedger,
                 );
                 repairRecords.push(repairResult.repairRecord);
                 void persistWorkflowArtifact("editorial_repair_records", repairResult.repairRecord.repairId, {
@@ -9708,6 +9819,17 @@ appRouter.post("/api/articles/create", async (req, res) => {
       addLog("validation", "Image Safety Gate", "warn", "Media review is required before publishing because an approved original visual was not available.");
     }
 
+    if (finalArticleStatus === "manual_review") {
+      const reason = !passedCompliance
+        ? "Quality validation did not reach an approved state after bounded repair attempts."
+        : independentSourceReviewRequired
+          ? "Independent source review is required before publication."
+          : "Media review is required before publication.";
+      try { pipelineStates = recordStateTransition(pipelineStates, articleTraceId, "NEEDS_MANUAL_REVIEW", "Editorial Orchestrator", "logic", reason); } catch(e){}
+    } else {
+      try { pipelineStates = recordStateTransition(pipelineStates, articleTraceId, "APPROVED_FOR_PUBLISHING", "Editorial Orchestrator", "logic", "All editorial, evidence, and readiness gates passed."); } catch(e){}
+    }
+
     if (finalImageUrl && !finalImageUrl.startsWith("#prompt-only:")) {
       const mediaAssetId = `${taskId}-header-image`;
       void persistWorkflowArtifact("media_assets", mediaAssetId, {
@@ -9757,6 +9879,7 @@ appRouter.post("/api/articles/create", async (req, res) => {
     const newArticle: any = {
       id: `art-${Date.now()}`,
       articleTraceId,
+      workflowRunId: taskId,
       niche,
       sourceTitle,
       sourceLink: sourceUrl || "",
@@ -9810,10 +9933,19 @@ appRouter.post("/api/articles/create", async (req, res) => {
           fabricatedCheck: finalFabricatedCheck,
           timeSensitiveCheck: finalFreshnessCheck,
           editorialReadiness: finalReadiness,
+          editorialQuality: finalQuality,
+          originality: originalityData,
+          naturalness: naturalnessData,
+          writerVoice: writerVoiceData,
         },
         repairRecords,
         pipelineStates: pipelineStates[pipelineStates.length - 1]?.newState || "NONE",
         pipelineStateTransitions: pipelineStates
+      },
+      approvedRevision: finalArticleStatus === "manual_review" ? undefined : {
+        versionId: `approved_${crypto.createHash("sha256").update(editedDraft).digest("hex").slice(0, 24)}`,
+        contentHash: crypto.createHash("sha256").update(editedDraft).digest("hex"),
+        approvedAt: new Date().toISOString(),
       }
     };
 

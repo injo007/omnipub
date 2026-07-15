@@ -163,6 +163,21 @@ describe('Phase C - Editorial Quality & Repair', () => {
      expect(res.resolved).toBe(false);
      expect(res.repairedHtml).toBe('');
      expect(res.repairRecord.resolved).toBe(false);
+    expect(res.repairRecord.protectedClaimIds).toEqual(['claim_1']);
+  });
+
+  it('accepts relevant evidence context without changing the protected claim record', async () => {
+     const res = await attemptRepair(
+       'trace1',
+       '<p>This draft needs a source-specific repair.</p>',
+       'GROUNDING',
+       [],
+       ['Use the supplied evidence only.'],
+       ['claim_1'],
+       'Lead Quality & Safety Compliance Inspector',
+       1,
+       [{ claimId: 'claim_1', claimText: 'The verified detail.', sourceUrl: 'https://news.example.org/report' }],
+     );
      expect(res.repairRecord.protectedClaimIds).toEqual(['claim_1']);
   });
 
