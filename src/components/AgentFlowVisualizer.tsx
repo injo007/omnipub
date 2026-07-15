@@ -275,13 +275,20 @@ export default function AgentFlowVisualizer({ logs, currentStep, isGenerating }:
                   {(() => {
                     const foundLog = logs.find(l => l.step === selectedStep);
                     if (foundLog) return foundLog.output;
+
+                    const workflowFailure = logs.find((log) =>
+                      log.status === "failed" && (String(log.step) === "terminal" || log.step === currentStep || log.step === "research"),
+                    );
+                    if (workflowFailure) {
+                      return `[FAILED] ${workflowFailure.output || "The workflow stopped before this stage could produce output."}`;
+                    }
                     
                     const isStepRunning = selectedStep === currentStep && isGenerating;
                     if (isStepRunning) {
                       const stepConfig = stepsConfig.find(s => s.id === selectedStep);
                       return `[INFO] Initializing ${stepConfig?.name || selectedStep} thread...\n[INFO] Gathering contextual facts and verifying local deduplication fingerprints...\n[RUNNING] Calling model gateway with custom writer parameters...\n[PENDING] Stream receiving chunks...`;
                     }
-                    return "No output logged yet. This agent step will populate once reached by the workspace orchestrator council.";
+                    return "This stage was not reached before the workflow stopped.";
                   })()}
                 </div>
 

@@ -1,9 +1,17 @@
 import { ResearchOutputSchema } from "./schemas";
 import { ResearchOutput } from "./types";
 
-export function parseAndValidateResearchOutput(jsonString: string): { success: boolean; data?: ResearchOutput; error?: any } {
+export function parseAndValidateResearchOutput(rawOutput: unknown): { success: boolean; data?: ResearchOutput; error?: any } {
   try {
-    let cleanString = jsonString;
+    let cleanString: string;
+    if (typeof rawOutput === "string") {
+      cleanString = rawOutput;
+    } else if (rawOutput && typeof rawOutput === "object") {
+      cleanString = JSON.stringify(rawOutput);
+    } else {
+      return { success: false, error: "Research provider returned empty output." };
+    }
+
     if (typeof cleanString === "string") {
       cleanString = cleanString.replace(/<think>[\s\S]*?<\/think>/gi, "");
       if (cleanString.includes("<think>")) {
@@ -16,6 +24,10 @@ export function parseAndValidateResearchOutput(jsonString: string): { success: b
         }
       }
       cleanString = cleanString.trim();
+
+      if (!cleanString) {
+        return { success: false, error: "Research provider returned empty output." };
+      }
       if (cleanString.startsWith("```")) {
         cleanString = cleanString.replace(/^```[a-zA-Z]*\n?([\s\S]*?)\n?```$/g, "$1");
       }

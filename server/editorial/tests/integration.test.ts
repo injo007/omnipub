@@ -228,6 +228,32 @@ describe("POST /api/articles/create - Integration Flow", () => {
     expect(callCount).toBe(2);
   });
 
+  it("3b. malformed research output can recover through the single full-context retry", async () => {
+    let callCount = 0;
+    setTestAdapterMock(async (params) => {
+      const successAdapter = getSuccessMock();
+      if (params.agentName === "Research Verification Agent") {
+        callCount++;
+        return { text: "not valid JSON" };
+      }
+      if (params.agentName === "Research Repair") {
+        callCount++;
+        return await successAdapter({ ...params, agentName: "Research Verification Agent" });
+      }
+      return await successAdapter(params);
+    });
+
+    const res = await request(app).post("/api/articles/create").send({
+      niche: "Travel",
+      sourceTitle: "Test",
+      sourceUrl: "https://example.com",
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.text).toContain('"step":"completed"');
+    expect(callCount).toBe(2);
+  });
+
   it("4. unknown claim ID blocks flow", async () => {
     setTestAdapterMock(async (params) => {
       const successAdapter = getSuccessMock();

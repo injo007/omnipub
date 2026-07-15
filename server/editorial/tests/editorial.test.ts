@@ -158,6 +158,13 @@ describe("Editorial Types and Schemas", () => {
     expect(p1.success).toBe(false);
   });
 
+  it("12a. Empty research output has a provider-specific diagnostic", () => {
+    expect(parseAndValidateResearchOutput("")).toMatchObject({
+      success: false,
+      error: "Research provider returned empty output.",
+    });
+  });
+
   it("12b. Incomplete research output is rejected instead of receiving invented evidence", () => {
     const result = parseAndValidateResearchOutput(JSON.stringify({
       articleTraceId: "trace-1",

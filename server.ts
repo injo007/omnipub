@@ -8774,10 +8774,32 @@ appRouter.post("/api/articles/create", async (req, res) => {
     if (!researchParseRes.success) {
        addLog("research_repair", "Research Verification Agent", "warn", "Invalid JSON from Research, attempting 1 repair...", researchParseRes.error.toString());
        try {
-         const repairVal = await runLLMCompletion({ model: rsModel, contents: "Fix this JSON to match the schema:\n" + researchResults, systemInstruction: "Output valid JSON only.", jsonMode: true, agentName: "Research Repair" });
+         const repairVal = await runLLMCompletion({
+           model: rsModel,
+           contents: researchPromptObj.userPrompt,
+           systemInstruction: `${researchPromptObj.systemPrompt}\n\nThe previous response was invalid (${researchParseRes.error}). Recreate the complete research output from the supplied source context and return JSON only. Do not invent sources or evidence.`,
+           jsonMode: true,
+           agentName: "Research Repair",
+           returnFullMetadata: true,
+           sourceArticleLength: editorialContext.cleanSourceContent.length,
+           responseSchema: {
+             type: Type.OBJECT,
+             properties: {
+               articleTraceId: { type: Type.STRING },
+               researchBrief: { type: Type.OBJECT },
+               sources: { type: Type.ARRAY, items: { type: Type.OBJECT } },
+               evidenceLedger: { type: Type.ARRAY, items: { type: Type.OBJECT } },
+             },
+             required: ["articleTraceId", "researchBrief", "sources", "evidenceLedger"],
+           },
+           variables: researchPromptObj.variables,
+         });
          researchResults = repairVal.text;
+         researchMeta = repairVal.metadata || researchMeta;
          researchParseRes = parseAndValidateResearchOutput(researchResults);
-       } catch(e) {}
+       } catch (repairError: any) {
+         researchParseRes = { success: false, error: `Research repair failed: ${repairError?.message || "Unknown provider error"}` };
+       }
     }
 
     if (!researchParseRes.success) {
@@ -9338,7 +9360,7 @@ appRouter.post("/api/articles/create", async (req, res) => {
         runVal.text,
         evidenceLedger.map((claim) => claim.claimId),
       );
-      if (!parsedGrounding.success) {
+      if (parsedGrounding.success === false) {
         throw new Error(parsedGrounding.error);
       }
       const candidate = sanitizeArticleContent(parsedGrounding.data.groundedArticleMarkdown);
