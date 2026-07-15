@@ -37,6 +37,11 @@ describe("POST /api/articles/create - Integration Flow", () => {
     return async (params: any) => {
       const { agentName } = params;
       if (agentName === "Research Verification Agent") {
+        expect(params.responseSchema.properties.researchBrief.required).toEqual([
+          "topic", "readerIntent", "whyItMattersNow", "verifiedFacts", "unverifiedClaims", "conflictingClaims", "freshnessWarnings", "recommendedAngles", "readerQuestions", "riskFlags",
+        ]);
+        expect(params.responseSchema.properties.sources.items.required).toEqual(["url", "title", "publisher"]);
+        expect(params.responseSchema.properties.evidenceLedger.items.required).toContain("verificationStatus");
         return {
           text: JSON.stringify({
             articleTraceId: "trace-abc",

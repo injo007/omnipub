@@ -7913,6 +7913,7 @@ Story Category: "${editorialContext.storyType || "breaking news"}"
 4. The seed URL above is mandatory: include it as a declared source and attach every evidence-ledger claim to a declared source URL. Never invent a second publisher, URL, quote, or source record.
 5. Identify facts that remain unverified or cannot be supported by the supplied material.
 6. Provide structured evidence entries for the Evidence Ledger. Every important claim needs a unique "claimId" string. Do not replace source-specific details with general labels such as "personalised service", "sustainability", "authenticity", or "exclusive access" when the source gives a concrete example. "articleTraceId" must perfectly equal: "${articleTraceId}".
+7. Return every field in the ResearchOutput contract. The researchBrief object must include topic, readerIntent, whyItMattersNow, verifiedFacts, unverifiedClaims, conflictingClaims, freshnessWarnings, recommendedAngles, readerQuestions, and riskFlags. Use empty arrays when a category has no entries; never omit the field. Every declared source must include url, title, and publisher. Every evidence-ledger entry must include every requested provenance, confidence, verification, and risk field.
 
 Return your analytical brief as a strict JSON object structure matching the provided ResearchOutput JSON schema.
 Do not wrap in any formatting other than clean JSON.`;
@@ -8703,6 +8704,47 @@ appRouter.post("/api/articles/create", async (req, res) => {
     
     const researchPromptObj = buildResearchPrompt(editorialContext, articleTraceId);
     checkPromptSafety("Research Verification Agent", researchPromptObj);
+    const researchOutputResponseSchema = {
+      type: Type.OBJECT,
+      properties: {
+        articleTraceId: { type: Type.STRING },
+        researchBrief: {
+          type: Type.OBJECT,
+          properties: {
+            topic: { type: Type.STRING }, readerIntent: { type: Type.STRING }, whyItMattersNow: { type: Type.STRING },
+            verifiedFacts: { type: Type.ARRAY, items: { type: Type.STRING } }, unverifiedClaims: { type: Type.ARRAY, items: { type: Type.STRING } },
+            conflictingClaims: { type: Type.ARRAY, items: { type: Type.STRING } }, freshnessWarnings: { type: Type.ARRAY, items: { type: Type.STRING } },
+            recommendedAngles: { type: Type.ARRAY, items: { type: Type.STRING } }, readerQuestions: { type: Type.ARRAY, items: { type: Type.STRING } },
+            riskFlags: { type: Type.ARRAY, items: { type: Type.STRING } },
+          },
+          required: ["topic", "readerIntent", "whyItMattersNow", "verifiedFacts", "unverifiedClaims", "conflictingClaims", "freshnessWarnings", "recommendedAngles", "readerQuestions", "riskFlags"],
+        },
+        sources: {
+          type: Type.ARRAY,
+          items: {
+            type: Type.OBJECT,
+            properties: { url: { type: Type.STRING }, title: { type: Type.STRING }, publisher: { type: Type.STRING } },
+            required: ["url", "title", "publisher"],
+          },
+        },
+        evidenceLedger: {
+          type: Type.ARRAY,
+          items: {
+            type: Type.OBJECT,
+            properties: {
+              claimId: { type: Type.STRING }, articleId: { type: Type.STRING }, articleTraceId: { type: Type.STRING },
+              claimText: { type: Type.STRING }, sourceUrl: { type: Type.STRING }, sourceTitle: { type: Type.STRING },
+              publisher: { type: Type.STRING }, sourceDate: { type: Type.STRING }, accessedAt: { type: Type.STRING },
+              sourceType: { type: Type.STRING }, isPrimarySource: { type: Type.BOOLEAN }, confidence: { type: Type.NUMBER },
+              freshnessStatus: { type: Type.STRING }, verificationStatus: { type: Type.STRING }, supportsClaim: { type: Type.BOOLEAN },
+              contradictsClaim: { type: Type.BOOLEAN }, riskLevel: { type: Type.STRING }, addedByAgent: { type: Type.STRING }, notes: { type: Type.STRING },
+            },
+            required: ["claimId", "articleId", "articleTraceId", "claimText", "sourceUrl", "sourceTitle", "publisher", "sourceDate", "accessedAt", "sourceType", "isPrimarySource", "confidence", "freshnessStatus", "verificationStatus", "supportsClaim", "contradictsClaim", "riskLevel", "addedByAgent", "notes"],
+          },
+        },
+      },
+      required: ["articleTraceId", "researchBrief", "sources", "evidenceLedger"],
+    };
     
     try {
       const runVal = await runLLMCompletion({
@@ -8713,39 +8755,7 @@ appRouter.post("/api/articles/create", async (req, res) => {
         agentName: "Research Verification Agent",
         returnFullMetadata: true,
         sourceArticleLength: editorialContext.cleanSourceContent.length,
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            articleTraceId: { type: Type.STRING },
-            researchBrief: {
-              type: Type.OBJECT,
-              properties: {
-                topic: { type: Type.STRING }, readerIntent: { type: Type.STRING }, whyItMattersNow: { type: Type.STRING },
-                verifiedFacts: { type: Type.ARRAY, items: { type: Type.STRING } }, unverifiedClaims: { type: Type.ARRAY, items: { type: Type.STRING } },
-                conflictingClaims: { type: Type.ARRAY, items: { type: Type.STRING } }, freshnessWarnings: { type: Type.ARRAY, items: { type: Type.STRING } },
-                recommendedAngles: { type: Type.ARRAY, items: { type: Type.STRING } }, readerQuestions: { type: Type.ARRAY, items: { type: Type.STRING } },
-                riskFlags: { type: Type.ARRAY, items: { type: Type.STRING } }
-              },
-              required: ["topic", "verifiedFacts"]
-            },
-            sources: {
-              type: Type.ARRAY, items: { type: Type.OBJECT, properties: { url: { type: Type.STRING }, title: { type: Type.STRING }, publisher: { type: Type.STRING } } }
-            },
-            evidenceLedger: {
-              type: Type.ARRAY, items: {
-                type: Type.OBJECT, properties: {
-                  claimId: { type: Type.STRING }, articleId: { type: Type.STRING }, articleTraceId: { type: Type.STRING },
-                  claimText: { type: Type.STRING }, sourceUrl: { type: Type.STRING }, sourceTitle: { type: Type.STRING },
-                  publisher: { type: Type.STRING }, sourceDate: { type: Type.STRING }, accessedAt: { type: Type.STRING },
-                  sourceType: { type: Type.STRING }, isPrimarySource: { type: Type.BOOLEAN }, confidence: { type: Type.NUMBER },
-                  freshnessStatus: { type: Type.STRING }, verificationStatus: { type: Type.STRING }, supportsClaim: { type: Type.BOOLEAN },
-                  contradictsClaim: { type: Type.BOOLEAN }, riskLevel: { type: Type.STRING }, addedByAgent: { type: Type.STRING }, notes: { type: Type.STRING }
-                }, required: ["claimId", "claimText"]
-              }
-            }
-          },
-          required: ["articleTraceId", "researchBrief", "sources", "evidenceLedger"]
-        },
+        responseSchema: researchOutputResponseSchema,
         variables: researchPromptObj.variables
       });
       researchResults = runVal.text;
@@ -8782,16 +8792,7 @@ appRouter.post("/api/articles/create", async (req, res) => {
            agentName: "Research Repair",
            returnFullMetadata: true,
            sourceArticleLength: editorialContext.cleanSourceContent.length,
-           responseSchema: {
-             type: Type.OBJECT,
-             properties: {
-               articleTraceId: { type: Type.STRING },
-               researchBrief: { type: Type.OBJECT },
-               sources: { type: Type.ARRAY, items: { type: Type.OBJECT } },
-               evidenceLedger: { type: Type.ARRAY, items: { type: Type.OBJECT } },
-             },
-             required: ["articleTraceId", "researchBrief", "sources", "evidenceLedger"],
-           },
+           responseSchema: researchOutputResponseSchema,
            variables: researchPromptObj.variables,
          });
          researchResults = repairVal.text;
