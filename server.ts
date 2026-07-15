@@ -9396,10 +9396,27 @@ appRouter.post("/api/articles/create", async (req, res) => {
     if (firstDraft && !firstDraft.startsWith("Failed")) {
       const claimValidation = validateDraftClaimsAgainstLedger(firstDraft, claimsUsed, evidenceLedger);
       if (!claimValidation.passed) {
-        try { pipelineStates = recordStateTransition(pipelineStates, articleTraceId, "NEEDS_RESEARCH", "System", "logic", "Draft relies on claims NOT in the Evidence Ledger"); } catch(e){}
-        addLog("drafting", `Factual Safety Gate`, "failed", `Drafting failed strict claims validation. Attempted to use unknown claims: ${claimValidation.unknownClaimIds.join(", ")}`);
-        abortAndPersist("DRAFT_FAILED_LEDGER_VIOLATION. Draft uses unverified claims.", "NEEDS_RESEARCH", "DRAFT_FAILED_LEDGER_VIOLATION. Draft uses unverified claims.", evidenceLedger);
-        return;
+        if (researchTier === "minimal" || researchTier === "partial") {
+          // Thin/synthesized ledger: the writer will reference facts from the
+          // source article that weren't captured in the minimal evidence set.
+          // Source Grounding Editor will handle these passages downstream.
+          addLog(
+            "drafting",
+            "Factual Safety Gate",
+            "warn",
+            `${researchTier.toUpperCase()}-tier research: draft references ${claimValidation.unknownClaimIds?.length ?? 0} claim(s) outside the thin ledger. ` +
+            `Source Grounding Editor will remove or replace unsupported passages.`,
+            JSON.stringify(claimValidation.unknownClaimIds ?? []).slice(0, 300)
+          );
+          // Continue to natural editing + source grounding
+        } else {
+          // High-confidence tier: full ledger was present, so the writer
+          // genuinely introduced unsupported claims. Hard abort.
+          try { pipelineStates = recordStateTransition(pipelineStates, articleTraceId, "DRAFT_FAILED", "System", "logic", "Draft relies on claims NOT in the Evidence Ledger"); } catch(e){}
+          addLog("drafting", "Factual Safety Gate", "failed", `Drafting failed strict claims validation. Unknown claims: ${claimValidation.unknownClaimIds?.join(", ")}`);
+          abortAndPersist("DRAFT_FAILED_LEDGER_VIOLATION. Draft uses unverified claims.", "DRAFT_FAILED", "DRAFT_FAILED_LEDGER_VIOLATION. Draft uses unverified claims.", evidenceLedger);
+          return;
+        }
       }
     }
 
@@ -9472,11 +9489,51 @@ appRouter.post("/api/articles/create", async (req, res) => {
         ? parsedEdit.preservedClaimIds
         : evidenceLedger.map((c: any) => c.claimId);
       const editorClaimValidation = validateDraftClaimsAgainstLedger(editedDraft, pClaims, evidenceLedger);
+
       if (!editorClaimValidation.passed) {
-        try { pipelineStates = recordStateTransition(pipelineStates, articleTraceId, "NEEDS_RESEARCH", "System", "logic", "Editor introduced undocumented claims or marked unknown claims as preserved"); } catch(e){}
-        addLog("editing", `Factual Safety Gate`, "failed", "Editor introduced unsupported claims. Pipeline aborted to maintain safety.");
-        abortAndPersist("NATURAL_EDIT_FAILED_LEDGER_VIOLATION. Editor introduced fabrications.", "NEEDS_RESEARCH", "NATURAL_EDIT_FAILED_LEDGER_VIOLATION. Editor introduced fabrications.", evidenceLedger);
-        return;
+        // ---------------------------------------------------------------
+        // Tier-aware ledger violation handling
+        // ---------------------------------------------------------------
+        // On 'minimal' tier the evidence ledger was synthesized from raw
+        // source sentences (2–4 entries). The natural editor will almost
+        // certainly reference hotel names, prices, and facts that exist in
+        // the source article but were not captured in the thin ledger.
+        // Hard-aborting here would negate the synthesis fallback entirely.
+        //
+        // Resolution by tier:
+        //  minimal  → warn, continue to SOURCE_GROUNDING (which will
+        //              ground or strip the unsupported passages).
+        //  partial  → warn, continue to SOURCE_GROUNDING with a note.
+        //  high     → hard abort (full ledger, editor should not add claims).
+        // ---------------------------------------------------------------
+        if (researchTier === "minimal") {
+          addLog(
+            "editing",
+            "Factual Safety Gate",
+            "warn",
+            `Minimal-tier research: editor introduced ${editorClaimValidation.unsupportedPassages?.length ?? 0} passage(s) outside the thin synthesized ledger. ` +
+            `Passing to Source Grounding Editor to resolve unsupported content rather than aborting.`,
+            JSON.stringify(editorClaimValidation.unsupportedPassages ?? []).slice(0, 400)
+          );
+          // Continue — source grounding will handle these passages
+        } else if (researchTier === "partial") {
+          addLog(
+            "editing",
+            "Factual Safety Gate",
+            "warn",
+            `Partial-tier research: ${editorClaimValidation.unsupportedPassages?.length ?? 0} unsupported passage(s) detected. ` +
+            `Source Grounding Editor will remove or replace them.`,
+            JSON.stringify(editorClaimValidation.unsupportedPassages ?? []).slice(0, 400)
+          );
+          // Continue — source grounding handles unsupported passages
+        } else {
+          // High-confidence tier: the full ledger was present, so the editor
+          // genuinely introduced unsupported claims. Hard abort.
+          try { pipelineStates = recordStateTransition(pipelineStates, articleTraceId, "NATURAL_EDIT_FAILED", "System", "logic", "Editor introduced undocumented claims or marked unknown claims as preserved"); } catch(e){}
+          addLog("editing", "Factual Safety Gate", "failed", `Editor introduced unsupported claims (${editorClaimValidation.unsupportedPassages?.length ?? 0} passages). Pipeline aborting to maintain safety.`);
+          abortAndPersist("NATURAL_EDIT_FAILED_LEDGER_VIOLATION. Editor introduced fabrications.", "NATURAL_EDIT_FAILED", "NATURAL_EDIT_FAILED_LEDGER_VIOLATION. Editor introduced fabrications.", evidenceLedger);
+          return;
+        }
       }
       
     } catch (err: any) {
