@@ -13,6 +13,15 @@ describe("media asset technical and provenance gate", () => {
     })).toMatchObject({ approved: true, requiresManualReview: false, score: 100, assetKind: "generated" });
   });
 
+  it("approves a first-party SVG renderer asset", () => {
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="675">${"<circle cx=\"20\" cy=\"20\" r=\"10\"/>".repeat(80)}</svg>`;
+    expect(assessMediaAsset({
+      imageUrl: `data:image/svg+xml;base64,${Buffer.from(svg).toString("base64")}`,
+      source: "Original SVG Renderer",
+      prompt: publicationPrompt,
+    })).toMatchObject({ approved: true, requiresManualReview: false, assetKind: "generated" });
+  });
+
   it("holds fallback assets for manual review", () => {
     const result = assessMediaAsset({
       imageUrl: imagePayload,

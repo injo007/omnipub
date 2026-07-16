@@ -56,7 +56,7 @@ export function assessMediaAsset(input: MediaAssetAssessmentInput): MediaAssetAs
     };
   }
 
-  const isImageDataUrl = /^data:image\/(png|jpe?g|webp);base64,/i.test(imageUrl);
+  const isImageDataUrl = /^data:image\/(png|jpe?g|webp|svg\+xml);base64,/i.test(imageUrl);
   const isHttpsUrl = /^https:\/\//i.test(imageUrl);
   if (!isImageDataUrl && !isHttpsUrl) {
     reasons.push("The media reference is neither an image data URL nor an HTTPS URL.");

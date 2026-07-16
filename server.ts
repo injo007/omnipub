@@ -151,6 +151,55 @@ function getDeterministicBackupImage(prompt: string, niche: string): string {
   return list[index];
 }
 
+function createOriginalEditorialSvgDataUrl(prompt: string, niche: string): string {
+  const palettes: Record<string, string[]> = {
+    sports: ["#0f3d2e", "#2dd4bf", "#facc15", "#f8fafc"],
+    technology: ["#0f172a", "#2563eb", "#38bdf8", "#f8fafc"],
+    tech: ["#0f172a", "#2563eb", "#38bdf8", "#f8fafc"],
+    entertainment: ["#2e1065", "#db2777", "#f59e0b", "#fff7ed"],
+    hollywood: ["#2e1065", "#db2777", "#f59e0b", "#fff7ed"],
+    travel: ["#164e63", "#14b8a6", "#f97316", "#ecfeff"],
+    traveling: ["#164e63", "#14b8a6", "#f97316", "#ecfeff"],
+    business_finance: ["#111827", "#16a34a", "#a3e635", "#f8fafc"],
+    wellness: ["#064e3b", "#22c55e", "#bae6fd", "#f0fdf4"],
+    general: ["#111827", "#6366f1", "#f97316", "#f8fafc"],
+  };
+  const normNiche = (niche || "general").toLowerCase().replace(/[^a-z0-9_]+/g, "_");
+  const palette = palettes[normNiche] || palettes.general;
+  const digest = crypto.createHash("sha256").update(`${normNiche}:${prompt}`).digest();
+  const circles = Array.from({ length: 11 }, (_, index) => {
+    const x = 90 + (digest[index] % 850);
+    const y = 70 + (digest[index + 7] % 430);
+    const radius = 36 + (digest[index + 13] % 95);
+    const opacity = (0.10 + (digest[index + 19] % 24) / 100).toFixed(2);
+    const color = palette[index % palette.length];
+    return `<circle cx="${x}" cy="${y}" r="${radius}" fill="${color}" opacity="${opacity}"/>`;
+  }).join("");
+  const lines = Array.from({ length: 8 }, (_, index) => {
+    const y = 85 + index * 62 + (digest[index + 3] % 18);
+    const width = 240 + (digest[index + 11] % 360);
+    const x = 70 + (digest[index + 17] % 260);
+    return `<rect x="${x}" y="${y}" width="${width}" height="3" rx="1.5" fill="${palette[(index + 1) % palette.length]}" opacity="0.16"/>`;
+  }).join("");
+  const accentX = 640 + (digest[5] % 180);
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="675" viewBox="0 0 1200 675" role="img" aria-label="Original editorial abstract header">
+<defs>
+<linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="${palette[0]}"/><stop offset="0.58" stop-color="#111827"/><stop offset="1" stop-color="${palette[1]}"/></linearGradient>
+<radialGradient id="glow" cx="68%" cy="34%" r="52%"><stop offset="0" stop-color="${palette[2]}" stop-opacity="0.45"/><stop offset="1" stop-color="${palette[2]}" stop-opacity="0"/></radialGradient>
+<filter id="soft"><feGaussianBlur stdDeviation="18"/></filter>
+</defs>
+<rect width="1200" height="675" fill="url(#bg)"/>
+<rect width="1200" height="675" fill="url(#glow)"/>
+${circles}
+<path d="M${accentX} 110 C 760 190, 990 176, 1090 298 S 965 546, 760 514 527 424, 470 330 516 157, ${accentX} 110Z" fill="${palette[3]}" opacity="0.09"/>
+<path d="M95 536 C 235 451, 322 455, 470 512 S 783 590, 1046 484" fill="none" stroke="${palette[2]}" stroke-width="5" opacity="0.28"/>
+${lines}
+<rect x="64" y="64" width="1072" height="547" rx="38" fill="none" stroke="${palette[3]}" stroke-width="2" opacity="0.16"/>
+<g filter="url(#soft)"><ellipse cx="900" cy="245" rx="190" ry="80" fill="${palette[2]}" opacity="0.18"/></g>
+</svg>`;
+  return `data:image/svg+xml;base64,${Buffer.from(svg).toString("base64")}`;
+}
+
 async function fetchImageAsBase64(url: string, fallbackUrl: string): Promise<string> {
   if (!url) return fallbackUrl;
   if (url.startsWith("data:") && url.includes(";base64,")) {
@@ -1168,8 +1217,23 @@ async function generateUnifiedImage(prompt: string, niche: string, overrideModel
   result = await performGeneration(fallbackModel, fallbackCustomModel);
   if (result) return { ...result, isFallback: true, errorLogs: errorLogs.length > 0 ? errorLogs : undefined };
 
-  // Absolute fallback
-  return { imageUrl: fallbackPlaceholder, source: "Backup Asset", isFallback: true, errorLogs };
+  // Absolute fallback: produce a first-party abstract SVG instead of inserting
+  // a reused stock/photo backup. This keeps articles visually complete while
+  // preserving clear provenance when external image providers fail.
+  try {
+    return {
+      imageUrl: createOriginalEditorialSvgDataUrl(prompt, niche),
+      source: "Original SVG Renderer",
+      errorLogs: [...errorLogs, "External image providers failed; rendered a first-party abstract SVG header."],
+    };
+  } catch (err: any) {
+    return {
+      imageUrl: fallbackPlaceholder,
+      source: "Backup Asset",
+      isFallback: true,
+      errorLogs: [...errorLogs, `Local SVG renderer failed: ${err?.message || err}`],
+    };
+  }
 }
 
 
@@ -7895,7 +7959,7 @@ function checkWriterRiskForStory(writerProfile: WriterProfile, storyTitle: strin
 
 function buildResearchPrompt(editorialContext: EditorialContext, articleTraceId: string) {
   const systemPrompt = `You are an elite Fact-Checker & Research Agent in our enterprise newsroom. 
-Your sole objective is to dissect breaking story feeds, extract undisputed factual anchors, cross-reference seed claims, and identify unverified gossip or speculative risk.
+Your sole objective is to dissect curated feed/source material, extract undisputed factual anchors, and identify unsupported or speculative risk.
 You operate with complete mathematical precision and absolute brand-safety compliance.`;
 
   const userPrompt = `Conduct rigorous background research on this incoming news item:
@@ -7909,11 +7973,12 @@ Story Category: "${editorialContext.storyType || "breaking news"}"
 === UNIVERSAL FACT PRESERVATION MANDATES: ===
 1. Extract only the undisputed facts present in the supplied source context (dates, specifications, verified events, direct participants).
 2. Build a useful, granular fact ledger rather than a short abstract. Capture concrete names, locations, quantities, product/service details, policies, examples, qualifications, and disclosures when they appear in the supplied text. Each claimText must be an atomic, publishable fact that a writer can use without re-reading the source.
-3. Separate supported reporting from speculation, rumor, or opinion. Do not claim that you opened, browsed, or independently verified the source URL unless that material was supplied to you.
-4. The seed URL above is mandatory: include it as a declared source and attach every evidence-ledger claim to a declared source URL. Never invent a second publisher, URL, quote, or source record.
-5. Identify facts that remain unverified or cannot be supported by the supplied material.
-6. Provide structured evidence entries for the Evidence Ledger. Every important claim needs a unique "claimId" string. Do not replace source-specific details with general labels such as "personalised service", "sustainability", "authenticity", or "exclusive access" when the source gives a concrete example. "articleTraceId" must perfectly equal: "${articleTraceId}".
-7. Return every field in the ResearchOutput contract. The researchBrief object must include topic, readerIntent, whyItMattersNow, verifiedFacts, unverifiedClaims, conflictingClaims, freshnessWarnings, recommendedAngles, readerQuestions, and riskFlags. Use empty arrays when a category has no entries; never omit the field. Every declared source must include url, title, and publisher. Every evidence-ledger entry must include every requested provenance, confidence, verification, and risk field.
+3. Do not oversearch or broaden the assignment beyond the selected feed/source context. If the supplied material is thin, say what is missing instead of filling gaps from general knowledge.
+4. Separate supported reporting from speculation, rumor, or opinion. Do not claim that you opened, browsed, cross-referenced, or independently verified the source URL unless that material was supplied to you.
+5. The seed URL above is mandatory: include it as a declared source and attach every evidence-ledger claim to a declared source URL. Never invent a second publisher, URL, quote, or source record.
+6. Identify facts that remain unverified or cannot be supported by the supplied material.
+7. Provide structured evidence entries for the Evidence Ledger. Every important claim needs a unique "claimId" string. Do not replace source-specific details with general labels such as "personalised service", "sustainability", "authenticity", or "exclusive access" when the source gives a concrete example. "articleTraceId" must perfectly equal: "${articleTraceId}".
+8. Return every field in the ResearchOutput contract. The researchBrief object must include topic, readerIntent, whyItMattersNow, verifiedFacts, unverifiedClaims, conflictingClaims, freshnessWarnings, recommendedAngles, readerQuestions, and riskFlags. Use empty arrays when a category has no entries; never omit the field. Every declared source must include url, title, and publisher. Every evidence-ledger entry must include every requested provenance, confidence, verification, and risk field.
 
 Return your analytical brief as a strict JSON object structure matching the provided ResearchOutput JSON schema.
 Do not wrap in any formatting other than clean JSON.`;
@@ -7981,6 +8046,29 @@ Maintain absolute fidelity to this voice while respecting Niche rules.`;
   return { systemPrompt, userPrompt, variables, compiledPrompt };
 }
 
+function buildNicheEditorialDirectives(niche: string): string {
+  const normalized = (niche || "general").toLowerCase();
+  if (/(sport|football|soccer|basketball|match|league)/.test(normalized)) {
+    return "Sports: lead with the verified result or development, explain tactical/performance consequence, avoid injury or transfer speculation, and give fans one concrete reason the next match or table position matters.";
+  }
+  if (/(tech|technology|software|ai|device|gadget|security)/.test(normalized)) {
+    return "Technology: explain what changed, who is affected, compatibility or availability limits, and practical user impact. Avoid hype words, unsupported benchmarks, and future capabilities stated as current.";
+  }
+  if (/(travel|hotel|tourism|flight|destination|lifestyle)/.test(normalized)) {
+    return "Travel/lifestyle: prioritize practical details readers can use, date-sensitive boundaries, location/service specifics, and clear separation between verified facts and advice. Avoid invented scenery or local tips.";
+  }
+  if (/(entertainment|hollywood|celebrity|film|music|streaming|tv)/.test(normalized)) {
+    return "Entertainment: keep the voice lively but respectful, distinguish official confirmation from rumor, avoid invented motives or private-life claims, and add context around release, career, or audience relevance.";
+  }
+  if (/(business|finance|market|investment|startup|earnings)/.test(normalized)) {
+    return "Business/finance: put numbers in context, date all figures, describe risk without advice, and never tell readers to buy, sell, or predict a price move.";
+  }
+  if (/(wellness|health|fitness|nutrition|medical)/.test(normalized)) {
+    return "Wellness: state evidence limits, avoid diagnosis or treatment advice, prefer qualified guidance boundaries, and keep practical language careful rather than alarmist.";
+  }
+  return "General: make the article useful by answering what changed, why it matters now, what is confirmed, what remains unresolved, and what a reader can watch next.";
+}
+
 function buildBrandVoiceWriterPrompt(editorialContext: EditorialContext, editorialBriefObj: EditorialBrief, evidenceLedger: EvidenceLedger, seoBrief: any, articleFormat: ArticleFormatProfile) {
   const wp = editorialContext.selectedWriterProfile;
   const focus = seoBrief?.focusKeyword || editorialContext.focusKeyword || "keyword";
@@ -8008,6 +8096,8 @@ function buildBrandVoiceWriterPrompt(editorialContext: EditorialContext, editori
     ? `\n\n=== EXTREMELY CRITICAL COGNITIVE CAPABILITIES & SYSTEM DIRECTIVES (MANDATORY TO EXECUTE) ===\nTo fulfill this objective successfully, you must engage and execute the following specialized expertise clusters concurrently:\n${dynamicSkillDirectives.map((d, idx) => `${idx + 1}. ${d}`).join("\n")}`
     : "";
 
+  const nicheDirectives = buildNicheEditorialDirectives(editorialContext.niche);
+
   const systemPrompt = `You are an elite, world-class Enterprise Editorial Writer Agent. Your core system identity is: [WRITER PROFILE: ${wp.name}].
 Your absolute objective is to produce a masterful, highly original, standalone longform editorial piece that reads with unmatched human elegance, connects instantly with readers, and perfectly executes your active publishing brand-voice specs.
 
@@ -8020,6 +8110,9 @@ This article must follow this format rather than a generic newsroom template.
 - Do not add a pull quote, table, FAQ, timeline, list, or final-summary section merely for decoration. Use a format element only when the selected format calls for it and the evidence supports it.
 
 === SOURCE-LED EDITORIAL ARCHITECTURE ===
+- **Curated Feed Priority**: Treat the selected RSS/source feed as the authoritative editorial seed. Do not turn the assignment into a broad web-search essay. The research stage exists to structure supplied facts; the writing stage must transform those facts into a more useful, better-organized article.
+- **Niche Adaptation**: ${nicheDirectives}
+- **Reader Retention**: Every section must give the reader a reason to continue: a concrete update, a practical implication, a resolved question, or a clearly stated unknown. Do not fill space with generic context.
 - **Reader Value**: Turn the evidence into a clear answer to the reader's question. Lead with the most consequential, specific point—not generic praise, a mood-setting scene, or a claim about what audiences want.
 - **Concrete Detail**: When the ledger contains named places, products, programmes, policies, quantities, operations, or examples, explain those details. Do not compress them into vague labels such as "personalised service", "authenticity", "sustainability", "exclusive access", or "comfort and luxury".
 - **Original Analysis**: Reorganise the evidence around a useful reader question or trade-off. Do not mirror the seed headline's numbered sequence or paragraph order. Do not manufacture a broader trend, market context, or conclusion that is absent from the evidence.
@@ -8079,13 +8172,14 @@ Generate and return ONLY a strict JSON object conforming to the following struct
 Do not wrap in any other object. Return only the JSON block. Ensure all fields are populated and "articleHtml" contains the complete, high-quality longform article formatted strictly in Markdown. The contentFormat must equal "${articleFormat.id}".`;
 
   const compiledPrompt = `[SYSTEM]\n${systemPrompt}\n\n[USER]\n${userPrompt}`;
-  const variables = { sourceTitle: editorialContext.sourceTitle, wp, focus, seoBrief, articleFormat };
+  const variables = { sourceTitle: editorialContext.sourceTitle, wp, focus, seoBrief, articleFormat, nicheDirectives };
 
   return { systemPrompt, userPrompt, variables, compiledPrompt };
 }
 
 function buildNaturalStyleEditorPrompt(editorialContext: EditorialContext, editorialBriefObj: EditorialBrief, evidenceLedger: EvidenceLedger, draft: string, auditNotes: string) {
   const wp = editorialContext.selectedWriterProfile;
+  const nicheDirectives = buildNicheEditorialDirectives(editorialContext.niche);
   const systemPrompt = `You are our Lead Natural Style Editor in the newsroom. 
 Your primary task is to produce clear, reader-friendly journalism with a natural editorial voice. Preserve the meaning and limits of the supplied evidence; do not optimize for formulaic scoring targets.
 
@@ -8095,6 +8189,8 @@ Your primary task is to produce clear, reader-friendly journalism with a natural
 
 === NATURAL STYLE EDITING ===
 - Vary sentence and paragraph length only where it improves clarity. Do not add punchlines, scenes, anecdotes, sarcasm, or rhetorical questions that the evidence does not support.
+- Apply niche fit while editing: ${nicheDirectives}
+- Make each paragraph either useful, vivid through verified detail, or necessary for context. If a paragraph only says the topic is important, replace it with a source-backed consequence or remove it.
 - Eliminate ALL robotic transitions and "AI Tells" (ZERO TOLERANCE): "At its core", "It is important to remember", "In a world where", "Moreover", "Furthermore", "In conclusion", "As we look to the future", "Not merely a X, but a Y", "Additionally", "Consequently", "Specifically", "beacon", "testament to", "delve", "paving the way", "it is worth noting", "tapestry", "vibrant", "rapidly evolving", "crucial", "underscores", "transformative".
 - Prefer precise, direct prose. Remove generic claims that cannot be traced to the Editorial Brief or Evidence Ledger.
 - Remove broad trend language (for example, "many travellers are seeking", "the rise of", "often", or "increasingly") unless the Evidence Ledger explicitly supports it.
@@ -8155,7 +8251,7 @@ Generate and return ONLY a strict JSON object conforming to the following struct
 Do not wrap in any other object. Return only the JSON block. Ensure all fields are populated and "editedArticleHtml" contains the complete, high-quality edited longform article formatted strictly in Markdown.`;
 
   const compiledPrompt = `[SYSTEM]\n${systemPrompt}\n\n[USER]\n${userPrompt}`;
-  const variables = { wp, draftLength: draft.length, auditNotes };
+  const variables = { wp, draftLength: draft.length, auditNotes, nicheDirectives };
 
   return { systemPrompt, userPrompt, variables, compiledPrompt };
 }
@@ -8166,15 +8262,17 @@ function buildEvidenceGroundingEditorPrompt(
   evidenceLedger: EvidenceLedger,
   draft: string,
 ) {
+  const nicheDirectives = buildNicheEditorialDirectives(editorialContext.niche);
   const systemPrompt = `You are the Source-Grounding Editor for a publication-quality editorial workflow.
-Your job is to make the draft genuinely useful, specific, and faithful to the supplied evidence. You are not a copy editor and you are not an AI-detector optimiser.
+Your job is to make the draft genuinely useful, specific, and faithful to the supplied evidence. You are not a copy editor and you are not a scoring-game optimiser.
 
 NON-NEGOTIABLE RULES:
 1. Every factual assertion must be supported by an Evidence Ledger claim. Delete or recast unsupported assertions; never invent a replacement fact.
 2. Preserve and explain concrete source details. A draft that turns named places, services, quantities, policies, programmes, disclosures, or examples into broad claims such as "authenticity", "sustainability", "personalised service", or "exclusive access" fails this task.
 3. Rebuild the article when necessary around a reader question or a clear editorial angle. Do not retain a weak numbered list merely because the seed story used one, and do not copy the source's wording or sequence.
 4. Do not add market trends, motivations, outcomes, comparisons, prices, recommendations, or claims about what travellers/consumers/companies generally do unless an exact ledger claim supports them.
-5. Return semantic Markdown only. No raw HTML, table of contents, decorative tables, external links, CTA, byline, score, or commentary.`;
+5. Adapt the article to its niche without adding facts: ${nicheDirectives}
+6. Return semantic Markdown only. No raw HTML, table of contents, decorative tables, external links, CTA, byline, score, or commentary.`;
 
   const userPrompt = `Revise this article into a source-led, reader-ready piece.
 
@@ -8207,7 +8305,7 @@ Return only this JSON object:
 }`;
 
   const compiledPrompt = `[SYSTEM]\n${systemPrompt}\n\n[USER]\n${userPrompt}`;
-  return { systemPrompt, userPrompt, variables: { draftLength: draft.length, evidenceCount: evidenceLedger.length }, compiledPrompt };
+  return { systemPrompt, userPrompt, variables: { draftLength: draft.length, evidenceCount: evidenceLedger.length, nicheDirectives }, compiledPrompt };
 }
 
 function extractArticleStructureManifest(markdown: string): string[] {
@@ -8309,8 +8407,9 @@ Return a strict JSON result matching the response schema structure.`;
 }
 
 function buildVisualMediaPrompt(editorialContext: EditorialContext, finalDraft: string) {
+  const nicheDirectives = buildNicheEditorialDirectives(editorialContext.niche);
   const systemPrompt = `You are our Visual Media Director. 
-Your job is to read an article draft and formulate a high-quality, professional, non-text, and brand-safe image illustration prompt suitable for the article's header context.`;
+Your job is to read an article draft and formulate a high-quality, professional, non-text, brand-safe image illustration prompt suitable for the article's header context.`;
 
   const userPrompt = `Read this longform article text and formulate an elite, graphic-design-quality visual prompt for high-contrast digital illustration.
 
@@ -8326,12 +8425,13 @@ STRICT BRAND-SAFETY GRAPHICS RULES:
 1. Absolutely NO text, banners, watermarks, names, or captions.
 2. No direct real-person facial likeness or celebrity face depicting (to prevent legally unsafe fake visual reporting). Use symbolic, editorial styling instead.
 3. No direct brand trademarks or logos.
+4. Visual concept must match the niche without generic stock-photo language. Niche editorial direction: ${nicheDirectives}
+5. Use concrete visual metaphors from the draft: objects, abstract data shapes, location-neutral atmosphere, or symbolic composition. Do not request screenshots, logos, paparazzi shots, or identifiable people.
 
-
-Formulate an elite descriptive prompt (30-60 words). State ONLY the prompt.`;
+Formulate one production-ready descriptive prompt (45-80 words) with composition, lighting, palette, subject metaphor, aspect ratio 16:9, and "no text". State ONLY the prompt.`;
 
   const compiledPrompt = `[SYSTEM]\n${systemPrompt}\n\n[USER]\n${userPrompt}`;
-  const variables = { finalDraftLength: finalDraft.length, niche: editorialContext.niche };
+  const variables = { finalDraftLength: finalDraft.length, niche: editorialContext.niche, nicheDirectives };
 
   return { systemPrompt, userPrompt, variables, compiledPrompt };
 }

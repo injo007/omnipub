@@ -122,6 +122,13 @@ describe('Phase C - Naturalness Analysis', () => {
     const res = await analyzeNaturalness('trace1', draft);
     expect(res.detectedPatterns).toContain('Unnatural keyword repetition');
   });
+
+  it('detects polished but generic AI-style filler', async () => {
+    const draft = '<p>At its core, this vibrant ecosystem is a transformative testament to the rapidly evolving landscape of audience engagement and content quality.</p>';
+    const res = await analyzeNaturalness('trace1', draft);
+    expect(res.detectedPatterns).toContain('AI filler phrase');
+    expect(res.passed).toBe(false);
+  });
 });
 
 describe('Phase C - Editorial Quality & Repair', () => {
@@ -205,5 +212,14 @@ describe('Phase C - Editorial Quality & Repair', () => {
      expect(logArg).not.toContain('<p>');
      
      logSpy.mockRestore();
+  });
+
+  it('keeps editorial quality scoring on a 100 point scale', () => {
+     const originalityData = { passed: true, overallOriginalityScore: 96 };
+     const naturalnessData = { passed: true, naturalnessScore: 98, detectedPatterns: [] };
+     const writerVoiceData = { passed: true, voiceConsistencyScore: 94 };
+     const res = evaluateEditorialQuality('trace-scale', { passed: true, mappedClaimIds: ['claim-1'] }, originalityData as any, naturalnessData as any, writerVoiceData as any, true, true, true, true);
+     expect(res.totalScore).toBeLessThanOrEqual(100);
+     expect(res.passed).toBe(true);
   });
 });
