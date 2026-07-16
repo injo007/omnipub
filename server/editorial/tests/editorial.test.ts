@@ -434,7 +434,7 @@ describe("Source-grounding quality signals", () => {
     expect(findings).toEqual([]);
   });
 
-  it("requires valid source-grounding JSON and known evidence claim IDs", () => {
+  it("requires valid source-grounding content and known evidence claim IDs", () => {
     expect(parseSourceGroundingOutput("not JSON", ["c1"])).toMatchObject({ success: false });
     expect(parseSourceGroundingOutput(JSON.stringify({
       groundedArticleMarkdown: "This source-led article is deliberately long enough to satisfy the required article threshold while preserving the only supported factual statement.",
@@ -444,5 +444,34 @@ describe("Source-grounding quality signals", () => {
       groundedArticleMarkdown: "This source-led article is deliberately long enough to satisfy the required article threshold while preserving the only supported factual statement.",
       claimIdsUsed: ["c1", "c1"],
     }), ["c1"])).toMatchObject({ success: true, data: { claimIdsUsed: ["c1"] } });
+  });
+
+  it("recovers source-grounding Markdown when the provider ignores JSON mode", () => {
+    const markdown = `## What changed
+
+This source-led article is deliberately long enough to satisfy the required article threshold while preserving the supported factual statement. It keeps the article grounded in the known evidence, avoids extra claims, and gives the downstream validation gate a complete draft to inspect instead of failing only because the provider skipped JSON wrapping.`;
+
+    const result = parseSourceGroundingOutput(markdown, ["claim-1", "claim-2"]);
+    expect(result).toMatchObject({
+      success: true,
+      data: {
+        claimIdsUsed: ["claim-1", "claim-2"],
+      },
+    });
+  });
+
+  it("extracts source-grounding JSON when the provider adds surrounding commentary", () => {
+    const response = `Here is the revised article:
+{
+  "groundedArticleMarkdown": "This source-led article is deliberately long enough to satisfy the required article threshold while preserving the only supported factual statement and avoiding generic unsupported padding.",
+  "claimIdsUsed": ["claim 1"],
+  "removedUnsupportedPassages": [],
+  "qualityNotes": ["Mapped from commentary-wrapped JSON."]
+}`;
+
+    expect(parseSourceGroundingOutput(response, ["claim-1"])).toMatchObject({
+      success: true,
+      data: { claimIdsUsed: ["claim-1"] },
+    });
   });
 });

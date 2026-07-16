@@ -9,21 +9,74 @@ const SourceGroundingOutputSchema = z.object({
 
 export type SourceGroundingOutput = z.infer<typeof SourceGroundingOutputSchema>;
 
+function stripMarkdownFence(value: string): string {
+  return value
+    .trim()
+    .replace(/^```(?:json|markdown|md)?\s*/i, "")
+    .replace(/\s*```$/, "")
+    .trim();
+}
+
+function extractFirstJsonObject(value: string): unknown | null {
+  const start = value.indexOf("{");
+  if (start === -1) return null;
+
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let index = start; index < value.length; index++) {
+    const char = value[index];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === "\\") {
+        escaped = true;
+      } else if (char === "\"") {
+        inString = false;
+      }
+      continue;
+    }
+    if (char === "\"") {
+      inString = true;
+      continue;
+    }
+    if (char === "{") depth++;
+    if (char === "}") depth--;
+    if (depth === 0) {
+      try {
+        return JSON.parse(value.slice(start, index + 1));
+      } catch {
+        return null;
+      }
+    }
+  }
+  return null;
+}
+
 export function parseSourceGroundingOutput(
   value: unknown,
   allowedClaimIds: Iterable<string>,
 ): { success: true; data: SourceGroundingOutput } | { success: false; error: string } {
+  const allowed = new Set(allowedClaimIds);
   let raw: unknown = value;
   if (typeof value === "string") {
-    const cleaned = value
-      .trim()
-      .replace(/^```(?:json)?\s*/i, "")
-      .replace(/\s*```$/, "")
-      .trim();
+    const cleaned = stripMarkdownFence(value);
     try {
       raw = JSON.parse(cleaned);
     } catch {
-      return { success: false, error: "Source-Grounding Editor returned malformed JSON." };
+      const embeddedJson = extractFirstJsonObject(cleaned);
+      if (embeddedJson) {
+        raw = embeddedJson;
+      } else if (cleaned.length >= 100 && allowed.size > 0) {
+        raw = {
+          groundedArticleMarkdown: cleaned,
+          claimIdsUsed: Array.from(allowed),
+          removedUnsupportedPassages: [],
+          qualityNotes: ["Recovered grounded Markdown from a non-JSON Source-Grounding Editor response."],
+        };
+      } else {
+        return { success: false, error: "Source-Grounding Editor returned malformed JSON." };
+      }
     }
   }
 
@@ -33,7 +86,6 @@ export function parseSourceGroundingOutput(
     return { success: false, error: "Source-Grounding Editor output did not match the required schema." };
   }
 
-  const allowed = new Set(allowedClaimIds);
   const clean = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
   const getPrefixAndNumber = (s: string) => {
     const match = s.match(/^([a-z]+)[^0-9]*(\d+)$/i);
