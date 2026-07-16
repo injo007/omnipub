@@ -6019,6 +6019,38 @@ function cleanBannedAIFiller(text: any): string {
   return s;
 }
 
+function textCandidatesFromUnknown(value: unknown): string[] {
+  if (value === null || value === undefined) return [];
+  if (typeof value === "string") return value.split(",").map((item) => item.trim()).filter(Boolean);
+  if (typeof value === "number" || typeof value === "boolean") return [String(value)];
+  if (Array.isArray(value)) return value.flatMap((item) => textCandidatesFromUnknown(item));
+  if (typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    const preferredKeys = ["focusKeyword", "keyword", "primaryKeyword", "phrase", "text", "value", "name", "title"];
+    const preferred = preferredKeys.flatMap((key) => textCandidatesFromUnknown(record[key]));
+    if (preferred.length > 0) return preferred;
+    return Object.values(record).flatMap((item) => textCandidatesFromUnknown(item));
+  }
+  return [];
+}
+
+function normalizeFocusKeyword(value: unknown, fallback: string): string {
+  const candidate = textCandidatesFromUnknown(value).find((item) => item.trim().length > 0) || fallback || "";
+  const normalized = candidate
+    .replace(/[`*_#"<>()[\]{}]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 80);
+  return normalized;
+}
+
+function normalizeKeywordList(value: unknown, fallback: string[] = []): string[] {
+  const keywords = textCandidatesFromUnknown(value)
+    .map((item) => item.replace(/[`*_#"<>()[\]{}]+/g, " ").replace(/\s+/g, " ").trim())
+    .filter((item) => item.length > 0 && item.length <= 80);
+  return Array.from(new Set(keywords.length > 0 ? keywords : fallback)).slice(0, 8);
+}
+
 /** Keep generated article bodies semantic and controlled by the site theme. */
 function normalizeResponsiveArticleMarkup(content: string): string {
   return content
@@ -6035,7 +6067,7 @@ function runRankMathAudit(article: any): any {
   const title = (article.title || "").trim();
   const seoTitle = (article.seo?.title || article.seo?.seo_title || title).trim();
   const content = (article.content || "").trim();
-  const focusKeyword = (article.seo?.focusKeyword || "").trim().toLowerCase();
+  const focusKeyword = normalizeFocusKeyword(article.seo?.focusKeyword, "").toLowerCase();
   const description = (article.seo?.description || article.seo?.meta_description || article.excerpt || "").trim();
   const slug = (article.slug || article.seo?.slug || "").trim().toLowerCase();
   const imageAlt = (article.seo?.imageAlt || article.seo?.image_alt || "").trim().toLowerCase();
@@ -6265,10 +6297,10 @@ function validateAndOptimizeSEOForWordPress(article: any, niche: string): any {
   optArt.excerpt = cleanBannedAIFiller(optArt.excerpt || "");
   
   // 1. Resolve Focus Keyword
-  let focusKeyword = (optArt.seo?.focusKeyword || optArt.focusKeyword || "").trim();
+  let focusKeyword = normalizeFocusKeyword(optArt.seo?.focusKeyword || optArt.focusKeyword, "");
   if (!focusKeyword) {
     const rawTags = optArt.tags || [];
-    focusKeyword = rawTags.find((t: any) => typeof t === "string" && t.trim().length > 3) || niche || "News Analysis";
+    focusKeyword = normalizeFocusKeyword(rawTags.find((t: any) => typeof t === "string" && t.trim().length > 3), niche || "News Analysis");
   }
   
   // 2. Preserve the reader-facing headline. SEO metadata may foreground the
@@ -9219,11 +9251,14 @@ appRouter.post("/api/articles/create", async (req, res) => {
       seoBrief = parseGenAIJSON(kwRes.text || "{}");
       seoOppMeta = kwRes.metadata;
       if (seoBrief.focusKeyword && (!customKeywords || customKeywords.trim() === "")) {
-        focusKeyword = seoBrief.focusKeyword.trim();
+        focusKeyword = normalizeFocusKeyword(seoBrief.focusKeyword, sourceTitle || niche || "update");
+        seoBrief.focusKeyword = focusKeyword;
         editorialContext.focusKeyword = focusKeyword;
       }
-      if (seoBrief.secondaryKeywords && seoBrief.secondaryKeywords.length > 0) {
-        editorialContext.secondaryKeywords = seoBrief.secondaryKeywords;
+      const normalizedSecondaryKeywords = normalizeKeywordList(seoBrief.secondaryKeywords, []);
+      if (normalizedSecondaryKeywords.length > 0) {
+        seoBrief.secondaryKeywords = normalizedSecondaryKeywords;
+        editorialContext.secondaryKeywords = normalizedSecondaryKeywords;
       }
     } catch (e: any) {
       if (!fallbackEnabled) {
@@ -9250,14 +9285,21 @@ appRouter.post("/api/articles/create", async (req, res) => {
         const cleanedTitleWords = sourceTitle.replace(/[^a-zA-Z0-9\s]/g, "").split(/\s+/).filter(w => w.length > 3);
         seoBrief.focusKeyword = cleanedTitleWords.slice(0, 2).join(" ") || niche || "update";
       }
+      seoBrief.focusKeyword = normalizeFocusKeyword(seoBrief.focusKeyword, sourceTitle || niche || "update");
       if (!focusKeyword) {
-        focusKeyword = seoBrief.focusKeyword.trim();
+        focusKeyword = normalizeFocusKeyword(seoBrief.focusKeyword, sourceTitle || niche || "update");
         editorialContext.focusKeyword = focusKeyword;
       }
-      if (!seoBrief.secondaryKeywords || !Array.isArray(seoBrief.secondaryKeywords) || seoBrief.secondaryKeywords.length === 0) {
-        seoBrief.secondaryKeywords = customKeywords ? customKeywords.split(",").map(k => k.trim()) : ["latest updates", "news breakdown"];
-        editorialContext.secondaryKeywords = seoBrief.secondaryKeywords;
+      const normalizedSecondaryKeywords = normalizeKeywordList(
+        seoBrief.secondaryKeywords,
+        customKeywords ? customKeywords.split(",").map(k => k.trim()) : ["latest updates", "news breakdown"],
+      );
+      if (normalizedSecondaryKeywords.length === 0) {
+        seoBrief.secondaryKeywords = ["latest updates", "news breakdown"];
+      } else {
+        seoBrief.secondaryKeywords = normalizedSecondaryKeywords;
       }
+      editorialContext.secondaryKeywords = seoBrief.secondaryKeywords;
       if (!seoBrief.searchIntent) {
         seoBrief.searchIntent = "informational";
       }
@@ -9289,7 +9331,8 @@ appRouter.post("/api/articles/create", async (req, res) => {
     } else {
       seoBrief = seoBrief || {};
       if (!focusKeyword) {
-        focusKeyword = seoBrief.focusKeyword || "test-keyword";
+        focusKeyword = normalizeFocusKeyword(seoBrief.focusKeyword, "test-keyword");
+        seoBrief.focusKeyword = focusKeyword;
       }
     }
     
@@ -10002,11 +10045,13 @@ appRouter.post("/api/articles/create", async (req, res) => {
       seoMeta = seoRes.metadata;
       const parsed = parseGenAIJSON(seoRes.text || "{}");
       if (parsed.title) {
+        const normalizedPublisherFocusKeyword = normalizeFocusKeyword(parsed.focusKeyword, focusKeyword || niche || "News Analysis");
+        const normalizedPublisherKeywords = normalizeKeywordList(parsed.keywords, seoParams.keywords);
         seoParams = {
           title: decodeHtmlEntities(parsed.title),
           description: decodeHtmlEntities(parsed.description || seoParams.description),
-          focusKeyword: parsed.focusKeyword || focusKeyword,
-          keywords: parsed.keywords || seoParams.keywords
+          focusKeyword: normalizedPublisherFocusKeyword,
+          keywords: normalizedPublisherKeywords
         };
       }
     } catch (err: any) {

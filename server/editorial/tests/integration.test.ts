@@ -173,6 +173,51 @@ describe("POST /api/articles/create - Integration Flow", () => {
 
   });
 
+  it("normalizes object-shaped SEO focus keywords from providers", async () => {
+    setTestAdapterMock(async (params) => {
+      const successAdapter = getSuccessMock();
+      if (params.agentName === "SEO Opportunity Agent") {
+        return {
+          text: JSON.stringify({
+            focusKeyword: { keyword: "quiet Norway retreat", confidence: 0.91 },
+            secondaryKeywords: [{ keyword: "slow travel" }, "remote islands"],
+            searchIntent: "info",
+            readerPromise: "promise",
+            seoTitleOptions: [],
+            h1: "h1",
+            slug: "slug",
+            metaDescription: "desc",
+            suggestedH2s: ["First Structure Section"],
+            faqQuestions: [],
+            internalLinkIdeas: [],
+            imageAltText: "alt",
+          }),
+        };
+      }
+      if (params.agentName === "WordPress SEO Publisher") {
+        return {
+          text: JSON.stringify({
+            title: "Valid Title",
+            description: "Desc",
+            focusKeyword: { keyword: "quiet Norway retreat" },
+            keywords: [{ keyword: "slow travel" }, "remote islands"],
+          }),
+        };
+      }
+      return await successAdapter(params);
+    });
+
+    const res = await request(app).post("/api/articles/create").send({
+      niche: "Travel",
+      sourceTitle: "Hidden Archipelago",
+      sourceUrl: "https://example.com",
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.text).toContain('"step":"completed"');
+    expect(res.text).not.toContain("focusKeyword.trim is not a function");
+  });
+
   it("normalizes provider HTML and removes generated publishing scaffolding", () => {
     const content = sanitizeArticleContent(`
       <article><h2>Private concessions</h2><p>Source-backed detail.</p>
