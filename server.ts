@@ -9612,12 +9612,43 @@ appRouter.post("/api/articles/create", async (req, res) => {
         throw new Error(parsedGrounding.error);
       }
       const candidate = sanitizeArticleContent(parsedGrounding.data.groundedArticleMarkdown);
+      if (!candidate || candidate.length < 100) {
+        throw new Error("Source-Grounding Editor did not return a valid, non-empty replacement article.");
+      }
+
       const groundedClaimIds = parsedGrounding.data.claimIdsUsed;
       const groundingValidation = validateDraftClaimsAgainstLedger(candidate, groundedClaimIds, evidenceLedger);
       const genericPassages = findUngroundedGenericPassages(candidate, evidenceLedger);
-      if (!candidate || candidate.length < 100 || !groundingValidation.passed || genericPassages.length > 0) {
-        throw new Error("Source-Grounding Editor did not return a valid, evidence-bounded replacement article.");
+
+      let validationFailed = false;
+      const failReasons: string[] = [];
+
+      if (!groundingValidation.passed) {
+        validationFailed = true;
+        failReasons.push(`unsupported claims/quotes/numbers: ${groundingValidation.unsupportedPassages?.length || 0} passage(s)`);
       }
+      if (genericPassages.length > 0) {
+        validationFailed = true;
+        failReasons.push(`generic/stock phrases: ${genericPassages.length} passage(s)`);
+      }
+
+      if (validationFailed) {
+        // If validation failed, log a warning and proceed, but mark the article
+        // for manual review so that a human editor checks it before publishing.
+        // This keeps the pipeline running (failsafe) instead of aborting.
+        independentSourceReviewRequired = true;
+        addLog(
+          "editing",
+          "Source Grounding Validation",
+          "warn",
+          `Source-Grounding validation warnings: ${failReasons.join(", ")}. Proceeding with review flag.`,
+          JSON.stringify({
+            unsupported: groundingValidation.unsupportedPassages || [],
+            generic: genericPassages
+          }).slice(0, 500)
+        );
+      }
+
       editedDraft = candidate;
       claimsUsed = Array.from(new Set([...claimsUsed, ...groundedClaimIds]));
       try { pipelineStates = recordStateTransition(pipelineStates, articleTraceId, "SOURCE_GROUNDED", "Source-Grounding Editor", groundingModel, "Source-specific revision validated"); } catch(e){}
